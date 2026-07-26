@@ -278,6 +278,19 @@ input[type="text"], input[type="number"], textarea, select {
 /* ---------- Settings dialog ---------- */
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
 fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
+#asset-preview {
+  position: relative;
+  width: 160px;
+  aspect-ratio: 1 / 1;
+  margin: 4px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #11141b;
+}
+#asset-preview .prev-board { position: absolute; inset: 0; width: 100%; height: 100%; }
+#asset-preview .prev-piece { position: absolute; width: 25%; height: 25%; }
+
 .path-row { display: flex; gap: 6px; }
 .path-row input { flex: 1; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }

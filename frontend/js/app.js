@@ -549,7 +549,8 @@ function wireSettingsDialog() {
     state.board.setAssetSet(state.user.asset_set || 'default'); // undo any live preview
   });
   document.getElementById('s-asset-set').addEventListener('change', (ev) => {
-    state.board.setAssetSet(ev.target.value); // live preview before saving
+    renderAssetPreview(ev.target.value);      // visible feedback inside the dialog
+    state.board.setAssetSet(ev.target.value); // and the real board behind it
   });
 
   document.getElementById('settings-form').addEventListener('submit', async (ev) => {
@@ -593,6 +594,35 @@ function wireSettingsDialog() {
   });
 }
 
+/** Draws a small board+pieces swatch for `setName` inside the settings
+    dialog. The dialog is a full-screen overlay (it has to be, to stay usable
+    on a phone), so the real board behind it can't be seen while choosing --
+    without this, picking a set looks like it does nothing. */
+function renderAssetPreview(setName) {
+  const wrap = document.getElementById('asset-preview');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const bg = document.createElement('img');
+  bg.className = 'prev-board';
+  bg.src = `/assets/sets/${setName}/board.png`;
+  bg.alt = '';
+  bg.onerror = () => { wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%'; };
+  wrap.appendChild(bg);
+
+  // A representative handful of pieces, laid out on the swatch's 4x4 grid.
+  const sample = [['wk', 0, 3], ['wq', 1, 3], ['bk', 3, 0], ['bq', 2, 0]];
+  for (const [piece, col, row] of sample) {
+    const img = document.createElement('img');
+    img.className = 'prev-piece';
+    img.src = `/assets/sets/${setName}/${piece}.png`;
+    img.alt = '';
+    img.style.left = (col * 25) + '%';
+    img.style.top = (row * 25) + '%';
+    wrap.appendChild(img);
+  }
+}
+
 async function fillSettingsForm() {
   const s = state.settings;
   document.getElementById('s-display-name').value = state.user.display_name;
@@ -607,6 +637,7 @@ async function fillSettingsForm() {
     sel.appendChild(opt);
   }
   sel.value = state.user.asset_set || 'default';
+  renderAssetPreview(sel.value);
 
   document.getElementById('s-sf-path').value = s.stockfish_path || '';
   document.getElementById('s-sf-threads').value = s.stockfish_threads;

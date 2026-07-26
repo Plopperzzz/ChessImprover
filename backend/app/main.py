@@ -2,7 +2,9 @@ import asyncio
 import sys
 
 from fastapi import Depends, FastAPI
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from .analysis import router as analysis_router
 from .analysis import ws_router as analysis_ws_router
@@ -58,5 +60,28 @@ def engines_status(user: dict = Depends(require_user)):
     return manager.status()
 
 
-app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+class RevalidatingStaticFiles(StaticFiles):
+    """StaticFiles that always sends `Cache-Control: no-cache`.
+
+    Starlette sends ETag/Last-Modified but no Cache-Control at all. With no
+    explicit freshness directive a browser falls back to *heuristic* caching
+    (RFC 9111 section 4.2.2 -- commonly 10% of the file's age) and may reuse a
+    response for hours without ever asking the server about it. On a
+    self-hosted app that's updated with `git pull`, that means a phone which
+    already loaded the old app.js/board.js keeps running it after a redeploy,
+    and a piece/board image replaced in-place at the same URL keeps rendering
+    the old art.
+
+    `no-cache` does not disable caching -- it requires revalidation, so the
+    common case is a 304 with an empty body (cheap on a LAN) and an updated
+    file is picked up immediately.
+    """
+
+    def file_response(self, full_path, stat_result, scope: Scope, status_code: int = 200) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/assets", RevalidatingStaticFiles(directory=ASSETS_DIR), name="assets")
+app.mount("/", RevalidatingStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
