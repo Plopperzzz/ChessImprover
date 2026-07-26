@@ -1,4 +1,6 @@
+import asyncio
 import os
+import sys
 
 from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +13,13 @@ from .engine_settings import router as settings_router
 from .fs_browse import router as fs_router
 from .games import router as games_router
 from .live_eval_ws import router as ws_router
+
+# Managing engine subprocesses via piped stdin/stdout (section 3) only works
+# on Windows under the Proactor event loop -- it's the default today, but
+# pin it explicitly so a future asyncio/uvicorn default change can't quietly
+# break Stockfish/Maia process spawning there.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
 REPO_ROOT = os.path.dirname(BASE_DIR)

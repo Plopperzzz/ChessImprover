@@ -402,7 +402,11 @@ function fillSettingsForm() {
 async function openBrowse(targetFieldId) {
   state.browseTarget = targetFieldId;
   const current = document.getElementById(targetFieldId).value;
-  const startPath = current ? current.split('/').slice(0, -1).join('/') || '/' : '/';
+  // Works for both '/foo/bar' and 'C:\foo\bar' -- strip the last path segment
+  // regardless of which separator the server's OS uses. No match (or no
+  // existing value) means: start at the root (Unix) or the drive list (Windows).
+  const m = current.match(/^(.*)[\\/][^\\/]+[\\/]?$/);
+  const startPath = m ? m[1] : '';
   await renderBrowse(startPath);
   document.getElementById('browse-panel').classList.remove('hidden');
 }
@@ -412,7 +416,9 @@ async function renderBrowse(path) {
   document.getElementById('browse-path').textContent = data.path;
   const list = document.getElementById('browse-list');
   list.innerHTML = '';
-  if (data.parent) {
+  // parent is null only at a true root with nowhere to go up to; '' (e.g. a
+  // Windows drive root) still means "go up" -- back to the drive list.
+  if (data.parent !== null && data.parent !== undefined) {
     const up = document.createElement('div');
     up.className = 'browse-entry dir';
     up.textContent = '..';
@@ -423,12 +429,11 @@ async function renderBrowse(path) {
     const div = document.createElement('div');
     div.className = 'browse-entry ' + (entry.is_dir ? 'dir' : 'file');
     div.textContent = entry.name;
-    const fullPath = data.path.replace(/\/$/, '') + '/' + entry.name;
     div.addEventListener('click', () => {
       if (entry.is_dir) {
-        renderBrowse(fullPath);
+        renderBrowse(entry.full_path);
       } else {
-        document.getElementById(state.browseTarget).value = fullPath;
+        document.getElementById(state.browseTarget).value = entry.full_path;
         document.getElementById('browse-panel').classList.add('hidden');
       }
     });
