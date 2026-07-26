@@ -13,6 +13,9 @@ const state = {
   lastMoverColor: 'w',
   settings: null,
   browseTarget: null,
+  classifications: {}, // ply -> classification dict, from the last completed analysis job
+  analysisJobId: null,
+  analysisWs: null,
 };
 
 async function api(path, opts = {}) {
@@ -97,6 +100,7 @@ async function initApp() {
   wireFenBox();
   wirePgnUpload();
   wireSettingsDialog();
+  wireAnalysis();
   connectLiveEval();
 
   await refreshGameList();
@@ -170,6 +174,7 @@ function wireFenBox() {
     const ok = state.explorer.loadFEN(fen);
     if (!ok) { alert('That FEN could not be parsed.'); return; }
     state.selectedGameId = null;
+    resetAnalysisState();
     renderGamePicker();
     renderMoveTable();
     syncBoardFull();
@@ -237,6 +242,7 @@ function renderGamePicker() {
 async function selectGame(gameId) {
   const game = await api(`/api/games/${gameId}`);
   state.selectedGameId = gameId;
+  resetAnalysisState();
   renderGamePicker();
   state.explorer.loadPGN(game.pgn_text, state.user.display_name);
   state.board.setOrientation(state.explorer.yourColor === 'b' ? 'b' : 'w');
@@ -268,7 +274,10 @@ function renderMoveTable() {
     for (const id of [yourId, theirId]) {
       const td = document.createElement('td');
       if (id !== undefined) {
-        td.textContent = state.explorer.nodes[id].san;
+        const node = state.explorer.nodes[id];
+        const cls = state.classifications[node.ply];
+        td.textContent = node.san + (cls ? CLASSIFICATION_SUFFIX[cls.classification] : '');
+        if (cls) td.classList.add('cls-' + cls.classification);
         td.dataset.nodeId = id;
         td.addEventListener('click', () => {
           state.explorer.goToNode(id);
@@ -358,6 +367,122 @@ function refreshMoveTableHighlight() {
   const current = state.explorer.currentNodeId;
   for (const el of container.querySelectorAll('[data-node-id]')) {
     el.classList.toggle('current', Number(el.dataset.nodeId) === current);
+  }
+}
+
+/* ---------------- Quick analysis (Stockfish-only move classification) ---------------- */
+
+const CLASSIFICATION_SUFFIX = { good: '', inaccuracy: '?!', mistake: '?', blunder: '??' };
+
+function resetAnalysisState() {
+  state.classifications = {};
+  state.analysisJobId = null;
+  if (state.analysisWs) { state.analysisWs.close(); state.analysisWs = null; }
+  document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
+  document.getElementById('analysis-progress-fill').style.width = '0%';
+  document.getElementById('analysis-status').textContent = '';
+  document.getElementById('analysis-summary').innerHTML = '';
+}
+
+function wireAnalysis() {
+  document.getElementById('quick-analysis-btn').addEventListener('click', startQuickAnalysis);
+}
+
+async function startQuickAnalysis() {
+  if (!state.selectedGameId) return;
+  const btn = document.getElementById('quick-analysis-btn');
+  btn.disabled = true;
+  state.classifications = {};
+  document.getElementById('analysis-summary').innerHTML = '';
+  document.getElementById('analysis-status').textContent = 'Starting...';
+  try {
+    const res = await api('/api/analysis/quick', { method: 'POST', body: JSON.stringify({ game_id: state.selectedGameId }) });
+    state.analysisJobId = res.job_id;
+    watchAnalysisJob(res.job_id);
+  } catch (e) {
+    document.getElementById('analysis-status').textContent = 'Error: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+function watchAnalysisJob(jobId) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/analysis/${jobId}`);
+  state.analysisWs = ws;
+
+  // Progress arrives faster than the board's slide animation can keep up
+  // with (each Stockfish eval can resolve in well under 235ms), and 'message'
+  // events fire independently -- without this chain, overlapping
+  // animateToMainlinePly() calls can finish out of order and the status text
+  // from a late-resolving earlier event clobbers the final "Done.". Chaining
+  // onto a single promise processes messages strictly in arrival order.
+  let chain = Promise.resolve();
+  ws.addEventListener('message', (ev) => {
+    const msg = JSON.parse(ev.data);
+    chain = chain.then(() => handleAnalysisMessage(msg));
+  });
+
+  // Reconnect on drop (e.g. phone screen lock) as long as the job is still ours --
+  // the server replays the full event backlog so we catch up immediately.
+  ws.addEventListener('close', () => {
+    if (state.analysisWs === ws && state.analysisJobId === jobId) {
+      setTimeout(() => watchAnalysisJob(jobId), 2000);
+    }
+  });
+}
+
+async function handleAnalysisMessage(msg) {
+  if (msg.type === 'progress') {
+    await animateToMainlinePly(msg.ply);
+    const pct = msg.total ? Math.round((msg.ply / msg.total) * 100) : 100;
+    document.getElementById('analysis-progress-fill').style.width = pct + '%';
+    document.getElementById('analysis-status').textContent = `Evaluating move ${msg.ply} / ${msg.total}...`;
+  } else if (msg.type === 'done') {
+    state.classifications = {};
+    for (const m of msg.moves) state.classifications[m.ply] = m;
+    renderMoveTable();
+    refreshMoveTableHighlight();
+    renderAnalysisSummary(msg.moves);
+    document.getElementById('analysis-status').textContent = 'Done.';
+    document.getElementById('analysis-progress-fill').style.width = '100%';
+    document.getElementById('quick-analysis-btn').disabled = false;
+  } else if (msg.type === 'error') {
+    document.getElementById('analysis-status').textContent = 'Error: ' + msg.message;
+    document.getElementById('quick-analysis-btn').disabled = false;
+  }
+}
+
+/** Steps the board (and the explorer's actual position) to the mainline
+    position after `ply` moves, animating from wherever it currently is --
+    this is what makes the board visibly step through the game in sync with
+    analysis progress (section 6). */
+async function animateToMainlinePly(ply) {
+  if (ply === 0) {
+    state.explorer.goToStart();
+    syncBoardFull();
+    return;
+  }
+  const nodeId = state.explorer.mainlineNodeIds[ply - 1];
+  if (nodeId === undefined) return;
+  const node = state.explorer.nodes[nodeId];
+  state.explorer.goToNode(nodeId);
+  await state.board.animateMove(node.from, node.to, node.fenAfter);
+  refreshFenBox();
+  refreshMoveTableHighlight();
+  requestEval();
+}
+
+function renderAnalysisSummary(moves) {
+  const counts = { good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
+  for (const m of moves) counts[m.classification]++;
+  const el = document.getElementById('analysis-summary');
+  el.innerHTML = '';
+  const labels = { good: 'Good', inaccuracy: 'Inaccuracies', mistake: 'Mistakes', blunder: 'Blunders' };
+  for (const key of ['good', 'inaccuracy', 'mistake', 'blunder']) {
+    const span = document.createElement('span');
+    span.className = 'cnt-' + key;
+    span.textContent = `${labels[key]}: ${counts[key]}`;
+    el.appendChild(span);
   }
 }
 

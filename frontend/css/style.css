@@ -195,6 +195,32 @@ input[type="text"], input[type="number"], textarea, select {
 #pgn-paste { width: 100%; height: 70px; margin-bottom: 8px; resize: vertical; }
 #upload-status { font-size: 13px; color: var(--muted); margin-top: 8px; }
 
+#analysis-progress {
+  width: 100%;
+  height: 8px;
+  background: #11141b;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 8px 0 4px;
+}
+#analysis-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 150ms ease;
+}
+#analysis-status { font-size: 13px; color: var(--muted); }
+#analysis-summary { font-size: 13px; margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; }
+#analysis-summary span.cnt-good { color: #6fc46f; }
+#analysis-summary span.cnt-inaccuracy { color: #e0c040; }
+#analysis-summary span.cnt-mistake { color: #e08040; }
+#analysis-summary span.cnt-blunder { color: #e05050; }
+
+#move-table td.cls-inaccuracy { color: #e0c040; }
+#move-table td.cls-mistake { color: #e08040; }
+#move-table td.cls-blunder { color: #e05050; font-weight: bold; }
+
 #game-picker { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .game-row {
   display: flex;

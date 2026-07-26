@@ -119,17 +119,67 @@ def parse_info_line(line: str) -> dict | None:
     }
 
 
+def engine_options_from_settings(engine_settings: dict) -> dict:
+    """UCI setoption values shared by the live-eval session and the
+    analysis-job engine, so the two never quietly disagree about what a
+    user's Stockfish settings mean."""
+    options = {
+        "Threads": engine_settings.get("stockfish_threads", 1),
+        "Hash": engine_settings.get("stockfish_hash_mb", 128),
+    }
+    if engine_settings.get("sf_skill_level") is not None:
+        options["Skill Level"] = engine_settings["sf_skill_level"]
+    return options
+
+
+async def start_configured_engine(path: str, options: dict) -> EngineProcess:
+    """Starts and UCI-handshakes a fresh engine process with the given
+    setoption values. Used for short-lived analysis-job engines (section 3) --
+    a separate process and lifecycle from the persistent live-eval session."""
+    engine = EngineProcess(path)
+    await engine.start()
+    await engine.send_line("uci")
+    await engine.wait_for("uciok")
+    for name, value in options.items():
+        await engine.send_line(f"setoption name {name} value {value}")
+    await engine.send_line("isready")
+    await engine.wait_for("readyok")
+    await engine.send_line("ucinewgame")
+    return engine
+
+
+async def evaluate_position(engine: EngineProcess, fen: str, limit_type: str, limit_value: int) -> dict:
+    """Runs one blocking `go` on an already-configured engine and returns the
+    deepest info line seen before `bestmove` (mover's-perspective cp/mate)."""
+    await engine.send_line(f"position fen {fen}")
+    go_cmd = f"go movetime {limit_value}" if limit_type == "movetime" else f"go depth {limit_value}"
+    await engine.send_line(go_cmd)
+    last_info = None
+    while True:
+        line = await engine.readline()
+        if line is None:
+            raise UciProcessError("engine exited during analysis")
+        if line.startswith("info"):
+            info = parse_info_line(line)
+            if info:
+                last_info = info
+        if line.startswith("bestmove"):
+            break
+    return last_info or {"cp": 0, "mate": None, "depth": 0, "pv": []}
+
+
 class LiveEngineSession:
     """One persistent Stockfish process for one live-eval connection."""
 
     def __init__(self, owner_user_id, connection_id, path, options, limit_type, limit_value, on_eval):
         self.owner_user_id = owner_user_id
         self.connection_id = connection_id
+        self.path = path
         self.options = options
         self.limit_type = limit_type
         self.limit_value = limit_value
         self.on_eval = on_eval
-        self.engine = EngineProcess(path)
+        self.engine: EngineProcess | None = None
         self._latest_fen: str | None = None
         self._latest_seq = 0
         self._wake = asyncio.Event()
@@ -139,14 +189,7 @@ class LiveEngineSession:
         self.last_active = time.monotonic()
 
     async def start(self):
-        await self.engine.start()
-        await self.engine.send_line("uci")
-        await self.engine.wait_for("uciok")
-        for name, value in self.options.items():
-            await self.engine.send_line(f"setoption name {name} value {value}")
-        await self.engine.send_line("isready")
-        await self.engine.wait_for("readyok")
-        await self.engine.send_line("ucinewgame")
+        self.engine = await start_configured_engine(self.path, self.options)
         self._worker_task = asyncio.create_task(self._worker_loop())
 
     def request(self, fen: str, seq: int):
@@ -216,17 +259,11 @@ class LiveEngineManager:
         path = engine_settings.get("stockfish_path")
         if not path:
             raise RuntimeError("Stockfish path is not configured -- set it in Settings first")
-        options = {
-            "Threads": engine_settings.get("stockfish_threads", 1),
-            "Hash": engine_settings.get("stockfish_hash_mb", 128),
-        }
-        if engine_settings.get("sf_skill_level") is not None:
-            options["Skill Level"] = engine_settings["sf_skill_level"]
         session = LiveEngineSession(
             owner_user_id=user["id"],
             connection_id=connection_id,
             path=path,
-            options=options,
+            options=engine_options_from_settings(engine_settings),
             limit_type=engine_settings.get("sf_limit_type", "depth"),
             limit_value=engine_settings.get("sf_limit_value", 18),
             on_eval=on_eval,

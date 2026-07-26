@@ -4,6 +4,8 @@ import sys
 from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from .analysis import router as analysis_router
+from .analysis import ws_router as analysis_ws_router
 from .auth import require_user
 from .auth import router as auth_router
 from .db import init_db
@@ -40,6 +42,8 @@ app.include_router(settings_router)
 app.include_router(fs_router)
 app.include_router(games_router)
 app.include_router(ws_router)
+app.include_router(analysis_router)
+app.include_router(analysis_ws_router)
 
 
 @app.get("/api/asset-sets")

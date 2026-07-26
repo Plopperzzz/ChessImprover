@@ -6,13 +6,15 @@ follows.
 
 ## Status
 
-This covers build-order steps 1-3 from the spec: multi-user schema and auth,
+This covers build-order steps 1-4 from the spec: multi-user schema and auth,
 PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
-backed by a persistent per-session engine process, and variation support (a
-real move tree -- branch off the mainline by playing a different move,
-delete a variation, the mainline itself is never lost). Move classification,
-the Maia Elo sweep, play-vs-Maia, persistence, batch mode, and the trend view
-are not yet built.
+backed by a persistent per-session engine process, variation support (a real
+move tree -- branch off the mainline by playing a different move, delete a
+variation, the mainline itself is never lost), and Quick-mode analysis (a
+Stockfish-only pass classifying every mainline move as Good/Inaccuracy/
+Mistake/Blunder, with the board animating through positions as they're
+evaluated). The Maia Elo sweep, Great/Brilliant classification, play-vs-Maia,
+persistence, batch mode, and the trend view are not yet built.
 
 ## Running it
 
