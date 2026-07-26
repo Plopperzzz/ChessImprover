@@ -1,0 +1,241 @@
+:root {
+  color-scheme: dark;
+  --bg: #14161c;
+  --panel: #1d212b;
+  --border: #2c3140;
+  --text: #e8eaf0;
+  --muted: #8b93a7;
+  --accent: #5b8dee;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.hidden { display: none !important; }
+
+button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+button:hover { border-color: var(--accent); }
+
+input[type="text"], input[type="number"], textarea, select {
+  background: #11141b;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 14px;
+  width: 100%;
+}
+
+/* ---------- Login ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 11, 15, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 16px;
+}
+.login-card, .dialog-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+  width: 100%;
+  max-width: 420px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.account-list { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
+.account-list button { text-align: left; font-size: 16px; padding: 12px; }
+#bootstrap-form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+
+/* ---------- App shell ---------- */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.spacer { flex: 1; }
+
+#layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+#board-col {
+  flex: 1 1 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 280px;
+}
+
+#eval-bar {
+  width: min(70vw, 420px);
+  height: 20px;
+  background: #222;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+#eval-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 50%;
+  background: #eee;
+  transition: width 200ms ease;
+}
+#eval-label {
+  position: relative;
+  z-index: 2;
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  line-height: 20px;
+  mix-blend-mode: difference;
+  color: white;
+}
+
+#board {
+  position: relative;
+  width: min(90vw, 70vh, 520px);
+  aspect-ratio: 1 / 1;
+  user-select: none;
+}
+.board-bg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.piece-layer, .highlight-layer { position: absolute; inset: 0; }
+.piece {
+  position: absolute;
+  width: 12.5%;
+  height: 12.5%;
+  pointer-events: none;
+}
+.sq-select {
+  position: absolute;
+  width: 12.5%;
+  height: 12.5%;
+  background: rgba(91, 141, 238, 0.45);
+}
+.sq-dot {
+  position: absolute;
+  width: 12.5%;
+  height: 12.5%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sq-dot::after {
+  content: "";
+  width: 32%;
+  height: 32%;
+  border-radius: 50%;
+  background: rgba(91, 141, 238, 0.65);
+}
+.promo-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6%;
+  z-index: 10;
+}
+.promo-choice {
+  width: 18%;
+  cursor: pointer;
+  background: var(--panel);
+  border-radius: 8px;
+}
+
+#nav-buttons { display: flex; gap: 8px; }
+#fen-row { display: flex; gap: 8px; width: min(90vw, 520px); }
+#fen-row input { flex: 1; font-family: monospace; }
+
+#side-col {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 280px;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+.panel h3 { margin: 0 0 10px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+#pgn-files { width: 100%; margin-bottom: 8px; }
+#pgn-paste { width: 100%; height: 70px; margin-bottom: 8px; resize: vertical; }
+#upload-status { font-size: 13px; color: var(--muted); margin-top: 8px; }
+
+#game-picker { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.game-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-size: 13px;
+}
+.game-row:hover { border-color: var(--border); }
+.game-row.active { background: #24314a; border-color: var(--accent); }
+.game-row .flag { color: #e0a13a; font-size: 11px; }
+
+#move-table-wrap { max-height: 300px; overflow-y: auto; }
+#move-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#move-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  width: 50%;
+}
+#move-table td:hover { background: #24314a; }
+#move-table td.current { background: #2f4a7a; font-weight: bold; }
+#move-table td.ply-num { width: auto; color: var(--muted); cursor: default; padding-right: 4px; }
+
+/* ---------- Settings dialog ---------- */
+fieldset { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
+.path-row { display: flex; gap: 6px; }
+.path-row input { flex: 1; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+#browse-panel { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 12px; max-height: 240px; overflow-y: auto; }
+#browse-path { font-family: monospace; font-size: 12px; color: var(--muted); margin-bottom: 6px; word-break: break-all; }
+.browse-entry { padding: 4px 6px; cursor: pointer; border-radius: 4px; font-size: 13px; }
+.browse-entry:hover { background: #24314a; }
+.browse-entry.dir::before { content: "📁 "; }
+.browse-entry.file::before { content: "📄 "; }
+
+@media (max-width: 700px) {
+  #layout { padding: 10px; gap: 10px; }
+  #topbar { padding: 8px 10px; }
+}

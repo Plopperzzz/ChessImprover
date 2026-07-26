@@ -1,0 +1,59 @@
+import os
+
+from fastapi import Depends, FastAPI
+from fastapi.staticfiles import StaticFiles
+
+from .auth import require_user
+from .auth import router as auth_router
+from .db import init_db
+from .engine_manager import manager
+from .engine_settings import router as settings_router
+from .fs_browse import router as fs_router
+from .games import router as games_router
+from .live_eval_ws import router as ws_router
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
+REPO_ROOT = os.path.dirname(BASE_DIR)
+ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
+FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
+
+app = FastAPI(title="ChessImprover Engine Room")
+
+
+@app.on_event("startup")
+async def on_startup():
+    init_db()
+    await manager.start_idle_sweep()
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await manager.shutdown_all()
+
+
+app.include_router(auth_router)
+app.include_router(settings_router)
+app.include_router(fs_router)
+app.include_router(games_router)
+app.include_router(ws_router)
+
+
+@app.get("/api/asset-sets")
+def list_asset_sets(user: dict = Depends(require_user)):
+    sets_dir = os.path.join(ASSETS_DIR, "sets")
+    if not os.path.isdir(sets_dir):
+        return []
+    return sorted(
+        name for name in os.listdir(sets_dir) if os.path.isdir(os.path.join(sets_dir, name))
+    )
+
+
+@app.get("/api/engines/status")
+def engines_status(user: dict = Depends(require_user)):
+    """Process accounting: how many engine processes are alive and who owns
+    each, so runaway spawning is obvious during development (section 3)."""
+    return manager.status()
+
+
+app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

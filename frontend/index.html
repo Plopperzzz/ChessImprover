@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Engine Room</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<div id="login-screen" class="overlay hidden">
+  <div class="login-card">
+    <h1>Engine Room</h1>
+    <div id="account-list" class="account-list"></div>
+    <details id="bootstrap-details">
+      <summary>Add an account</summary>
+      <form id="bootstrap-form">
+        <input type="text" id="bootstrap-username" placeholder="username" required />
+        <input type="text" id="bootstrap-displayname" placeholder="display name (matches your PGN header)" required />
+        <button type="submit">Create account</button>
+      </form>
+    </details>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header id="topbar">
+    <span id="whoami"></span>
+    <div class="spacer"></div>
+    <button id="settings-btn">Settings</button>
+    <button id="logout-btn">Log out</button>
+  </header>
+
+  <main id="layout">
+    <section id="board-col">
+      <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
+      <div id="board"></div>
+      <div id="nav-buttons">
+        <button id="nav-start" title="First move">|&lt;</button>
+        <button id="nav-prev" title="Previous move">&lt;</button>
+        <button id="nav-next" title="Next move">&gt;</button>
+        <button id="nav-end" title="Last move">&gt;|</button>
+      </div>
+      <div id="fen-row">
+        <input type="text" id="fen-box" readonly />
+        <button id="fen-copy">Copy</button>
+      </div>
+      <div id="fen-row">
+        <input type="text" id="fen-goto" placeholder="paste a FEN to jump to it" />
+        <button id="fen-goto-btn">Go</button>
+      </div>
+    </section>
+
+    <section id="side-col">
+      <div class="panel">
+        <h3>Load games</h3>
+        <input type="file" id="pgn-files" accept=".pgn" multiple />
+        <textarea id="pgn-paste" placeholder="...or paste PGN text here"></textarea>
+        <button id="pgn-upload-btn">Upload</button>
+        <div id="upload-status"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Games</h3>
+        <div id="game-picker"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Moves</h3>
+        <div id="move-table-wrap">
+          <table id="move-table"><tbody></tbody></table>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="settings-dialog" class="overlay hidden">
+  <div class="dialog-card">
+    <h2>Engine Settings</h2>
+    <form id="settings-form">
+      <fieldset>
+        <legend>Your profile</legend>
+        <label>Display name (matched against PGN White/Black headers)
+          <input type="text" id="s-display-name" />
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Stockfish</legend>
+        <label>Binary path
+          <div class="path-row">
+            <input type="text" id="s-sf-path" />
+            <button type="button" id="s-sf-browse">Browse&hellip;</button>
+          </div>
+        </label>
+        <label>Threads <input type="number" id="s-sf-threads" min="1" max="64" /></label>
+        <label>Hash (MB) <input type="number" id="s-sf-hash" min="1" max="16384" /></label>
+        <label>Limit type
+          <select id="s-sf-limit-type">
+            <option value="depth">Depth</option>
+            <option value="movetime">Move time (ms)</option>
+          </select>
+        </label>
+        <label>Limit value <input type="number" id="s-sf-limit-value" min="1" /></label>
+        <label>Skill level (blank = full strength)
+          <input type="number" id="s-sf-skill" min="0" max="20" />
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Maia3</legend>
+        <label>Binary/weights path
+          <div class="path-row">
+            <input type="text" id="s-maia-path" />
+            <button type="button" id="s-maia-browse">Browse&hellip;</button>
+          </div>
+        </label>
+        <label>Model size
+          <select id="s-maia-size">
+            <option value="5m">5m</option>
+            <option value="25m">25m</option>
+            <option value="79m">79m</option>
+          </select>
+        </label>
+        <label>Elo min <input type="number" id="s-maia-elo-min" /></label>
+        <label>Elo max <input type="number" id="s-maia-elo-max" /></label>
+        <label>Elo step <input type="number" id="s-maia-elo-step" /></label>
+      </fieldset>
+
+      <div id="browse-panel" class="hidden">
+        <div id="browse-path"></div>
+        <div id="browse-list"></div>
+        <button type="button" id="browse-cancel">Cancel</button>
+      </div>
+
+      <div class="dialog-actions">
+        <button type="button" id="settings-cancel">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="promo-root"></div>
+
+<script src="/js/vendor/chess.js"></script>
+<script src="/js/board.js"></script>
+<script src="/js/explorer.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

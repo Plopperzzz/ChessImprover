@@ -1,0 +1,7 @@
+backend/.venv/
+backend/data/
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/
+*.tgz
