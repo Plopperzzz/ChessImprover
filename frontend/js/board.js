@@ -7,6 +7,15 @@ class Board {
     this.orientation = 'w'; // 'w' -> white at bottom (standard), 'b' -> flipped
     this.currentFEN = START_FEN;
     this.pieceEls = {};
+    // Interactivity state lives for the life of the Board instance, not just
+    // one _build() -- setAssetSet() rebuilds the DOM layers on every switch
+    // and must not silently drop click-to-move handlers set up earlier.
+    this.interactive = false;
+    this.handlers = {};
+    this.selected = null;
+    this.legalTargets = [];
+    this._clickHandler = (ev) => this._handleClick(ev);
+    this.el.addEventListener('click', this._clickHandler);
     this._build();
     this.renderFEN(START_FEN);
   }
@@ -39,12 +48,7 @@ class Board {
     this.highlightLayer.className = 'highlight-layer';
     this.el.appendChild(this.highlightLayer);
 
-    this.interactive = false;
-    this.handlers = {};
-    this.selected = null;
-    this.legalTargets = [];
-    this._clickHandler = (ev) => this._handleClick(ev);
-    this.el.addEventListener('click', this._clickHandler);
+    this._clearSelection();
   }
 
   /** enabled: bool. handlers: { getLegalTargets(square) -> [{to, promotion}],
