@@ -71,7 +71,12 @@ class Explorer {
       this is just the explore-mode preview. */
   loadPGN(pgnText, yourName) {
     const tmp = new Chess();
-    const ok = tmp.load_pgn(pgnText, { sloppy: true });
+    // Strict first: chess.js's "sloppy" parser is case-insensitive about the
+    // piece letter, so it reads a b-pawn capture like "bxa4" as a *bishop*
+    // move and rejects the whole game. Sloppy is only a fallback for PGNs
+    // that strict parsing genuinely can't handle.
+    let ok = tmp.load_pgn(pgnText);
+    if (!ok) ok = tmp.load_pgn(pgnText, { sloppy: true });
     if (!ok) throw new Error('Could not parse that PGN (check the move text/headers)');
     const verboseMoves = tmp.history({ verbose: true });
     this.headers = tmp.header() || {};
@@ -99,7 +104,7 @@ class Explorer {
     const replay = new Chess();
     for (const m of gameMeta.moves) {
       const fenBefore = replay.fen();
-      const res = replay.move(m.san, { sloppy: true });
+      const res = replay.move(m.san) || replay.move(m.san, { sloppy: true });
       if (!res) break;
       this._appendMainlineNode(res, fenBefore, replay.fen());
     }

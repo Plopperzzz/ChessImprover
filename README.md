@@ -6,16 +6,47 @@ follows.
 
 ## Status
 
-This covers build-order steps 1-5 from the spec: multi-user schema and auth,
+This covers build-order steps 1-6 from the spec: multi-user schema and auth,
 PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
 backed by a persistent per-session engine process, variation support (a real
 move tree -- branch off the mainline by playing a different move, delete a
 variation, the mainline itself is never lost), Quick-mode analysis (a
 Stockfish-only pass classifying every mainline move as Good/Inaccuracy/
 Mistake/Blunder, with the board animating through positions as they're
-evaluated), and Play vs Maia3 with a configurable time control. The Maia Elo
-sweep, Great/Brilliant classification, saved analysis runs, batch mode, and
+evaluated), Play vs Maia3 with a configurable time control, and the Maia Elo
+sweep. Great/Brilliant classification, saved analysis runs, batch mode, and
 the trend view are not yet built.
+
+### Elo sweep
+
+Maia is asked to move in each of your positions at every Elo on the
+configured grid; the Elo whose match rate peaks is the estimate, shown per
+player with a fitted curve and a 95% interval.
+
+Three things about it are deliberate, and worth knowing before trusting a
+number:
+
+- Positions where Maia's choice never changes across the whole grid carry no
+  information about strength, so they're split out and only the
+  discriminative ones are fitted. Both counts are reported.
+- The same positions are scored at every grid point, so errors are
+  correlated along the grid rather than independent. The usual i.i.d.
+  smoothing heuristic under-smooths badly here and lets the fitted peak get
+  captured by boundary overshoot, so smoothing starts above that heuristic
+  and escalates until the curve stops overshooting, falling back to a
+  heavily smoothed weighted polynomial if a spline can't be tamed.
+- The bootstrap resamples *positions*, the independent sampling unit, and
+  rebuilds the curve from the cached score matrix -- so no engine work is
+  repeated, and the interval reflects the real sampling noise.
+
+Every estimate carries a High/Medium/Low label with the reasons spelled out
+(sample size, peak prominence, interval width). A peak sitting on the edge
+of the swept range caps the label at Medium however clean the fit looks: it
+means the player is probably outside the grid, so the number is a bound, not
+a measurement -- widen the Elo range and re-run.
+
+The full per-(position, Elo) score matrix is kept, so re-fitting later never
+re-runs the engine.
 
 ### Play vs Maia3 — how the model size is chosen
 

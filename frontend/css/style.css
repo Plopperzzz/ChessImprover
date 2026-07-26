@@ -223,6 +223,31 @@ input[type="text"], input[type="number"], textarea, select {
 #p-notes { font-size: 11px; color: var(--muted); margin-top: 6px; white-space: pre-line; }
 #p-notes.warn { color: #e0a13a; }
 
+#sweep-progress {
+  width: 100%;
+  height: 8px;
+  background: #11141b;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 8px 0 4px;
+}
+#sweep-progress-fill { height: 100%; width: 0%; background: #7db37d; transition: width 150ms ease; }
+#sweep-status { font-size: 13px; color: var(--muted); }
+#sweep-results { margin-top: 10px; display: flex; flex-direction: column; gap: 12px; }
+.sweep-player { border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+.sweep-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sweep-who { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.sweep-elo { font-size: 22px; font-weight: bold; }
+.sweep-ci { font-size: 12px; color: var(--muted); }
+.conf-badge { font-size: 10px; padding: 2px 6px; border-radius: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.conf-high { background: #24512f; color: #8fe0a0; }
+.conf-medium { background: #4d4320; color: #e0c040; }
+.conf-low { background: #4d2626; color: #e59090; }
+.sweep-reasons { margin: 8px 0 0; padding-left: 16px; font-size: 11px; color: var(--muted); }
+.sweep-reasons li { margin: 2px 0; }
+.sweep-chart { width: 100%; height: 110px; margin-top: 8px; display: block; }
+
 #analysis-progress {
   width: 100%;
   height: 8px;

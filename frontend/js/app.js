@@ -16,6 +16,7 @@ const state = {
   classifications: {}, // ply -> classification dict, from the last completed analysis job
   analysisJobId: null,
   analysisWs: null,
+  sweepWs: null,
   playMode: false,
   play: null, // { ws, chess, humanColor, turn, whiteMs, blackMs, clockEnabled, result, tick }
 };
@@ -105,6 +106,7 @@ async function initApp() {
   wirePgnUpload();
   wireSettingsDialog();
   wireAnalysis();
+  wireSweep();
   wirePlay();
   connectLiveEval();
 
@@ -384,6 +386,7 @@ function resetAnalysisState() {
   state.analysisJobId = null;
   if (state.analysisWs) { state.analysisWs.close(); state.analysisWs = null; }
   document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
+  resetSweepState();
   document.getElementById('analysis-progress-fill').style.width = '0%';
   document.getElementById('analysis-status').textContent = '';
   document.getElementById('analysis-summary').innerHTML = '';
@@ -489,6 +492,154 @@ function renderAnalysisSummary(moves) {
     span.textContent = `${labels[key]}: ${counts[key]}`;
     el.appendChild(span);
   }
+}
+
+/* ---------------- Elo sweep (Maia, spec section 9) ---------------- */
+
+function wireSweep() {
+  document.getElementById('sweep-btn').addEventListener('click', startSweep);
+}
+
+function resetSweepState() {
+  document.getElementById('sweep-btn').disabled = !state.selectedGameId;
+  document.getElementById('sweep-progress-fill').style.width = '0%';
+  document.getElementById('sweep-status').textContent = '';
+  document.getElementById('sweep-results').innerHTML = '';
+}
+
+async function startSweep() {
+  if (!state.selectedGameId) return;
+  const btn = document.getElementById('sweep-btn');
+  btn.disabled = true;
+  document.getElementById('sweep-results').innerHTML = '';
+  document.getElementById('sweep-status').textContent = 'Starting sweep...';
+  try {
+    const res = await api('/api/sweep', { method: 'POST', body: JSON.stringify({ game_id: state.selectedGameId }) });
+    watchSweepJob(res.job_id);
+  } catch (e) {
+    document.getElementById('sweep-status').textContent = 'Error: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+function watchSweepJob(jobId) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/analysis/${jobId}`);
+  state.sweepWs = ws;
+  // Same serialisation as the other streams: progress steps the board, and
+  // a concurrent handler would re-render mid-animation.
+  let chain = Promise.resolve();
+  ws.addEventListener('message', (ev) => {
+    const msg = JSON.parse(ev.data);
+    chain = chain.then(() => handleSweepMessage(msg)).catch((e) => console.error('sweep message failed', e));
+  });
+  ws.addEventListener('close', () => {
+    if (state.sweepWs === ws && document.getElementById('sweep-btn').disabled) {
+      setTimeout(() => watchSweepJob(jobId), 2000); // resume after a phone screen lock
+    }
+  });
+}
+
+async function handleSweepMessage(msg) {
+  if (msg.type === 'progress') {
+    const pct = msg.total ? Math.round((msg.done / msg.total) * 100) : 0;
+    document.getElementById('sweep-progress-fill').style.width = pct + '%';
+    document.getElementById('sweep-status').textContent =
+      `Elo ${msg.elo}: ${msg.done} / ${msg.total} position-evaluations (${pct}%)`;
+    if (msg.fen) state.board.renderFEN(msg.fen);
+  } else if (msg.type === 'done') {
+    document.getElementById('sweep-progress-fill').style.width = '100%';
+    document.getElementById('sweep-status').textContent = 'Sweep complete.';
+    renderSweepResults(msg);
+    document.getElementById('sweep-btn').disabled = false;
+    state.sweepWs = null;
+    syncBoardFull();
+  } else if (msg.type === 'error') {
+    document.getElementById('sweep-status').textContent = 'Error: ' + msg.message;
+    document.getElementById('sweep-btn').disabled = false;
+    state.sweepWs = null;
+  }
+}
+
+function renderSweepResults(msg) {
+  const box = document.getElementById('sweep-results');
+  box.innerHTML = '';
+  for (const side of ['w', 'b']) {
+    const res = msg.results[side];
+    if (!res) continue;
+    const card = document.createElement('div');
+    card.className = 'sweep-player';
+
+    const head = document.createElement('div');
+    head.className = 'sweep-head';
+    const who = document.createElement('span');
+    who.className = 'sweep-who';
+    who.textContent = side === msg.your_color ? 'You' : 'Opponent';
+    const elo = document.createElement('span');
+    elo.className = 'sweep-elo';
+    elo.textContent = res.estimate ?? '—';
+    const ci = document.createElement('span');
+    ci.className = 'sweep-ci';
+    ci.textContent = res.ci_low != null ? `95% CI ${res.ci_low}–${res.ci_high}` : '';
+    const badge = document.createElement('span');
+    badge.className = 'conf-badge conf-' + res.confidence;
+    badge.textContent = res.confidence;
+    head.append(who, elo, ci, badge);
+    card.appendChild(head);
+
+    card.appendChild(sweepChart(res));
+
+    // The number on its own invites more trust than it deserves, so the
+    // reasons behind the confidence label are always shown (section 9).
+    const ul = document.createElement('ul');
+    ul.className = 'sweep-reasons';
+    for (const reason of res.reasons) {
+      const li = document.createElement('li');
+      li.textContent = reason;
+      ul.appendChild(li);
+    }
+    card.appendChild(ul);
+    box.appendChild(card);
+  }
+}
+
+/** Observed match rate per swept Elo, with the fitted curve over it and the
+    peak marked -- so the estimate can be eyeballed, not just trusted. */
+function sweepChart(res) {
+  const W = 300, H = 110, padX = 6, padY = 10;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'sweep-chart');
+
+  const xs = res.curve_x, ys = res.curve_y;
+  const allY = ys.concat(res.match_rates);
+  const yMin = Math.min(...allY), yMax = Math.max(...allY);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const sx = (x) => padX + ((x - xMin) / (xMax - xMin || 1)) * (W - 2 * padX);
+  const sy = (y) => H - padY - ((y - yMin) / (yMax - yMin || 1)) * (H - 2 * padY);
+
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', xs.map((x, i) => `${i ? 'L' : 'M'}${sx(x).toFixed(1)},${sy(ys[i]).toFixed(1)}`).join(' '));
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#7db37d');
+  path.setAttribute('stroke-width', '2');
+  svg.appendChild(path);
+
+  res.grid.forEach((g, i) => {
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', sx(g)); dot.setAttribute('cy', sy(res.match_rates[i]));
+    dot.setAttribute('r', '2.5'); dot.setAttribute('fill', '#8b93a7');
+    svg.appendChild(dot);
+  });
+
+  if (res.estimate != null) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', sx(res.estimate)); line.setAttribute('x2', sx(res.estimate));
+    line.setAttribute('y1', padY); line.setAttribute('y2', H - padY);
+    line.setAttribute('stroke', '#5b8dee'); line.setAttribute('stroke-dasharray', '3,3');
+    svg.appendChild(line);
+  }
+  return svg;
 }
 
 /* ---------------- Play vs Maia3 ----------------
