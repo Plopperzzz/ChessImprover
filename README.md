@@ -17,28 +17,42 @@ evaluated), and Play vs Maia3 with a configurable time control. The Maia Elo
 sweep, Great/Brilliant classification, saved analysis runs, batch mode, and
 the trend view are not yet built.
 
-### Play vs Maia3 — read this before your first game
+### Play vs Maia3 — how the model size is chosen
 
-The Maia integration is written against the UCI protocol and **has not been
-run against a real Maia3 build** -- there is no Maia binary in the
-development environment, so the game loop, clock, legality, and save-to-
-library were verified with Stockfish standing in as the UCI engine.
+Maia3 ships the model size as a **separate executable**, not a UCI option:
+`maia3-5m`, `maia3-23m` and `maia3-79m` are distinct pip console-script
+entry points (`maia3.presets:main_5m` / `main_23m` / `main_79m`), while
+`maia3-uci` is the generic entry point. That is why pointing the app at
+`maia3-uci.exe` and choosing a size did nothing -- there is no model-size
+option on that binary to set.
 
-Because wrappers disagree about option names, the app does not assume any:
-on connect it reads the engine's advertised `option` lines and looks for an
-Elo knob (`UCI_Elo`, `Elo`, `MaiaElo`, ...) and a model-size knob
-(`ModelSize`, `Model`, `Weights`, ...). Whatever it did or could not apply
-is reported in the Play panel, in amber when something was skipped -- e.g.
-"model size NOT applied: engine advertises no recognised model/weights
-option". If you see that with real Maia3, tell me the option names your
-build advertises and I'll wire them up; the app will never silently pretend
-a setting took effect.
+So the model-size setting picks a **binary**. Point the Maia path at any
+maia3 executable (or the folder containing them) and the app resolves the
+sibling `maia3-<size>` for the selected size, matching the extension of the
+path you gave it (`.exe` on Windows). The Settings dialog lists only the
+sizes it can actually find on disk and shows which binary will be launched;
+`/api/engines/status` reports the running binary too, so there's no guessing
+about which model actually played. If no matching executable exists next to
+your path, it says so in amber and runs the configured binary unchanged
+rather than pretending the setting took effect.
+
+Sizes are discovered from disk rather than hardcoded: the spec named
+5m/25m/79m, but the shipped distribution is 5m/**23m**/79m.
+
+`MAIA_PATH` works as a default the same way `STOCKFISH_PATH` does.
 
 Maia is asked for its move with `go nodes 1`, which is what makes a Maia
 policy net reproduce human move choice instead of searching. Its reply is
 held back by a randomised ~0.5-2s pause so it doesn't answer instantly, and
 that pause is charged to Maia's own clock (capped so it can never be the
 thing that flags it).
+
+Still not verified against a real Maia3 build: the binaries in
+`assets/Engines/` are Windows executables and the dev environment is Linux,
+so the game loop was exercised with Stockfish and a scripted UCI stand-in.
+The Elo option is still probed rather than assumed (`UCI_Elo`, `Elo`,
+`MaiaElo`, ...); if the Play panel reports "Elo NOT applied", tell me what
+your build advertises.
 
 ## Running it
 

@@ -551,7 +551,14 @@ async function startPlayGame() {
   ws.addEventListener('open', () => {
     sendPlay({ type: 'new_game', elo, color, base_minutes: baseMinutes, increment_seconds: incrementSeconds });
   });
-  ws.addEventListener('message', (ev) => handlePlayMessage(JSON.parse(ev.data)));
+  // The server sends engine_move immediately followed by state. Handling
+  // them concurrently lets the state handler re-render the board while the
+  // engine move is still sliding, so chain them and let each finish first.
+  let chain = Promise.resolve();
+  ws.addEventListener('message', (ev) => {
+    const msg = JSON.parse(ev.data);
+    chain = chain.then(() => handlePlayMessage(msg)).catch((e) => console.error('play message failed', e));
+  });
   ws.addEventListener('close', () => {
     if (state.playMode) document.getElementById('p-status').textContent = 'Disconnected from the play session.';
   });
@@ -841,9 +848,45 @@ function wireSettingsDialog() {
 
   document.getElementById('s-sf-browse').addEventListener('click', () => openBrowse('s-sf-path'));
   document.getElementById('s-maia-browse').addEventListener('click', () => openBrowse('s-maia-path'));
+  // Re-scan when the path changes (typed or picked) and when the size changes,
+  // so the dialog always shows the binary that will actually be launched.
+  document.getElementById('s-maia-path').addEventListener('change', () => refreshMaiaModels());
+  document.getElementById('s-maia-size').addEventListener('change', () => refreshMaiaModels());
   document.getElementById('browse-cancel').addEventListener('click', () => {
     document.getElementById('browse-panel').classList.add('hidden');
   });
+}
+
+/** Populates the model-size dropdown from the maia3-<size> executables that
+    actually exist next to the configured path, and reports which binary the
+    current selection resolves to -- the size picks a binary, not a UCI
+    option, so being explicit about it is the whole point. */
+async function refreshMaiaModels(selected) {
+  const sel = document.getElementById('s-maia-size');
+  const note = document.getElementById('s-maia-resolved');
+  const typedPath = document.getElementById('s-maia-path').value;
+  const wantSize = selected || sel.value;
+  let info;
+  try {
+    info = await api('/api/settings/maia-models?path=' + encodeURIComponent(typedPath || '')
+                     + '&size=' + encodeURIComponent(wantSize || ''));
+  } catch (e) {
+    note.textContent = 'Could not check installed models: ' + e.message;
+    return;
+  }
+  const want = wantSize;
+  sel.innerHTML = '';
+  for (const size of info.sizes) {
+    const opt = document.createElement('option');
+    opt.value = size;
+    opt.textContent = size + (info.discovered ? '' : ' (not found on disk)');
+    sel.appendChild(opt);
+  }
+  if (want && info.sizes.includes(want)) sel.value = want;
+
+  const binary = info.resolved_binary ? info.resolved_binary.split(/[\\/]/).pop() : null;
+  note.textContent = binary ? `will run: ${binary}` : info.note;
+  note.classList.toggle('warn', !info.discovered || /NOT applied/.test(info.note || ''));
 }
 
 /** Draws a small board+pieces swatch for `setName` inside the settings
@@ -898,7 +941,7 @@ async function fillSettingsForm() {
   document.getElementById('s-sf-limit-value').value = s.sf_limit_value;
   document.getElementById('s-sf-skill').value = s.sf_skill_level === null || s.sf_skill_level === undefined ? '' : s.sf_skill_level;
   document.getElementById('s-maia-path').value = s.maia_path || '';
-  document.getElementById('s-maia-size').value = s.maia_model_size;
+  await refreshMaiaModels(s.maia_model_size);
   document.getElementById('s-maia-elo-min').value = s.maia_elo_min;
   document.getElementById('s-maia-elo-max').value = s.maia_elo_max;
   document.getElementById('s-maia-elo-step').value = s.maia_elo_step;

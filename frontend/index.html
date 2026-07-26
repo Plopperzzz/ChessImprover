@@ -159,12 +159,11 @@
           </div>
         </label>
         <label>Model size
-          <select id="s-maia-size">
-            <option value="5m">5m</option>
-            <option value="25m">25m</option>
-            <option value="79m">79m</option>
-          </select>
+          <select id="s-maia-size"></select>
         </label>
+        <!-- Maia3 ships the model size as a separate executable, so this
+             picks a binary rather than setting a UCI option. -->
+        <div id="s-maia-resolved"></div>
         <label>Elo min <input type="number" id="s-maia-elo-min" /></label>
         <label>Elo max <input type="number" id="s-maia-elo-max" /></label>
         <label>Elo step <input type="number" id="s-maia-elo-step" /></label>

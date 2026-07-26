@@ -144,8 +144,13 @@ class Board {
     if (this.highlightLayer) this.highlightLayer.innerHTML = '';
   }
 
+  /** No-op when the orientation is already what's asked for. Callers poll
+      this on every server update, and an unconditional re-render would tear
+      down the piece elements mid-slide, killing any animation in flight. */
   setOrientation(color) {
-    this.orientation = color === 'b' ? 'b' : 'w';
+    const next = color === 'b' ? 'b' : 'w';
+    if (next === this.orientation) return;
+    this.orientation = next;
     this.renderFEN(this.currentFEN);
   }
 

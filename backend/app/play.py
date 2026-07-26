@@ -27,6 +27,7 @@ from .auth import SESSION_COOKIE, _user_for_token, require_user
 from .db import db_cursor
 from .engine_manager import EngineProcess, pick_option, read_uci_options
 from .engine_settings import get_effective_settings
+from .maia import resolve_binary as resolve_maia_binary
 
 router = APIRouter(tags=["play"])
 
@@ -57,6 +58,7 @@ def status() -> list[dict]:
             "user_id": s.user_id,
             "pid": s.engine.pid if s.engine else None,
             "kind": "play-vs-maia",
+            "binary": s.binary_path,
             "uptime_s": round(now - s.started_at, 1),
         }
         for sid, s in sessions.items()
@@ -80,6 +82,7 @@ class PlaySession:
         self.clock_enabled = False
         self.turn_started_at: float | None = None
         self.elo_option: str | None = None
+        self.binary_path: str | None = None
 
         self.result: str | None = None      # '1-0' | '0-1' | '1/2-1/2'
         self.result_reason: str | None = None
@@ -106,9 +109,16 @@ class PlaySession:
     # ---------- engine ----------
 
     async def start_engine(self, settings: dict):
-        path = settings.get("maia_path")
-        if not path:
+        configured = settings.get("maia_path")
+        if not configured:
             raise RuntimeError("Maia path is not configured -- set it in Settings first")
+
+        # Model size selects a binary, not a UCI option (see app/maia.py).
+        path, note = resolve_maia_binary(configured, settings.get("maia_model_size"))
+        if not path:
+            raise RuntimeError(note)
+        self.setup_notes.append(note)
+        self.binary_path = path
 
         engine = EngineProcess(path)
         await engine.start()
@@ -116,14 +126,12 @@ class PlaySession:
         engine.advertised_options = await read_uci_options(engine)
         self.engine = engine
 
+        # Some builds may still expose a weights/model option; if this one
+        # does, set it too -- it can only help, and costs nothing when absent.
         model_opt = pick_option(engine.advertised_options, MODEL_SIZE_CANDIDATES)
         if model_opt:
             await engine.send_line(f"setoption name {model_opt} value {settings.get('maia_model_size')}")
-            self.setup_notes.append(f"model size -> '{model_opt}'")
-        else:
-            self.setup_notes.append(
-                "model size NOT applied: engine advertises no recognised model/weights option"
-            )
+            self.setup_notes.append(f"also set '{model_opt}'")
 
         limit_opt = pick_option(engine.advertised_options, LIMIT_STRENGTH_CANDIDATES)
         if limit_opt:

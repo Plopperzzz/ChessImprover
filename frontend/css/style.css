@@ -306,6 +306,9 @@ input[type="text"], input[type="number"], textarea, select {
 /* ---------- Settings dialog ---------- */
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
 fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
+#s-maia-resolved { font-size: 11px; color: var(--muted); margin: -4px 0 10px; word-break: break-all; }
+#s-maia-resolved.warn { color: #e0a13a; }
+
 #asset-preview {
   position: relative;
   width: 160px;

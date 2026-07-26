@@ -1,10 +1,12 @@
 import os
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .auth import require_user
 from .db import db_cursor
+from .maia import FALLBACK_SIZES, discover_sizes, resolve_binary
 from .paths import list_asset_sets
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -35,6 +37,8 @@ def get_effective_settings(user_id: int) -> dict:
     d = dict(row)
     if not d.get("stockfish_path"):
         d["stockfish_path"] = os.environ.get("STOCKFISH_PATH")
+    if not d.get("maia_path"):
+        d["maia_path"] = os.environ.get("MAIA_PATH")
     return d
 
 
@@ -47,8 +51,11 @@ def get_settings(user: dict = Depends(require_user)):
 def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
     if body.sf_limit_type not in ("depth", "movetime"):
         raise HTTPException(400, "sf_limit_type must be 'depth' or 'movetime'")
-    if body.maia_model_size not in ("5m", "25m", "79m"):
-        raise HTTPException(400, "maia_model_size must be one of '5m', '25m', '79m'")
+    # Sizes come from whatever maia3-<size> binaries are installed, so don't
+    # pin the list here -- the real distribution ships 23m where the spec
+    # said 25m, and a future release could add more.
+    if not re.fullmatch(r"\d+m", body.maia_model_size or ""):
+        raise HTTPException(400, "maia_model_size must look like '5m', '23m', '79m'")
     with db_cursor() as conn:
         conn.execute(
             """UPDATE engine_settings SET
@@ -65,6 +72,25 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
             ),
         )
     return get_settings(user)
+
+
+@router.get("/maia-models")
+def maia_models(path: str | None = None, size: str | None = None, user: dict = Depends(require_user)):
+    """Which Maia model sizes are actually installed next to the configured
+    path, and which binary a given selection would run. `path` and `size` let
+    the settings dialog preview values the user has changed but not saved."""
+    settings = get_effective_settings(user["id"])
+    configured = path if path is not None else settings.get("maia_path")
+    chosen = size or settings.get("maia_model_size")
+    sizes = discover_sizes(configured)
+    resolved, note = resolve_binary(configured, chosen)
+    return {
+        "sizes": sizes or FALLBACK_SIZES,
+        "discovered": bool(sizes),
+        "configured_path": configured,
+        "resolved_binary": resolved,
+        "note": note,
+    }
 
 
 class ProfileUpdate(BaseModel):
