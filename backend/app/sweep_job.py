@@ -22,7 +22,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from . import elo_sweep
+from . import classify, elo_sweep
 from .analysis import AnalysisJob, jobs
 from .auth import SESSION_COOKIE, _user_for_token, require_user
 from .db import db_cursor
@@ -75,64 +75,78 @@ async def _bestmove(engine: EngineProcess, fen: str) -> str | None:
             return parts[1] if len(parts) >= 2 else None
 
 
-async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color: str):
-    """Fills the score matrix for both players and emits the fitted estimate."""
+async def _sweep_core(job, pgn_text: str, settings: dict,
+                      progress_scale: float = 1.0, progress_base: float = 0.0) -> dict:
+    """The engine half of a sweep: fills the (position x Elo) match matrix for
+    both players. Shared by the standalone sweep and full mode, so the two can
+    never drift apart in how they score a position."""
+    configured = settings.get("maia_binary")
+    if not configured:
+        raise RuntimeError("No Maia engine selected -- choose one in Settings")
+    path, note = resolve_maia_binary(configured, settings.get("maia_model_size"))
+    if not path:
+        raise RuntimeError(note)
+
+    grid = build_grid(settings.get("maia_elo_min", 1100),
+                      settings.get("maia_elo_max", 1900),
+                      settings.get("maia_elo_step", 100))
+    by_player = positions_by_player(pgn_text)
+    total_work = len(grid) * sum(len(v) for v in by_player.values())
+    if total_work == 0:
+        raise RuntimeError("this game has no positions to sweep")
+
+    engine = EngineProcess(path)
+    await engine.start()
+    await engine.send_line("uci")
+    engine.advertised_options = await read_uci_options(engine)
+
+    elo_option = pick_option(engine.advertised_options, ELO_OPTION_CANDIDATES)
+    if not elo_option:
+        engine.terminate()
+        await engine.wait_closed()
+        raise RuntimeError(
+            "this Maia build advertises no Elo option, so a sweep would score "
+            "the same strength at every grid point"
+        )
+    limit_opt = pick_option(engine.advertised_options, LIMIT_STRENGTH_CANDIDATES)
+    if limit_opt:
+        await engine.send_line(f"setoption name {limit_opt} value true")
+    for name, value in (settings.get("maia_options") or {}).items():
+        real = pick_option(engine.advertised_options, [name])
+        if real and str(value) != "":
+            await engine.send_line(f"setoption name {real} value {value}")
+    await engine.send_line("isready")
+    await engine.wait_for("readyok")
+
+    matrices = {side: np.zeros((len(rows), len(grid))) for side, rows in by_player.items()}
+    done = 0
     try:
-        configured = settings.get("maia_binary")
-        if not configured:
-            raise RuntimeError("No Maia engine selected -- choose one in Settings")
-        path, note = resolve_maia_binary(configured, settings.get("maia_model_size"))
-        if not path:
-            raise RuntimeError(note)
+        # Elo outermost: one setoption per grid point rather than per position.
+        for gi, elo in enumerate(grid):
+            await engine.send_line(f"setoption name {elo_option} value {elo}")
+            await engine.send_line("isready")
+            await engine.wait_for("readyok")
+            for side, rows in by_player.items():
+                for pi, row in enumerate(rows):
+                    best = await _bestmove(engine, row["fen"])
+                    matrices[side][pi, gi] = 1.0 if best == row["uci"] else 0.0
+                    done += 1
+                    if done % 10 == 0 or done == total_work:
+                        await job.emit({"type": "progress", "done": done, "total": total_work,
+                                        "elo": elo, "fen": row["fen"], "phase": "maia",
+                                        "fraction": progress_base + progress_scale * (done / total_work)})
+    finally:
+        engine.terminate()
+        await engine.wait_closed()
 
-        grid = build_grid(settings.get("maia_elo_min", 1100),
-                          settings.get("maia_elo_max", 1900),
-                          settings.get("maia_elo_step", 100))
-        by_player = positions_by_player(pgn_text)
-        total_work = len(grid) * sum(len(v) for v in by_player.values())
-        if total_work == 0:
-            raise RuntimeError("this game has no positions to sweep")
+    return {"grid": grid, "by_player": by_player, "matrices": matrices, "note": note}
 
-        engine = EngineProcess(path)
-        await engine.start()
-        await engine.send_line("uci")
-        engine.advertised_options = await read_uci_options(engine)
 
-        elo_option = pick_option(engine.advertised_options, ELO_OPTION_CANDIDATES)
-        if not elo_option:
-            raise RuntimeError(
-                "this Maia build advertises no Elo option, so a sweep would score "
-                "the same strength at every grid point"
-            )
-        limit_opt = pick_option(engine.advertised_options, LIMIT_STRENGTH_CANDIDATES)
-        if limit_opt:
-            await engine.send_line(f"setoption name {limit_opt} value true")
-        for name, value in (settings.get("maia_options") or {}).items():
-            real = pick_option(engine.advertised_options, [name])
-            if real and str(value) != "":
-                await engine.send_line(f"setoption name {real} value {value}")
-        await engine.send_line("isready")
-        await engine.wait_for("readyok")
-
-        matrices = {side: np.zeros((len(rows), len(grid))) for side, rows in by_player.items()}
-        done = 0
-        try:
-            # Elo outermost: one setoption per grid point rather than per position.
-            for gi, elo in enumerate(grid):
-                await engine.send_line(f"setoption name {elo_option} value {elo}")
-                await engine.send_line("isready")
-                await engine.wait_for("readyok")
-                for side, rows in by_player.items():
-                    for pi, row in enumerate(rows):
-                        best = await _bestmove(engine, row["fen"])
-                        matrices[side][pi, gi] = 1.0 if best == row["uci"] else 0.0
-                        done += 1
-                        if done % 10 == 0 or done == total_work:
-                            await job.emit({"type": "progress", "done": done, "total": total_work,
-                                            "elo": elo, "fen": row["fen"]})
-        finally:
-            engine.terminate()
-            await engine.wait_closed()
+async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color: str):
+    """Sweep on its own: the Elo estimate without the Stockfish pass."""
+    try:
+        sweep = await _sweep_core(job, pgn_text, settings)
+        grid, by_player, matrices = sweep["grid"], sweep["by_player"], sweep["matrices"]
 
         results = {}
         for side, matrix in matrices.items():
@@ -140,15 +154,14 @@ async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color:
                 continue
             results[side] = elo_sweep.estimate(grid, matrix)
 
-        payload = {
+        _store_matrices(job, grid, by_player, matrices)
+        await job.emit({
             "type": "done",
             "grid": grid,
             "your_color": your_color,
             "results": results,
-            "model_note": note,
-        }
-        _store_matrices(job, grid, by_player, matrices)
-        await job.emit(payload)
+            "model_note": sweep["note"],
+        })
     except Exception as e:
         await job.emit({"type": "error", "message": str(e)})
 
@@ -200,3 +213,92 @@ def get_matrix(job_id: str, user: dict = Depends(require_user)):
     if not cache:
         raise HTTPException(409, "this sweep hasn't finished yet")
     return cache
+
+
+# ---------------------------------------------------------------------------
+# Full mode (spec section 12): the Stockfish pass plus the Maia sweep, joined
+# ---------------------------------------------------------------------------
+
+def _rows_by_ply(positions: list[dict], matrix) -> dict[int, list[float]]:
+    """Sweep matrix rows keyed by the ply they belong to, so a move's
+    classification can look up its own Maia scores."""
+    return {row["ply"]: list(matrix[i]) for i, row in enumerate(positions)}
+
+
+async def run_full(job, pgn_text: str, settings: dict, your_color: str):
+    """Quick mode + Elo sweep + Great/Brilliant + blunder-Elo correlation."""
+    try:
+        from .analysis import stockfish_pass
+
+        # Stockfish first: the sweep is much the longer of the two, so the
+        # combined progress bar gives it the larger share.
+        moves = await stockfish_pass(job, pgn_text, settings, progress_scale=0.25, progress_base=0.0)
+
+        sweep = await _sweep_core(job, pgn_text, settings,
+                                  progress_scale=0.75, progress_base=0.25)
+        grid = sweep["grid"]
+        by_player = sweep["by_player"]
+        matrices = sweep["matrices"]
+
+        results = {}
+        for side, matrix in matrices.items():
+            if matrix.shape[0] == 0:
+                continue
+            results[side] = elo_sweep.estimate(grid, matrix)
+
+        # Each side is judged against its *own* estimated strength, per
+        # section 8 -- a move is Great because players of that player's level
+        # wouldn't find it, not because of the opponent's level.
+        fens_before = {r["ply"]: r["fen"] for rows in by_player.values() for r in rows}
+        ucis = {r["ply"]: r["uci"] for rows in by_player.values() for r in rows}
+        for side, matrix in matrices.items():
+            if matrix.shape[0] == 0:
+                continue
+            rows = _rows_by_ply(by_player[side], matrix)
+            classify.apply_great_brilliant(
+                moves,
+                sweep_rows=rows,
+                grid=grid,
+                estimated_elo=results[side].get("estimate"),
+                fens_before=fens_before,
+                ucis=ucis,
+                max_drop=settings.get("great_max_drop", classify.DEFAULT_GREAT_MAX_DROP),
+                max_match_rate=settings.get("great_max_match_rate", classify.DEFAULT_GREAT_MAX_MATCH_RATE),
+                brilliant_enabled=bool(settings.get("brilliant_enabled", 1)),
+            )
+            classify.blunder_elo_correlation(moves, sweep_rows=rows, grid=grid)
+
+        _store_matrices(job, grid, by_player, matrices)
+        await job.emit({
+            "type": "done",
+            "mode": "full",
+            "moves": moves,
+            "grid": grid,
+            "your_color": your_color,
+            "results": results,
+            "model_note": sweep["note"],
+        })
+    except Exception as e:
+        await job.emit({"type": "error", "message": str(e)})
+
+
+class FullIn(BaseModel):
+    game_id: int
+
+
+@router.post("/full")
+async def start_full(body: FullIn, user: dict = Depends(require_user)):
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT pgn_text, your_color FROM games WHERE id = ? AND user_id = ?",
+            (body.game_id, user["id"]),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "no such game")
+    settings = get_effective_settings(user["id"])
+
+    job_id = uuid.uuid4().hex
+    job = AnalysisJob(job_id, user["id"], body.game_id)
+    jobs[job_id] = job
+    job.task = asyncio.create_task(run_full(job, row["pgn_text"], settings, row["your_color"]))
+    return {"job_id": job_id}

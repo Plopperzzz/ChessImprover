@@ -379,13 +379,14 @@ function refreshMoveTableHighlight() {
 
 /* ---------------- Quick analysis (Stockfish-only move classification) ---------------- */
 
-const CLASSIFICATION_SUFFIX = { good: '', inaccuracy: '?!', mistake: '?', blunder: '??' };
+const CLASSIFICATION_SUFFIX = { good: '', inaccuracy: '?!', mistake: '?', blunder: '??', great: '!', brilliant: '!!' };
 
 function resetAnalysisState() {
   state.classifications = {};
   state.analysisJobId = null;
   if (state.analysisWs) { state.analysisWs.close(); state.analysisWs = null; }
   document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
+  document.getElementById('full-analysis-btn').disabled = !state.selectedGameId;
   resetSweepState();
   document.getElementById('analysis-progress-fill').style.width = '0%';
   document.getElementById('analysis-status').textContent = '';
@@ -393,24 +394,34 @@ function resetAnalysisState() {
 }
 
 function wireAnalysis() {
-  document.getElementById('quick-analysis-btn').addEventListener('click', startQuickAnalysis);
+  document.getElementById('quick-analysis-btn').addEventListener('click', () => startAnalysis('quick'));
+  document.getElementById('full-analysis-btn').addEventListener('click', () => startAnalysis('full'));
 }
 
-async function startQuickAnalysis() {
+/** mode: 'quick' (Stockfish only) or 'full' (adds the Maia sweep, so also
+    Great/Brilliant and the blunder-Elo correlation). */
+async function startAnalysis(mode) {
   if (!state.selectedGameId) return;
-  const btn = document.getElementById('quick-analysis-btn');
-  btn.disabled = true;
+  setAnalysisButtonsEnabled(false);
   state.classifications = {};
   document.getElementById('analysis-summary').innerHTML = '';
-  document.getElementById('analysis-status').textContent = 'Starting...';
+  document.getElementById('analysis-status').textContent =
+    mode === 'full' ? 'Starting full analysis (Stockfish, then the Maia sweep)...' : 'Starting...';
+  const url = mode === 'full' ? '/api/sweep/full' : '/api/analysis/quick';
   try {
-    const res = await api('/api/analysis/quick', { method: 'POST', body: JSON.stringify({ game_id: state.selectedGameId }) });
+    const res = await api(url, { method: 'POST', body: JSON.stringify({ game_id: state.selectedGameId }) });
     state.analysisJobId = res.job_id;
     watchAnalysisJob(res.job_id);
   } catch (e) {
     document.getElementById('analysis-status').textContent = 'Error: ' + e.message;
-    btn.disabled = false;
+    setAnalysisButtonsEnabled(true);
   }
+}
+
+function setAnalysisButtonsEnabled(enabled) {
+  const on = enabled && !!state.selectedGameId;
+  document.getElementById('quick-analysis-btn').disabled = !on;
+  document.getElementById('full-analysis-btn').disabled = !on;
 }
 
 function watchAnalysisJob(jobId) {
@@ -441,22 +452,40 @@ function watchAnalysisJob(jobId) {
 
 async function handleAnalysisMessage(msg) {
   if (msg.type === 'progress') {
-    await animateToMainlinePly(msg.ply);
-    const pct = msg.total ? Math.round((msg.ply / msg.total) * 100) : 100;
+    // Full mode reports an overall fraction across both passes; quick mode
+    // only has the one, so fall back to its ply counter.
+    if (msg.phase === 'maia') {
+      if (msg.fen) state.board.renderFEN(msg.fen);
+      document.getElementById('analysis-status').textContent =
+        `Maia sweep at Elo ${msg.elo}: ${msg.done} / ${msg.total}`;
+    } else {
+      await animateToMainlinePly(msg.ply);
+      document.getElementById('analysis-status').textContent =
+        `Evaluating move ${msg.ply} / ${msg.total}...`;
+    }
+    const pct = msg.fraction !== undefined
+      ? Math.round(msg.fraction * 100)
+      : (msg.total ? Math.round((msg.ply / msg.total) * 100) : 100);
     document.getElementById('analysis-progress-fill').style.width = pct + '%';
-    document.getElementById('analysis-status').textContent = `Evaluating move ${msg.ply} / ${msg.total}...`;
   } else if (msg.type === 'done') {
     state.classifications = {};
     for (const m of msg.moves) state.classifications[m.ply] = m;
     renderMoveTable();
     refreshMoveTableHighlight();
     renderAnalysisSummary(msg.moves);
+    if (msg.mode === 'full') {
+      renderSweepResults(msg);            // reuse the sweep panel for the estimate
+      renderBlunderElo(msg.moves, msg.your_color);
+      document.getElementById('sweep-status').textContent = 'From the full analysis.';
+      document.getElementById('sweep-progress-fill').style.width = '100%';
+    }
     document.getElementById('analysis-status').textContent = 'Done.';
     document.getElementById('analysis-progress-fill').style.width = '100%';
-    document.getElementById('quick-analysis-btn').disabled = false;
+    setAnalysisButtonsEnabled(true);
+    syncBoardFull();
   } else if (msg.type === 'error') {
     document.getElementById('analysis-status').textContent = 'Error: ' + msg.message;
-    document.getElementById('quick-analysis-btn').disabled = false;
+    setAnalysisButtonsEnabled(true);
   }
 }
 
@@ -481,17 +510,49 @@ async function animateToMainlinePly(ply) {
 }
 
 function renderAnalysisSummary(moves) {
-  const counts = { good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
+  const counts = { brilliant: 0, great: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
   for (const m of moves) counts[m.classification]++;
   const el = document.getElementById('analysis-summary');
   el.innerHTML = '';
-  const labels = { good: 'Good', inaccuracy: 'Inaccuracies', mistake: 'Mistakes', blunder: 'Blunders' };
-  for (const key of ['good', 'inaccuracy', 'mistake', 'blunder']) {
+  const labels = { brilliant: 'Brilliant', great: 'Great', good: 'Good',
+                   inaccuracy: 'Inaccuracies', mistake: 'Mistakes', blunder: 'Blunders' };
+  for (const key of ['brilliant', 'great', 'good', 'inaccuracy', 'mistake', 'blunder']) {
+    if (counts[key] === 0 && (key === 'brilliant' || key === 'great')) continue;
     const span = document.createElement('span');
     span.className = 'cnt-' + key;
     span.textContent = `${labels[key]}: ${counts[key]}`;
     el.appendChild(span);
   }
+}
+
+/** "Would a player of this strength have avoided it?" -- for each mistake or
+    blunder, the weakest swept Elo whose Maia top-1 was the move actually
+    played. No swept Elo playing it means there's no correlation to report,
+    which is different from a correlation of zero. */
+function renderBlunderElo(moves, yourColor) {
+  const box = document.getElementById('sweep-results');
+  const bad = moves.filter((m) => m.lowest_matching_elo !== undefined
+                               && ['mistake', 'blunder'].includes(m.classification));
+  if (!bad.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'sweep-player';
+  const title = document.createElement('div');
+  title.className = 'sweep-who';
+  title.textContent = 'Mistakes & blunders vs Maia strength';
+  wrap.appendChild(title);
+  const list = document.createElement('div');
+  list.className = 'blunder-elo';
+  for (const m of bad) {
+    const side = m.ply % 2 === 1 ? 'w' : 'b';
+    const row = document.createElement('div');
+    const who = side === yourColor ? 'you' : 'opponent';
+    row.innerHTML = m.lowest_matching_elo === null
+      ? `<b>${m.san}</b> (${who}) — no swept Elo played this`
+      : `<b>${m.san}</b> (${who}) — first played by Maia at ${m.lowest_matching_elo}`;
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  box.appendChild(wrap);
 }
 
 /* ---------------- Elo sweep (Maia, spec section 9) ---------------- */
@@ -978,6 +1039,9 @@ function wireSettingsDialog() {
       maia_elo_min: Number(document.getElementById('s-maia-elo-min').value),
       maia_elo_max: Number(document.getElementById('s-maia-elo-max').value),
       maia_elo_step: Number(document.getElementById('s-maia-elo-step').value),
+      great_max_drop: Number(document.getElementById('s-great-drop').value),
+      great_max_match_rate: Number(document.getElementById('s-great-rate').value),
+      brilliant_enabled: document.getElementById('s-brilliant').value === '1',
       maia_options: collectEngineOptions('s-maia-options'),
       stockfish_options: state.settings.stockfish_options || {},
     };
@@ -1273,6 +1337,9 @@ async function fillSettingsForm() {
   document.getElementById('s-maia-elo-min').value = s.maia_elo_min;
   document.getElementById('s-maia-elo-max').value = s.maia_elo_max;
   document.getElementById('s-maia-elo-step').value = s.maia_elo_step;
+  document.getElementById('s-great-drop').value = s.great_max_drop ?? 0.02;
+  document.getElementById('s-great-rate').value = s.great_max_match_rate ?? 0.20;
+  document.getElementById('s-brilliant').value = s.brilliant_enabled ? '1' : '0';
 }
 
 boot();

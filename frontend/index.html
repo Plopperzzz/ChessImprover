@@ -95,7 +95,10 @@
 
       <div class="panel">
         <h3>Analysis</h3>
-        <button id="quick-analysis-btn" disabled>Run Quick Analysis</button>
+        <div class="play-buttons">
+          <button id="quick-analysis-btn" disabled>Quick</button>
+          <button id="full-analysis-btn" disabled title="Quick + Maia Elo sweep + Great/Brilliant">Full</button>
+        </div>
         <div id="analysis-progress"><div id="analysis-progress-fill"></div></div>
         <div id="analysis-status"></div>
         <div id="analysis-summary"></div>
@@ -172,6 +175,15 @@
         <label>Elo min <input type="number" id="s-maia-elo-min" /></label>
         <label>Elo max <input type="number" id="s-maia-elo-max" /></label>
         <label>Elo step <input type="number" id="s-maia-elo-step" /></label>
+        <label>Great: max win-prob given up vs best (0.02 = near-lossless)
+          <input type="number" id="s-great-drop" step="0.01" min="0" max="0.5" />
+        </label>
+        <label>Great: max share of players at your level who'd find it
+          <input type="number" id="s-great-rate" step="0.05" min="0" max="1" />
+        </label>
+        <label>Brilliant (Great + a material sacrifice)
+          <select id="s-brilliant"><option value="1">On</option><option value="0">Off</option></select>
+        </label>
         <!-- Rendered from the options this engine actually advertises
              (temperature and anything else it exposes). -->
         <div id="s-maia-options"></div>

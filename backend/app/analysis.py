@@ -74,40 +74,51 @@ def _parse_game_positions(pgn_text: str):
     return fens, sans, board
 
 
+async def stockfish_pass(job: AnalysisJob, pgn_text: str, engine_settings: dict,
+                         progress_scale: float = 1.0, progress_base: float = 0.0):
+    """The N+1-eval Stockfish pass (section 8). Shared by quick and full mode
+    so both classify identically. progress_scale/base let full mode fold this
+    into a combined progress bar."""
+    fens, sans, final_board = _parse_game_positions(pgn_text)
+    total = len(fens) - 1
+    cp_evals: list[float] = [0.0] * len(fens)
+
+    path = engine_settings.get("stockfish_binary")
+    if not path:
+        raise RuntimeError("No Stockfish engine selected -- choose one in Settings")
+
+    engine = await start_configured_engine(path, engine_options_from_settings(engine_settings))
+    limit_type = engine_settings.get("sf_limit_type", "depth")
+    limit_value = engine_settings.get("sf_limit_value", 18)
+
+    try:
+        for i, fen in enumerate(fens):
+            is_final = i == len(fens) - 1
+            if is_final and final_board.is_checkmate():
+                # the side to move at the final position is the one who got mated
+                cp = -10000.0
+            elif is_final and final_board.is_stalemate():
+                cp = 0.0
+            else:
+                info = await evaluate_position(engine, fen, limit_type, limit_value)
+                cp = eval_to_cp(info)
+            cp_evals[i] = cp
+            frac = progress_base + progress_scale * (i / max(1, total))
+            await job.emit({"type": "progress", "ply": i, "total": total, "fen": fen,
+                            "fraction": frac, "phase": "stockfish"})
+    finally:
+        engine.terminate()
+        await engine.wait_closed()
+
+    moves = classify_moves(cp_evals)
+    for m, san in zip(moves, sans):
+        m["san"] = san
+    return moves
+
+
 async def _run_quick_job(job: AnalysisJob, pgn_text: str, engine_settings: dict):
     try:
-        fens, sans, final_board = _parse_game_positions(pgn_text)
-        total = len(fens) - 1  # number of moves
-        cp_evals: list[float] = [0.0] * len(fens)
-
-        path = engine_settings.get("stockfish_binary")
-        if not path:
-            raise RuntimeError("No Stockfish engine selected -- choose one in Settings")
-
-        engine = await start_configured_engine(path, engine_options_from_settings(engine_settings))
-        limit_type = engine_settings.get("sf_limit_type", "depth")
-        limit_value = engine_settings.get("sf_limit_value", 18)
-
-        try:
-            for i, fen in enumerate(fens):
-                is_final = i == len(fens) - 1
-                if is_final and final_board.is_checkmate():
-                    # the side to move at the final position is the one who got mated
-                    cp = -10000.0
-                elif is_final and final_board.is_stalemate():
-                    cp = 0.0
-                else:
-                    info = await evaluate_position(engine, fen, limit_type, limit_value)
-                    cp = eval_to_cp(info)
-                cp_evals[i] = cp
-                await job.emit({"type": "progress", "ply": i, "total": total, "fen": fen})
-        finally:
-            engine.terminate()
-            await engine.wait_closed()
-
-        moves = classify_moves(cp_evals)
-        for m, san in zip(moves, sans):
-            m["san"] = san
+        moves = await stockfish_pass(job, pgn_text, engine_settings)
         await job.emit({"type": "done", "moves": moves})
     except Exception as e:
         await job.emit({"type": "error", "message": str(e)})

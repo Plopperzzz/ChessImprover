@@ -26,6 +26,9 @@ class EngineSettings(BaseModel):
     maia_elo_min: int = 1100
     maia_elo_max: int = 1900
     maia_elo_step: int = 100
+    great_max_drop: float = Field(default=0.02, ge=0.0, le=0.5)
+    great_max_match_rate: float = Field(default=0.20, ge=0.0, le=1.0)
+    brilliant_enabled: bool = True
     maia_options: dict[str, str] = {}
     stockfish_options: dict[str, str] = {}
 
@@ -95,6 +98,7 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
                 sf_limit_type=?, sf_limit_value=?, sf_skill_level=?,
                 maia_path=?, maia_model_size=?, maia_elo_min=?, maia_elo_max=?, maia_elo_step=?,
                 maia_options_json=?, stockfish_options_json=?,
+                great_max_drop=?, great_max_match_rate=?, brilliant_enabled=?,
                 updated_at=datetime('now')
                WHERE user_id=?""",
             (
@@ -102,6 +106,7 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
                 body.sf_limit_type, body.sf_limit_value, body.sf_skill_level,
                 body.maia_path, body.maia_model_size, body.maia_elo_min, body.maia_elo_max, body.maia_elo_step,
                 json.dumps(body.maia_options or {}), json.dumps(body.stockfish_options or {}),
+                body.great_max_drop, body.great_max_match_rate, int(body.brilliant_enabled),
                 user["id"],
             ),
         )

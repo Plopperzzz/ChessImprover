@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS engine_settings (
     maia_elo_min INTEGER NOT NULL DEFAULT 1100,
     maia_elo_max INTEGER NOT NULL DEFAULT 1900,
     maia_elo_step INTEGER NOT NULL DEFAULT 100,
+    -- Great/Brilliant criteria (spec section 8 asked for these to be pinned
+    -- down rather than improvised, and they're taste, so they're settings).
+    great_max_drop REAL NOT NULL DEFAULT 0.02,
+    great_max_match_rate REAL NOT NULL DEFAULT 0.20,
+    brilliant_enabled INTEGER NOT NULL DEFAULT 1,
     -- Free-form per-engine UCI option overrides ({name: value}), driven by
     -- whatever the engine advertises rather than a fixed set of columns.
     maia_options_json TEXT NOT NULL DEFAULT '{}',
@@ -101,6 +106,9 @@ def init_db():
         conn.executescript(SCHEMA)
         _ensure_column(conn, "users", "asset_set", "TEXT NOT NULL DEFAULT 'default'")
         _ensure_column(conn, "engine_settings", "maia_options_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "engine_settings", "great_max_drop", "REAL NOT NULL DEFAULT 0.02")
+        _ensure_column(conn, "engine_settings", "great_max_match_rate", "REAL NOT NULL DEFAULT 0.20")
+        _ensure_column(conn, "engine_settings", "brilliant_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "engine_settings", "stockfish_options_json", "TEXT NOT NULL DEFAULT '{}'")
         conn.commit()
     finally:

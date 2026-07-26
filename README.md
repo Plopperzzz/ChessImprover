@@ -6,16 +6,46 @@ follows.
 
 ## Status
 
-This covers build-order steps 1-6 from the spec: multi-user schema and auth,
+This covers build-order steps 1-7 from the spec: multi-user schema and auth,
 PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
 backed by a persistent per-session engine process, variation support (a real
 move tree -- branch off the mainline by playing a different move, delete a
 variation, the mainline itself is never lost), Quick-mode analysis (a
 Stockfish-only pass classifying every mainline move as Good/Inaccuracy/
 Mistake/Blunder, with the board animating through positions as they're
-evaluated), Play vs Maia3 with a configurable time control, and the Maia Elo
-sweep. Great/Brilliant classification, saved analysis runs, batch mode, and
-the trend view are not yet built.
+evaluated), Play vs Maia3 with a configurable time control, the Maia Elo
+sweep, and Great/Brilliant classification with the blunder-Elo correlation.
+Saved analysis runs, batch mode, and the trend view are not yet built.
+
+### Analysis modes
+
+**Quick** is the Stockfish-only pass. **Full** adds the Maia sweep, and with
+it two things that need Maia:
+
+- **Great / Brilliant.** A move qualifies when it gave up essentially nothing
+  against the engine's own best play *and* players around your estimated
+  strength mostly wouldn't have found it. Brilliant is Great plus a material
+  sacrifice, detected with a static exchange evaluation (both a capture into
+  a losing exchange and a quiet move that leaves something hanging count).
+- **Blunder to Elo correlation.** For each mistake or blunder, the weakest
+  swept Elo whose Maia choice was the move you actually played -- "a player
+  even this weak would have been expected to avoid it". If no swept Elo plays
+  it, that's reported as no correlation rather than as a number.
+
+The spec asked for the two Great/Brilliant criteria to be pinned down rather
+than improvised. They're settings, defaulting to:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| Max win-prob given up vs best | `0.02` | near-lossless; allows for the engine having several equal best moves |
+| Max share of players who'd find it | `0.20` | roughly a 1-in-5 move |
+| Brilliant | on | Great + a material sacrifice |
+
+Note the "share who'd find it" is read off the cached sweep matrix as Maia's
+match rate in a band around your estimated Elo, not from a single grid point,
+so one noisy value can't award a Great on its own. If your Maia build turns
+out to expose per-candidate policy probabilities, that would be a more direct
+measure and worth switching to.
 
 ### Elo sweep
 
@@ -159,9 +189,11 @@ own, with a live preview before saving).
 ## Open questions still to confirm
 
 Carried over from the spec (section 18):
-- Great/Brilliant Maia-match-rate threshold and Good/Best-move closeness
-  criterion (gates step 7).
 - Whether saved games preserve variations or only the mainline (gates step 8).
+
+Answered by defaulting, not by asking -- change them in Settings if the feel
+is wrong:
+- Great/Brilliant closeness and match-rate thresholds (see the table above).
 
 Answered, and now built:
 - Play-vs-Maia clock: yes, configurable base + increment.

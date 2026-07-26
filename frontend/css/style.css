@@ -270,6 +270,14 @@ input[type="text"], input[type="number"], textarea, select {
 #analysis-summary span.cnt-mistake { color: #e08040; }
 #analysis-summary span.cnt-blunder { color: #e05050; }
 
+#move-table td.cls-great { color: #5fc9e8; font-weight: bold; }
+#move-table td.cls-brilliant { color: #21c2a4; font-weight: bold; }
+#analysis-summary span.cnt-great { color: #5fc9e8; }
+#analysis-summary span.cnt-brilliant { color: #21c2a4; }
+.blunder-elo { font-size: 11px; color: var(--muted); margin-top: 8px; }
+.blunder-elo b { color: var(--text); font-weight: 600; }
+.blunder-elo div { margin: 2px 0; }
+
 #move-table td.cls-inaccuracy { color: #e0c040; }
 #move-table td.cls-mistake { color: #e08040; }
 #move-table td.cls-blunder { color: #e05050; font-weight: bold; }
