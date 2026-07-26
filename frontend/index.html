@@ -116,8 +116,8 @@
         <div class="play-grid">
           <label>Mode
             <select id="batch-mode">
-              <option value="quick">Quick</option>
-              <option value="full">Full</option>
+              <option value="quick">Quick — Stockfish only</option>
+              <option value="full">Full — + Maia Elo sweep</option>
             </select>
           </label>
           <label>Games
@@ -133,11 +133,20 @@
         </div>
         <div id="batch-progress"><div id="batch-progress-fill"></div></div>
         <div id="batch-status"></div>
+        <p class="panel-note">
+          Full runs the same Maia Elo sweep as the single-game panel below, on
+          every game in the batch — that's what fills in the trend. It uses a
+          coarser Elo step in batch (Settings) so a long run stays affordable.
+        </p>
         <div id="batch-failures"></div>
       </div>
 
       <div class="panel">
         <h3>Elo estimate (Maia sweep)</h3>
+        <p class="panel-note">
+          Sweeps the selected game only. For many games at once use Batch
+          analysis in Full mode — it runs this same sweep per game.
+        </p>
         <div class="play-buttons">
           <button id="sweep-btn" disabled>Run Elo sweep</button>
           <button id="sweep-cancel" class="hidden">Cancel</button>
@@ -145,6 +154,28 @@
         <div id="sweep-progress"><div id="sweep-progress-fill"></div></div>
         <div id="sweep-status"></div>
         <div id="sweep-results"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Trend over time</h3>
+        <div class="play-grid">
+          <label>Bucket by
+            <select id="trend-granularity">
+              <option value="week">ISO week</option>
+              <option value="month" selected>Month</option>
+              <option value="year">Year</option>
+            </select>
+          </label>
+          <label>From
+            <select id="trend-run"><option value="">All runs</option></select>
+          </label>
+        </div>
+        <!-- Re-bucketing re-fits the cached per-position scores; no engine
+             runs, so switching granularity is instant. -->
+        <div id="trend-status"></div>
+        <div id="trend-chart"></div>
+        <div id="trend-verdict"></div>
+        <div id="trend-table"></div>
       </div>
 
       <div class="panel">

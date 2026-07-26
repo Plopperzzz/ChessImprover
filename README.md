@@ -6,7 +6,7 @@ follows.
 
 ## Status
 
-This covers build-order steps 1-10 from the spec: multi-user schema and auth,
+This covers build-order steps 1-11 from the spec: multi-user schema and auth,
 PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
 backed by a persistent per-session engine process, variation support (a real
 move tree -- branch off the mainline by playing a different move, delete a
@@ -15,8 +15,9 @@ Stockfish-only pass classifying every mainline move as Good/Inaccuracy/
 Mistake/Blunder, with the board animating through positions as they're
 evaluated), Play vs Maia3 with a configurable time control, the Maia Elo
 sweep, Great/Brilliant classification with the blunder-Elo correlation,
-saved analysis runs, batch mode, and the bounded worker pool that lets both
-of you analyse at once. The trend view is not yet built.
+saved analysis runs, batch mode, the bounded worker pool that lets both of
+you analyse at once, and the trend-over-time view. What's left is the visual
+polish pass.
 
 ### Sharing the machine (worker pool)
 
@@ -55,12 +56,51 @@ up by their own idle timeout. Charging them a worker slot would leave the pool
 permanently short. `/api/engines/status` covers those and any job-owned
 engines; `/api/jobs/pool` covers the queue.
 
+### Trend over time
+
+Estimated Elo per date bucket, plotted against the rating in your PGN
+headers, bucketed by ISO week, month or year and optionally scoped to one
+run. Switching granularity **re-fits the cached per-position sweep scores and
+never touches an engine** -- that is the whole reason section 13 stores the
+score matrices rather than just the final numbers.
+
+Two things about it are deliberate:
+
+- **A bucket is one fit over every position played in it**, not the average
+  of the per-game estimates. A month with four games gets an honestly wide
+  interval instead of the falsely tidy mean of four noisy numbers.
+- **The trend is checked against those intervals.** "Improving by X Elo a
+  year" is meaningless if X is smaller than the noise in each bucket, so the
+  slope is a weighted fit whose weights come from the buckets' own 95%
+  intervals, and it's reported with its own interval and a plain statement of
+  whether it survives. If the buckets disagree with each other by more than
+  their intervals allow, the slope's interval is widened to match rather than
+  reporting false precision. A flat player gets "not distinguishable from the
+  noise", not a trend line.
+
+Sparse buckets are shown rather than dropped, flagged as sparse and drawn
+with a smaller marker. Games that can't contribute are counted and named --
+no Full analysis, no usable date, your name not matching White or Black --
+so a short trend never looks like games silently vanished. If a bucket mixes
+Elo grids (a single-game sweep at step 100 and a batch at step 200), it pools
+on the Elos they share rather than interpolating: every score used is one the
+engine actually produced.
+
+The Maia estimate and your header rating are different scales, so a constant
+offset between the two lines is expected. The shape is the signal, not the gap.
+
 ### Batch mode
 
 Runs Quick or Full across many games, either everything or only games not yet
 analysed in that mode -- so a cancelled run resumes where it stopped instead
 of redoing work. The button says how many games it would cover before you
 commit to a long run.
+
+**Full mode in batch runs the Maia Elo sweep on every game**, exactly as the
+single-game Elo estimate panel does -- same sweep, same per-position scores
+stored, just applied across the whole selection. That is what populates the
+trend view; the standalone Elo sweep panel is the one-game version of it. The
+only difference is the Elo step, below.
 
 Three choices come from the 1000-game target in the spec:
 
@@ -98,8 +138,8 @@ engines. Re-analysing a game in the same mode replaces its previous result
 rather than accumulating duplicates; a full analysis takes precedence over a
 quick one when both exist, since it is a superset.
 
-Per-*position* sweep scores are stored, not just the final labels, so the
-trend view will be able to re-bucket without re-running any engine. They are
+Per-*position* sweep scores are stored, not just the final labels, which is
+what lets the trend view re-bucket without re-running any engine. They are
 kept as one character per grid point, which keeps a 1000-game batch to a
 sane row count.
 
@@ -288,3 +328,8 @@ is wrong:
 Answered, and now built:
 - Play-vs-Maia clock: yes, configurable base + increment.
 - Maia move timing: yes, a brief randomised delay rather than instant replies.
+
+The trend view needs `WhiteElo`/`BlackElo` and a date in the PGN headers, and
+needs your display name to match the White or Black header. Chess.com and
+lichess exports carry all three; a hand-written PGN may not, and the panel
+says how many games it had to leave out and why.

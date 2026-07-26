@@ -262,6 +262,41 @@ input[type="text"], input[type="number"], textarea, select {
 .sweep-reasons li { margin: 2px 0; }
 .sweep-chart { width: 100%; height: 110px; margin-top: 8px; display: block; }
 
+.panel-note { font-size: 11px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
+
+/* Trend over time (section 15) */
+#trend-status { font-size: 13px; color: var(--muted); }
+.trend-chart { width: 100%; height: 170px; margin-top: 8px; display: block; }
+.trend-axis { font-size: 8px; fill: var(--muted); }
+.trend-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+  font-size: 11px; color: var(--muted); margin-top: 4px;
+}
+.trend-legend span { display: flex; align-items: center; gap: 5px; }
+.trend-legend i { width: 14px; height: 0; border-top-width: 2px; border-top-style: solid; }
+.trend-legend .swatch-est { border-top-color: var(--accent); box-shadow: 0 3px 0 -1px #5b8dee55; }
+.trend-legend .swatch-actual { border-top-color: #7db37d; border-top-style: dashed; }
+.trend-verdict {
+  font-size: 12px;
+  margin: 8px 0 0;
+  padding: 8px;
+  border-left: 3px solid var(--border);
+  background: #171b24;
+  border-radius: 0 4px 4px 0;
+}
+/* A trend that survives its own error bars is the only one worth colouring. */
+.trend-verdict.trend-significant { border-left-color: #7db37d; }
+.trend-note { font-size: 11px; color: var(--muted); margin: 8px 0 0; }
+.trend-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+.trend-table th {
+  text-align: left; font-weight: normal; color: var(--muted);
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  border-bottom: 1px solid var(--border); padding: 4px 6px 4px 0;
+}
+.trend-table td { padding: 3px 6px 3px 0; border-bottom: 1px solid #23283400; }
+.trend-table tr.trend-sparse td { color: var(--muted); font-style: italic; }
+.trend-flags { font-size: 10px; color: #e0a13a; }
+
 #analysis-progress {
   width: 100%;
   height: 8px;

@@ -111,6 +111,7 @@ async function initApp() {
   wireAnalysis();
   wireSweep();
   wireBatch();
+  wireTrend();
   wirePlay();
   connectLiveEval();
 
@@ -467,6 +468,19 @@ async function refreshRunPicker() {
     sel.appendChild(opt);
   }
   if (previous && runs.some((r) => String(r.id) === previous)) sel.value = previous;
+
+  // The trend panel can be scoped to one run; "All runs" is the default
+  // because a trend built from a single batch is usually what you don't want.
+  const trendSel = document.getElementById('trend-run');
+  const trendPrevious = trendSel.value;
+  trendSel.innerHTML = '<option value="">All runs</option>';
+  for (const run of runs) {
+    const opt = document.createElement('option');
+    opt.value = run.id;
+    opt.textContent = run.name;
+    trendSel.appendChild(opt);
+  }
+  if (trendPrevious && runs.some((r) => String(r.id) === trendPrevious)) trendSel.value = trendPrevious;
 }
 
 function wireAnalysis() {
@@ -600,6 +614,7 @@ async function handleAnalysisMessage(msg) {
     finishAnalysis();
     await refreshRunPicker();
     await refreshGameList();
+    if (msg.mode === 'full') refreshTrend();  // a new sweep is a new trend point
     syncBoardFull();
   } else if (msg.type === 'error') {
     document.getElementById('analysis-status').textContent =
@@ -799,6 +814,7 @@ async function handleBatchMessage(msg) {
     finishBatch();
     await refreshGameList();
     await refreshRunPicker();
+    refreshTrend();
   } else if (msg.type === 'error') {
     status.textContent = 'Error: ' + msg.message;
     finishBatch();
@@ -976,6 +992,208 @@ function sweepChart(res) {
     line.setAttribute('y1', padY); line.setAttribute('y2', H - padY);
     line.setAttribute('stroke', '#5b8dee'); line.setAttribute('stroke-dasharray', '3,3');
     svg.appendChild(line);
+  }
+  return svg;
+}
+
+/* ---------------- Trend over time (spec section 15) ----------------
+   Estimated Elo per date bucket against the Elo in the PGN headers. Changing
+   granularity is a pure re-fit of the cached per-position sweep scores on the
+   server, so it never re-runs an engine -- which is why the control just
+   refetches rather than starting a job. */
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+function svgEl(name, attrs) {
+  const el = document.createElementNS(SVGNS, name);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  return el;
+}
+
+function wireTrend() {
+  document.getElementById('trend-granularity').addEventListener('change', refreshTrend);
+  document.getElementById('trend-run').addEventListener('change', refreshTrend);
+  refreshTrend();
+}
+
+async function refreshTrend() {
+  const granularity = document.getElementById('trend-granularity').value;
+  const runId = document.getElementById('trend-run').value;
+  const status = document.getElementById('trend-status');
+  status.textContent = 'Loading...';
+  try {
+    const data = await api(`/api/trend?granularity=${granularity}` + (runId ? `&run_id=${runId}` : ''));
+    renderTrend(data);
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+function renderTrend(data) {
+  const status = document.getElementById('trend-status');
+  const chart = document.getElementById('trend-chart');
+  const verdict = document.getElementById('trend-verdict');
+  const table = document.getElementById('trend-table');
+  chart.innerHTML = ''; verdict.innerHTML = ''; table.innerHTML = '';
+
+  const plotted = data.buckets.filter((b) => b.estimate != null || b.actual_elo != null);
+  if (!plotted.length) {
+    status.textContent =
+      'Nothing to plot yet — this needs games with a Full analysis (the Maia Elo sweep), '
+      + 'a date in the PGN headers, and your name matching White or Black.';
+    renderTrendSkipped(verdict, data);
+    return;
+  }
+  status.textContent =
+    `${data.total_games} analysed game(s) across ${data.buckets.length} ${data.granularity} bucket(s).`;
+
+  chart.appendChild(trendChart(plotted));
+  const legend = document.createElement('div');
+  legend.className = 'trend-legend';
+  legend.innerHTML =
+    '<span><i class="swatch-est"></i>Estimated Elo (Maia sweep), shaded 95% interval</span>'
+    + '<span><i class="swatch-actual"></i>Rating from your PGN headers</span>';
+  chart.appendChild(legend);
+
+  for (const key of ['trend', 'actual_trend']) {
+    const t = data[key];
+    if (!t) continue;
+    const p = document.createElement('p');
+    p.className = 'trend-verdict' + (t.significant ? ' trend-significant' : '');
+    const who = key === 'trend' ? 'Estimated Elo' : 'Rating in your PGN headers';
+    p.innerHTML = `<b>${who}:</b> ${t.verdict}`;
+    verdict.appendChild(p);
+  }
+  if (data.offset && data.offset.mean != null) {
+    const p = document.createElement('p');
+    p.className = 'trend-note';
+    const sign = data.offset.mean >= 0 ? 'above' : 'below';
+    p.textContent = `The Maia estimate averages ${Math.abs(data.offset.mean)} Elo ${sign} your `
+      + `header rating across ${data.offset.n} bucket(s). A constant offset is expected — the two `
+      + `are different scales — so watch the shape, not the gap.`;
+    verdict.appendChild(p);
+  }
+
+  const t = document.createElement('table');
+  t.className = 'trend-table';
+  t.innerHTML = '<thead><tr><th>Bucket</th><th>Games</th><th>Estimated</th>'
+    + '<th>95% interval</th><th>Actual</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  for (const b of data.buckets) {
+    const tr = document.createElement('tr');
+    if (b.sparse) tr.className = 'trend-sparse';
+    const ci = b.ci_low != null ? `${b.ci_low}–${b.ci_high}` : '—';
+    const flags = [];
+    // Sparse buckets are shown rather than dropped (section 15), but they say
+    // so -- a point drawn from four positions shouldn't read like the others.
+    if (b.sparse) flags.push('sparse');
+    if (b.games_excluded_grid_mismatch) flags.push(`${b.games_excluded_grid_mismatch} on a different Elo grid`);
+    tr.innerHTML = `<td>${b.label}</td><td>${b.games}</td><td>${b.estimate ?? '—'}</td>`
+      + `<td>${ci}</td><td>${b.actual_elo ?? '—'}</td><td class="trend-flags">${flags.join(', ')}</td>`;
+    tr.title = (b.reasons || []).join('; ');
+    tbody.appendChild(tr);
+  }
+  t.appendChild(tbody);
+  table.appendChild(t);
+  renderTrendSkipped(table, data);
+}
+
+function renderTrendSkipped(host, data) {
+  const labels = {
+    no_full_analysis: 'no Full analysis (Quick alone has no Elo sweep)',
+    undated: 'no usable date in the PGN headers',
+    unassigned_color: "your display name didn't match White or Black",
+    no_sweep_positions: 'no stored sweep positions',
+    no_header_elo: 'no WhiteElo/BlackElo header (still used for the estimate)',
+  };
+  const parts = Object.entries(data.skipped || {})
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} × ${labels[k] || k}`);
+  if (!parts.length) return;
+  const p = document.createElement('p');
+  p.className = 'trend-note';
+  p.textContent = 'Left out: ' + parts.join('; ') + '.';
+  host.appendChild(p);
+}
+
+/** Estimated Elo with its 95% band, and the header rating over it. The band
+    is the point of the chart: two bucket estimates whose bands overlap have
+    not been shown to differ, however far apart the dots look. */
+function trendChart(buckets) {
+  const W = 320, H = 170, padL = 34, padR = 8, padT = 10, padB = 26;
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'trend-chart' });
+
+  const ys = [];
+  for (const b of buckets) {
+    if (b.ci_low != null) ys.push(b.ci_low, b.ci_high);
+    if (b.estimate != null) ys.push(b.estimate);
+    if (b.actual_elo != null) ys.push(b.actual_elo);
+  }
+  let yMin = Math.min(...ys), yMax = Math.max(...ys);
+  if (yMax - yMin < 100) { const mid = (yMax + yMin) / 2; yMin = mid - 50; yMax = mid + 50; }
+  const pad = (yMax - yMin) * 0.08;
+  yMin -= pad; yMax += pad;
+
+  const xs = buckets.map((b) => b.x);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const sx = (x) => padL + ((x - xMin) / (xMax - xMin || 1)) * (W - padL - padR);
+  const sy = (y) => H - padB - ((y - yMin) / (yMax - yMin || 1)) * (H - padT - padB);
+
+  for (const frac of [0, 0.5, 1]) {
+    const value = yMin + frac * (yMax - yMin);
+    svg.appendChild(svgEl('line', {
+      x1: padL, x2: W - padR, y1: sy(value), y2: sy(value),
+      stroke: '#39405166', 'stroke-width': 1,
+    }));
+    const label = svgEl('text', { x: padL - 4, y: sy(value) + 3, class: 'trend-axis', 'text-anchor': 'end' });
+    label.textContent = Math.round(value);
+    svg.appendChild(label);
+  }
+
+  const band = buckets.filter((b) => b.ci_low != null);
+  if (band.length > 1) {
+    const top = band.map((b) => `${sx(b.x).toFixed(1)},${sy(b.ci_high).toFixed(1)}`);
+    const bottom = band.slice().reverse().map((b) => `${sx(b.x).toFixed(1)},${sy(b.ci_low).toFixed(1)}`);
+    svg.appendChild(svgEl('polygon', {
+      points: top.concat(bottom).join(' '), fill: '#5b8dee33', stroke: 'none',
+    }));
+  } else if (band.length === 1) {
+    const b = band[0];
+    svg.appendChild(svgEl('line', {
+      x1: sx(b.x), x2: sx(b.x), y1: sy(b.ci_high), y2: sy(b.ci_low),
+      stroke: '#5b8dee88', 'stroke-width': 4,
+    }));
+  }
+
+  const line = (points, colour, dash) => {
+    if (points.length < 2) return;
+    svg.appendChild(svgEl('path', {
+      d: points.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' '),
+      fill: 'none', stroke: colour, 'stroke-width': 2,
+      ...(dash ? { 'stroke-dasharray': dash } : {}),
+    }));
+  };
+  line(buckets.filter((b) => b.estimate != null).map((b) => [b.x, b.estimate]), '#5b8dee');
+  line(buckets.filter((b) => b.actual_elo != null).map((b) => [b.x, b.actual_elo]), '#7db37d', '4,3');
+
+  for (const b of buckets) {
+    if (b.estimate != null) {
+      svg.appendChild(svgEl('circle', {
+        cx: sx(b.x), cy: sy(b.estimate), r: b.sparse ? 2 : 3.2,
+        fill: b.sparse ? '#1b1f2a' : '#5b8dee', stroke: '#5b8dee', 'stroke-width': 1.5,
+      }));
+    }
+    if (b.actual_elo != null) {
+      svg.appendChild(svgEl('circle', { cx: sx(b.x), cy: sy(b.actual_elo), r: 2.2, fill: '#7db37d' }));
+    }
+  }
+
+  // Only the ends get a label: a week-bucketed year would otherwise be a
+  // solid smear of text.
+  for (const [b, anchor] of [[buckets[0], 'start'], [buckets[buckets.length - 1], 'end']]) {
+    const t = svgEl('text', { x: sx(b.x), y: H - 8, class: 'trend-axis', 'text-anchor': anchor });
+    t.textContent = b.label;
+    svg.appendChild(t);
   }
   return svg;
 }
