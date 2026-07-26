@@ -133,6 +133,8 @@ def engine_options_from_settings(engine_settings: dict) -> dict:
     }
     if engine_settings.get("sf_skill_level") is not None:
         options["Skill Level"] = engine_settings["sf_skill_level"]
+    # Anything the user tuned from the engine's own advertised option list.
+    options.update(engine_settings.get("stockfish_options") or {})
     return options
 
 

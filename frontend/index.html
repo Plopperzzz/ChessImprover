@@ -131,7 +131,10 @@
       <fieldset>
         <legend>Stockfish</legend>
         <label>Engine
-          <select id="s-sf-path"></select>
+          <select id="s-sf-family"></select>
+        </label>
+        <label id="s-sf-build-row">Build
+          <select id="s-sf-build"></select>
         </label>
         <label>Threads <input type="number" id="s-sf-threads" min="1" max="64" /></label>
         <label>Hash (MB) <input type="number" id="s-sf-hash" min="1" max="16384" /></label>
@@ -150,7 +153,7 @@
       <fieldset>
         <legend>Maia3</legend>
         <label>Engine
-          <select id="s-maia-path"></select>
+          <select id="s-maia-family"></select>
         </label>
         <label>Model size
           <select id="s-maia-size"></select>
@@ -161,6 +164,9 @@
         <label>Elo min <input type="number" id="s-maia-elo-min" /></label>
         <label>Elo max <input type="number" id="s-maia-elo-max" /></label>
         <label>Elo step <input type="number" id="s-maia-elo-step" /></label>
+        <!-- Rendered from the options this engine actually advertises
+             (temperature and anything else it exposes). -->
+        <div id="s-maia-options"></div>
       </fieldset>
 
       <div id="engines-hint"></div>

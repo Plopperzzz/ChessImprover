@@ -12,6 +12,7 @@ const state = {
   seq: 0,
   lastMoverColor: 'w',
   settings: null,
+  engineFamilies: [],
   classifications: {}, // ply -> classification dict, from the last completed analysis job
   analysisJobId: null,
   analysisWs: null,
@@ -815,17 +816,19 @@ function wireSettingsDialog() {
     ev.preventDefault();
     const skillRaw = document.getElementById('s-sf-skill').value;
     const body = {
-      stockfish_path: document.getElementById('s-sf-path').value || null,
+      stockfish_path: selectedStockfishPath(),
       stockfish_threads: Number(document.getElementById('s-sf-threads').value),
       stockfish_hash_mb: Number(document.getElementById('s-sf-hash').value),
       sf_limit_type: document.getElementById('s-sf-limit-type').value,
       sf_limit_value: Number(document.getElementById('s-sf-limit-value').value),
       sf_skill_level: skillRaw === '' ? null : Number(skillRaw),
-      maia_path: document.getElementById('s-maia-path').value || null,
+      maia_path: selectedMaiaPath(),
       maia_model_size: document.getElementById('s-maia-size').value,
       maia_elo_min: Number(document.getElementById('s-maia-elo-min').value),
       maia_elo_max: Number(document.getElementById('s-maia-elo-max').value),
       maia_elo_step: Number(document.getElementById('s-maia-elo-step').value),
+      maia_options: collectEngineOptions('s-maia-options'),
+      stockfish_options: state.settings.stockfish_options || {},
     };
     state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
 
@@ -846,9 +849,14 @@ function wireSettingsDialog() {
   });
 
   // Re-scan when the Maia engine or size changes, so the dialog always shows
-  // the binary that will actually be launched.
-  document.getElementById('s-maia-path').addEventListener('change', () => refreshMaiaModels());
+  // the binary that will actually be launched, and re-reads that binary's
+  // advertised options (a different model can expose different knobs).
+  document.getElementById('s-maia-family').addEventListener('change', async () => {
+    await refreshMaiaModels();
+    await renderEngineOptions('s-maia-options', selectedMaiaPath(), state.settings.maia_options);
+  });
   document.getElementById('s-maia-size').addEventListener('change', () => refreshMaiaModels());
+  document.getElementById('s-sf-family').addEventListener('change', () => populateBuildPicker(null));
 }
 
 /** Fills both engine dropdowns from the binaries discovered under the
@@ -864,35 +872,166 @@ async function populateEngineDropdowns(selectedStockfish, selectedMaia) {
     hint.textContent = 'Could not list engines: ' + e.message;
     return;
   }
+  state.engineFamilies = info.families;
 
-  for (const [id, selected] of [['s-sf-path', selectedStockfish], ['s-maia-path', selectedMaia]]) {
-    const sel = document.getElementById(id);
+  // The dropdown shows products ("Stockfish-18", "Maia3"), not the dozen
+  // near-identical executables a release ships. Stockfish variants differ
+  // only by instruction set (handled by the Build picker below); Maia's
+  // variant is the model size, which has its own dropdown already.
+  for (const [selId, kind, selected] of [['s-sf-family', 'stockfish', selectedStockfish],
+                                         ['s-maia-family', 'maia', selectedMaia]]) {
+    const sel = document.getElementById(selId);
     sel.innerHTML = '';
     const none = document.createElement('option');
     none.value = '';
     none.textContent = '(none selected)';
     sel.appendChild(none);
-    for (const eng of info.engines) {
+    // Offer same-kind families first, but never hide the others: a build
+    // named something unexpected should still be selectable.
+    const families = [...info.families].sort(
+      (a, b) => (b.kind === kind) - (a.kind === kind) || a.label.localeCompare(b.label));
+    for (const fam of families) {
       const opt = document.createElement('option');
-      opt.value = eng.value;
-      opt.textContent = eng.folder ? `${eng.folder}/${eng.name}` : eng.name;
+      opt.value = fam.id;
+      opt.textContent = fam.label;
       sel.appendChild(opt);
     }
-    // A previously-saved selection that no longer exists falls back to
-    // "(none selected)" rather than silently pointing at nothing.
-    sel.value = selected && info.engines.some((e) => e.value === selected) ? selected : '';
+    const owning = info.families.find((f) => f.members.some((m) => m.value === selected));
+    sel.value = owning ? owning.id : '';
   }
+
+  populateBuildPicker(selectedStockfish);
 
   if (!info.engines_dir_exists) {
     hint.textContent = 'No assets/Engines directory yet — create it and put your engine folders inside.';
     hint.classList.add('warn');
-  } else if (info.engines.length === 0) {
+  } else if (info.families.length === 0) {
     hint.textContent = 'No engines found under assets/Engines.';
     hint.classList.add('warn');
   } else {
-    hint.textContent = `${info.engines.length} engine(s) found under assets/Engines.`;
+    hint.textContent = info.families.map((f) => f.label).join(', ') + ' found under assets/Engines.';
     hint.classList.remove('warn');
   }
+}
+
+/** Stockfish releases ship one binary per instruction set. The default picks
+    a widely-supported one; this exposes the rest for anyone who knows their
+    CPU supports something faster (or needs something older). */
+function populateBuildPicker(selectedStockfish) {
+  const famId = document.getElementById('s-sf-family').value;
+  const fam = (state.engineFamilies || []).find((f) => f.id === famId);
+  const row = document.getElementById('s-sf-build-row');
+  const sel = document.getElementById('s-sf-build');
+  sel.innerHTML = '';
+  if (!fam || fam.members.length <= 1) {
+    row.classList.add('hidden');
+    return;
+  }
+  row.classList.remove('hidden');
+  const auto = document.createElement('option');
+  auto.value = fam.default_member;
+  auto.textContent = `Automatic (${fam.members[0].name})`;
+  sel.appendChild(auto);
+  for (const m of fam.members) {
+    const opt = document.createElement('option');
+    opt.value = m.value;
+    opt.textContent = m.name;
+    sel.appendChild(opt);
+  }
+  sel.value = fam.members.some((m) => m.value === selectedStockfish) ? selectedStockfish : fam.default_member;
+}
+
+/** The concrete binary to save for each engine: the build picker for
+    Stockfish, and for Maia any family member (the model-size dropdown picks
+    the real one at launch). */
+function selectedStockfishPath() {
+  const famId = document.getElementById('s-sf-family').value;
+  const fam = (state.engineFamilies || []).find((f) => f.id === famId);
+  if (!fam) return null;
+  const build = document.getElementById('s-sf-build').value;
+  return fam.members.some((m) => m.value === build) ? build : fam.default_member;
+}
+
+function selectedMaiaPath() {
+  const famId = document.getElementById('s-maia-family').value;
+  const fam = (state.engineFamilies || []).find((f) => f.id === famId);
+  return fam ? fam.default_member : null;
+}
+
+/** Renders a control per option the engine actually advertises, so Maia's
+    temperature (and anything else that build exposes) shows up because the
+    engine said so -- not because it was hardcoded here. */
+async function renderEngineOptions(containerId, enginePath, saved) {
+  const box = document.getElementById(containerId);
+  box.innerHTML = '';
+  if (!enginePath) return;
+  let info;
+  try {
+    info = await api('/api/settings/engine-options?engine=' + encodeURIComponent(enginePath));
+  } catch (e) {
+    box.textContent = 'Could not read engine options: ' + e.message;
+    box.className = 'engine-options warn';
+    return;
+  }
+  box.className = 'engine-options';
+  if (info.error) {
+    box.textContent = `Could not start ${info.binary} to read its options (${info.error}).`;
+    box.classList.add('warn');
+    return;
+  }
+  if (!info.options.length) {
+    box.textContent = `${info.binary} advertises no tunable options.`;
+    return;
+  }
+  const title = document.createElement('div');
+  title.className = 'engine-options-title';
+  title.textContent = `${info.binary} options`;
+  box.appendChild(title);
+
+  for (const opt of info.options) {
+    const label = document.createElement('label');
+    const current = saved && saved[opt.name] !== undefined ? saved[opt.name] : opt.default;
+    let field;
+    if (opt.type === 'check') {
+      field = document.createElement('select');
+      for (const v of ['true', 'false']) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        field.appendChild(o);
+      }
+      field.value = String(current) === 'true' ? 'true' : 'false';
+    } else if (opt.type === 'combo') {
+      field = document.createElement('select');
+      for (const v of opt.vars) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        field.appendChild(o);
+      }
+      field.value = current ?? (opt.vars[0] || '');
+    } else {
+      field = document.createElement('input');
+      field.type = opt.type === 'spin' ? 'number' : 'text';
+      if (opt.min !== null && opt.min !== undefined) field.min = opt.min;
+      if (opt.max !== null && opt.max !== undefined) field.max = opt.max;
+      field.value = current ?? '';
+    }
+    field.dataset.optionName = opt.name;
+    const range = opt.type === 'spin' && opt.min != null ? ` (${opt.min}–${opt.max})` : '';
+    label.append(`${opt.name}${range} `, field);
+    box.appendChild(label);
+  }
+}
+
+/** {name: value} for every option control the user actually changed from the
+    engine's own default -- storing the whole set would freeze defaults that
+    a future engine version might improve. */
+function collectEngineOptions(containerId) {
+  const out = {};
+  for (const field of document.querySelectorAll(`#${containerId} [data-option-name]`)) {
+    const value = field.value;
+    if (value !== '' && value !== null) out[field.dataset.optionName] = String(value);
+  }
+  return out;
 }
 
 /** Populates the model-size dropdown from the maia3-<size> executables that
@@ -902,7 +1041,7 @@ async function populateEngineDropdowns(selectedStockfish, selectedMaia) {
 async function refreshMaiaModels(selected) {
   const sel = document.getElementById('s-maia-size');
   const note = document.getElementById('s-maia-resolved');
-  const typedPath = document.getElementById('s-maia-path').value;
+  const typedPath = selectedMaiaPath() || '';
   const wantSize = selected || sel.value;
   let info;
   try {
@@ -979,6 +1118,7 @@ async function fillSettingsForm() {
   document.getElementById('s-sf-limit-value').value = s.sf_limit_value;
   document.getElementById('s-sf-skill').value = s.sf_skill_level === null || s.sf_skill_level === undefined ? '' : s.sf_skill_level;
   await refreshMaiaModels(s.maia_model_size);
+  await renderEngineOptions('s-maia-options', selectedMaiaPath(), s.maia_options);
   document.getElementById('s-maia-elo-min').value = s.maia_elo_min;
   document.getElementById('s-maia-elo-max').value = s.maia_elo_max;
   document.getElementById('s-maia-elo-step').value = s.maia_elo_step;

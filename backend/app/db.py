@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS engine_settings (
     maia_elo_min INTEGER NOT NULL DEFAULT 1100,
     maia_elo_max INTEGER NOT NULL DEFAULT 1900,
     maia_elo_step INTEGER NOT NULL DEFAULT 100,
+    -- Free-form per-engine UCI option overrides ({name: value}), driven by
+    -- whatever the engine advertises rather than a fixed set of columns.
+    maia_options_json TEXT NOT NULL DEFAULT '{}',
+    stockfish_options_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -96,6 +100,8 @@ def init_db():
     try:
         conn.executescript(SCHEMA)
         _ensure_column(conn, "users", "asset_set", "TEXT NOT NULL DEFAULT 'default'")
+        _ensure_column(conn, "engine_settings", "maia_options_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "engine_settings", "stockfish_options_json", "TEXT NOT NULL DEFAULT '{}'")
         conn.commit()
     finally:
         conn.close()

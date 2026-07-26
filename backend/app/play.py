@@ -137,6 +137,18 @@ class PlaySession:
         if limit_opt:
             await engine.send_line(f"setoption name {limit_opt} value true")
 
+        # Whatever the user tuned from this engine's own advertised options
+        # (temperature and friends). Only set names the engine really has, so
+        # a stale override left over from a different build is ignored rather
+        # than sent blindly.
+        for name, value in (settings.get("maia_options") or {}).items():
+            real = pick_option(engine.advertised_options, [name])
+            if real and str(value) != "":
+                await engine.send_line(f"setoption name {real} value {value}")
+                self.setup_notes.append(f"{real} = {value}")
+            elif not real:
+                self.setup_notes.append(f"ignored '{name}': this engine has no such option")
+
         self.elo_option = pick_option(engine.advertised_options, ELO_OPTION_CANDIDATES)
         if not self.elo_option:
             self.setup_notes.append(

@@ -311,6 +311,16 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
 #engines-hint { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
 #engines-hint.warn { color: #e0a13a; }
 
+.engine-options {
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  padding-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.engine-options.warn { color: #e0a13a; }
+.engine-options-title { text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+
 #asset-preview {
   position: relative;
   width: 160px;

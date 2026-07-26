@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -6,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from .auth import require_user
 from .db import db_cursor
-from . import engines
+from . import engine_probe, engines
 from .maia import FALLBACK_SIZES, discover_sizes, resolve_binary
 from .paths import ENGINES_DIR, list_asset_sets
 
@@ -25,6 +26,18 @@ class EngineSettings(BaseModel):
     maia_elo_min: int = 1100
     maia_elo_max: int = 1900
     maia_elo_step: int = 100
+    maia_options: dict[str, str] = {}
+    stockfish_options: dict[str, str] = {}
+
+
+def _load_json_obj(raw) -> dict:
+    """Tolerate a malformed or legacy value rather than 500ing the whole
+    settings endpoint over one bad row."""
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}
 
 
 def get_effective_settings(user_id: int) -> dict:
@@ -47,6 +60,12 @@ def get_effective_settings(user_id: int) -> dict:
 
     d["stockfish_binary"] = engines.resolve(d.get("stockfish_path")) or os.environ.get("STOCKFISH_PATH")
     d["maia_binary"] = engines.resolve(d.get("maia_path")) or os.environ.get("MAIA_PATH")
+    d["maia_options"] = _load_json_obj(d.get("maia_options_json"))
+    d["stockfish_options"] = _load_json_obj(d.get("stockfish_options_json"))
+    sf_family = engines.family_for_selection(d.get("stockfish_path"))
+    maia_family = engines.family_for_selection(d.get("maia_path"))
+    d["stockfish_family"] = sf_family["id"] if sf_family else None
+    d["maia_family"] = maia_family["id"] if maia_family else None
     return d
 
 
@@ -75,12 +94,14 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
                 stockfish_path=?, stockfish_threads=?, stockfish_hash_mb=?,
                 sf_limit_type=?, sf_limit_value=?, sf_skill_level=?,
                 maia_path=?, maia_model_size=?, maia_elo_min=?, maia_elo_max=?, maia_elo_step=?,
+                maia_options_json=?, stockfish_options_json=?,
                 updated_at=datetime('now')
                WHERE user_id=?""",
             (
                 body.stockfish_path, body.stockfish_threads, body.stockfish_hash_mb,
                 body.sf_limit_type, body.sf_limit_value, body.sf_skill_level,
                 body.maia_path, body.maia_model_size, body.maia_elo_min, body.maia_elo_max, body.maia_elo_step,
+                json.dumps(body.maia_options or {}), json.dumps(body.stockfish_options or {}),
                 user["id"],
             ),
         )
@@ -89,10 +110,29 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
 
 @router.get("/engines")
 def list_engines(user: dict = Depends(require_user)):
-    """Engines available to choose from, discovered under the Engines
-    directory. These names are the only values the settings API accepts --
-    the browser never handles an absolute path."""
-    return {"engines": engines.discover(), "engines_dir_exists": os.path.isdir(ENGINES_DIR)}
+    """Engines grouped by product (Stockfish-18, Maia3, ...). The dialog shows
+    these names; the values inside are the only paths the settings API
+    accepts, so the browser never handles an absolute path."""
+    return {
+        "families": engines.discover_families(),
+        "engines_dir_exists": os.path.isdir(ENGINES_DIR),
+    }
+
+
+@router.get("/engine-options")
+async def engine_options(engine: str, user: dict = Depends(require_user)):
+    """Ask the selected engine what it supports, so settings like Maia's
+    temperature appear because the engine advertises them -- not because
+    they were guessed at here."""
+    path = engines.resolve(engine)
+    if not path:
+        raise HTTPException(400, "unknown engine")
+    result = await engine_probe.probe(path)
+    return {
+        "binary": os.path.basename(path),
+        "options": engine_probe.tunable(result["options"]),
+        "error": result["error"],
+    }
 
 
 @router.get("/maia-models")
