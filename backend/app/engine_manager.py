@@ -31,6 +31,10 @@ class EngineProcess:
         self.proc: asyncio.subprocess.Process | None = None
         self._stdout_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: asyncio.Task | None = None
+        # {option name: type}, captured from the `uci` handshake. Engine
+        # wrappers disagree about what things are called (a Maia wrapper's Elo
+        # knob especially), so callers probe this instead of assuming.
+        self.advertised_options: dict[str, str] = {}
 
     async def start(self):
         self.proc = await asyncio.create_subprocess_exec(
@@ -132,6 +136,41 @@ def engine_options_from_settings(engine_settings: dict) -> dict:
     return options
 
 
+_OPTION_RE = re.compile(r"^option name (.+?) type (\w+)")
+
+
+async def read_uci_options(engine: EngineProcess, timeout: float = 15.0) -> dict[str, str]:
+    """Consumes the engine's `option name ... type ...` advertisements up to
+    `uciok`, returning {name: type}."""
+
+    async def _loop():
+        options: dict[str, str] = {}
+        while True:
+            line = await engine.readline()
+            if line is None:
+                raise UciProcessError(f"{engine.path} exited during the uci handshake")
+            m = _OPTION_RE.match(line)
+            if m:
+                options[m.group(1)] = m.group(2)
+            if line.startswith("uciok"):
+                return options
+
+    return await asyncio.wait_for(_loop(), timeout=timeout)
+
+
+def pick_option(advertised: dict[str, str], candidates: list[str]) -> str | None:
+    """First advertised option matching one of `candidates`, case-insensitively.
+    Returns the engine's own spelling (what `setoption name` needs), or None
+    if the engine advertises none of them -- callers should surface that
+    rather than silently carrying on with the engine's defaults."""
+    lowered = {name.lower(): name for name in advertised}
+    for candidate in candidates:
+        real = lowered.get(candidate.lower())
+        if real:
+            return real
+    return None
+
+
 async def start_configured_engine(path: str, options: dict) -> EngineProcess:
     """Starts and UCI-handshakes a fresh engine process with the given
     setoption values. Used for short-lived analysis-job engines (section 3) --
@@ -139,7 +178,7 @@ async def start_configured_engine(path: str, options: dict) -> EngineProcess:
     engine = EngineProcess(path)
     await engine.start()
     await engine.send_line("uci")
-    await engine.wait_for("uciok")
+    engine.advertised_options = await read_uci_options(engine)
     for name, value in options.items():
         await engine.send_line(f"setoption name {name} value {value}")
     await engine.send_line("isready")

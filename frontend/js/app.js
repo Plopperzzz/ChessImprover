@@ -16,6 +16,8 @@ const state = {
   classifications: {}, // ply -> classification dict, from the last completed analysis job
   analysisJobId: null,
   analysisWs: null,
+  playMode: false,
+  play: null, // { ws, chess, humanColor, turn, whiteMs, blackMs, clockEnabled, result, tick }
 };
 
 async function api(path, opts = {}) {
@@ -90,10 +92,12 @@ async function initApp() {
   state.settings = await api('/api/settings');
 
   state.board = new Board(document.getElementById('board'), state.user.asset_set || 'default');
+  // The board is shared between analysis and play-vs-Maia, so its handlers
+  // dispatch on the current mode rather than being rebound on every switch.
   state.board.setInteractive(true, {
-    getLegalTargets: (sq) => state.explorer.getLegalTargets(sq),
-    getMoverColor: () => state.explorer.moverColor,
-    onMove: onBoardMove,
+    getLegalTargets: (sq) => (state.playMode ? playLegalTargets(sq) : state.explorer.getLegalTargets(sq)),
+    getMoverColor: () => (state.playMode ? state.play.chess.turn() : state.explorer.moverColor),
+    onMove: (from, to, promo) => (state.playMode ? onPlayMove(from, to, promo) : onBoardMove(from, to, promo)),
   });
 
   wireNav();
@@ -101,6 +105,7 @@ async function initApp() {
   wirePgnUpload();
   wireSettingsDialog();
   wireAnalysis();
+  wirePlay();
   connectLiveEval();
 
   await refreshGameList();
@@ -484,6 +489,253 @@ function renderAnalysisSummary(moves) {
     span.textContent = `${labels[key]}: ${counts[key]}`;
     el.appendChild(span);
   }
+}
+
+/* ---------------- Play vs Maia3 ----------------
+   Deliberately independent of the analysis pipeline (spec section 14): this
+   shares the board UI and nothing else. The server owns the game state and
+   the clock; this side keeps a chess.js copy purely to highlight legal moves
+   and animate immediately, and snaps to the server's FEN whenever they
+   disagree. */
+
+function wirePlay() {
+  document.getElementById('p-start').addEventListener('click', startPlayGame);
+  document.getElementById('p-resign').addEventListener('click', () => sendPlay({ type: 'resign' }));
+  document.getElementById('p-save').addEventListener('click', () => sendPlay({ type: 'save' }));
+  document.getElementById('p-exit').addEventListener('click', exitPlayMode);
+}
+
+function sendPlay(msg) {
+  if (state.play && state.play.ws && state.play.ws.readyState === WebSocket.OPEN) {
+    state.play.ws.send(JSON.stringify(msg));
+  }
+}
+
+function playLegalTargets(square) {
+  const p = state.play;
+  if (!p || p.result || p.chess.turn() !== p.humanColor) return [];
+  const byTo = new Map();
+  for (const m of p.chess.moves({ square, verbose: true })) {
+    if (!byTo.has(m.to)) byTo.set(m.to, { to: m.to, promotion: !!m.promotion });
+  }
+  return Array.from(byTo.values());
+}
+
+async function onPlayMove(from, to, promotion) {
+  const p = state.play;
+  const res = p.chess.move({ from, to, promotion: promotion || 'q' });
+  if (!res) return;
+  await state.board.animateMove(from, to, p.chess.fen());
+  (p.sanHistory = p.sanHistory || []).push(res.san); // optimistic; the next state message is authoritative
+  renderPlayMoveTable();
+  sendPlay({ type: 'move', uci: from + to + (promotion || (res.promotion ? 'q' : '')) });
+}
+
+async function startPlayGame() {
+  const elo = Number(document.getElementById('p-elo').value);
+  const color = document.getElementById('p-color').value;
+  const baseMinutes = Number(document.getElementById('p-base').value);
+  const incrementSeconds = Number(document.getElementById('p-inc').value);
+
+  enterPlayMode();
+  document.getElementById('p-status').textContent = 'Connecting to Maia...';
+
+  if (state.play.ws && state.play.ws.readyState === WebSocket.OPEN) {
+    sendPlay({ type: 'new_game', elo, color, base_minutes: baseMinutes, increment_seconds: incrementSeconds });
+    return;
+  }
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/play`);
+  state.play.ws = ws;
+  ws.addEventListener('open', () => {
+    sendPlay({ type: 'new_game', elo, color, base_minutes: baseMinutes, increment_seconds: incrementSeconds });
+  });
+  ws.addEventListener('message', (ev) => handlePlayMessage(JSON.parse(ev.data)));
+  ws.addEventListener('close', () => {
+    if (state.playMode) document.getElementById('p-status').textContent = 'Disconnected from the play session.';
+  });
+}
+
+function enterPlayMode() {
+  state.playMode = true;
+  if (!state.play) state.play = {};
+  state.play.chess = new Chess();
+  state.play.result = null;
+  state.play.humanColor = 'w';
+  state.play.sanHistory = [];
+  document.getElementById('clock-row').classList.remove('hidden');
+  document.getElementById('p-exit').classList.remove('hidden');
+  // Showing a live Stockfish eval of your own game in progress would just be
+  // cheating, so the eval bar is hidden for the duration of a played game.
+  document.getElementById('eval-bar').classList.add('hidden');
+  // Analysis controls act on the loaded game, which isn't what's on the board now.
+  document.getElementById('quick-analysis-btn').disabled = true;
+  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
+    document.getElementById(id).disabled = true;
+  }
+}
+
+function exitPlayMode() {
+  state.playMode = false;
+  if (state.play) {
+    clearInterval(state.play.tick);
+    if (state.play.ws) state.play.ws.close();
+    state.play.ws = null;
+  }
+  document.getElementById('clock-row').classList.add('hidden');
+  document.getElementById('p-exit').classList.add('hidden');
+  document.getElementById('eval-bar').classList.remove('hidden');
+  document.getElementById('p-resign').disabled = true;
+  document.getElementById('p-save').disabled = true;
+  document.getElementById('p-status').textContent = '';
+  document.getElementById('p-notes').textContent = '';
+  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
+    document.getElementById(id).disabled = false;
+  }
+  document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
+  state.board.setOrientation(state.explorer.yourColor === 'b' ? 'b' : 'w');
+  renderMoveTable();
+  syncBoardFull();
+}
+
+async function handlePlayMessage(msg) {
+  const p = state.play;
+  if (msg.type === 'error') {
+    document.getElementById('p-status').textContent = 'Error: ' + msg.message;
+    return;
+  }
+  if (msg.type === 'illegal') {
+    // Server rejected it; its next state message is authoritative.
+    return;
+  }
+  if (msg.type === 'saved') {
+    document.getElementById('p-status').textContent = 'Saved to your library.';
+    await refreshGameList();
+    return;
+  }
+  if (msg.type === 'engine_move') {
+    // Keep the local copy in step, then slide the piece.
+    p.chess.move({ from: msg.from, to: msg.to, promotion: msg.promotion || 'q' });
+    (p.sanHistory = p.sanHistory || []).push(msg.san);
+    await state.board.animateMove(msg.from, msg.to, msg.fen);
+    renderPlayMoveTable();
+    return;
+  }
+  if (msg.type === 'state') {
+    p.humanColor = msg.human_color;
+    p.turn = msg.turn;
+    p.result = msg.result;
+    p.clockEnabled = msg.clock_enabled;
+    p.whiteMs = msg.white_ms;
+    p.blackMs = msg.black_ms;
+    // The move list comes from the server, not from chess.js history: a
+    // resync below calls chess.load(), which throws that history away.
+    p.sanHistory = msg.san_history || [];
+    renderPlayMoveTable();
+
+    // The server is the source of truth -- if the local copy drifted for any
+    // reason, snap to what the server says rather than letting them diverge.
+    if (p.chess.fen() !== msg.fen) {
+      p.chess.load(msg.fen);
+      state.board.renderFEN(msg.fen);
+    }
+    state.board.setOrientation(msg.human_color === 'b' ? 'b' : 'w');
+
+    document.getElementById('p-resign').disabled = !!msg.result;
+    document.getElementById('p-save').disabled = msg.move_count === 0;
+
+    const notes = document.getElementById('p-notes');
+    notes.textContent = (msg.engine_notes || []).join('\n');
+    notes.classList.toggle('warn', (msg.engine_notes || []).some((n) => n.includes('NOT applied')));
+
+    const status = document.getElementById('p-status');
+    if (msg.result) {
+      status.textContent = `Game over — ${msg.result} (${msg.result_reason}).`;
+      status.classList.add('result');
+      clearInterval(p.tick);
+    } else {
+      status.classList.remove('result');
+      const yours = msg.turn === msg.human_color;
+      status.textContent = yours ? (msg.in_check ? 'Your move — check!' : 'Your move.') : 'Maia is thinking...';
+      startClockTicker();
+    }
+    renderClocks();
+  }
+}
+
+/** The server sends clock values with each state; between states this ticks
+    the side-to-move's display down so it doesn't look frozen. Server values
+    always overwrite it, so drift can't accumulate. */
+function startClockTicker() {
+  const p = state.play;
+  clearInterval(p.tick);
+  if (!p.clockEnabled) return;
+  p.tick = setInterval(() => {
+    if (!state.playMode || p.result) { clearInterval(p.tick); return; }
+    if (p.turn === 'w') p.whiteMs = Math.max(0, p.whiteMs - 200);
+    else p.blackMs = Math.max(0, p.blackMs - 200);
+    renderClocks();
+  }, 200);
+}
+
+function formatClock(ms) {
+  const total = Math.ceil(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function renderClocks() {
+  const p = state.play;
+  const row = document.getElementById('clock-row');
+  if (!p || !p.clockEnabled) { row.classList.add('hidden'); return; }
+  row.classList.remove('hidden');
+
+  // Top of the board is whoever is not the human (board is oriented to them).
+  const humanIsWhite = p.humanColor === 'w';
+  const topMs = humanIsWhite ? p.blackMs : p.whiteMs;
+  const bottomMs = humanIsWhite ? p.whiteMs : p.blackMs;
+  const topTurn = humanIsWhite ? p.turn === 'b' : p.turn === 'w';
+
+  document.getElementById('clock-top-label').textContent = 'Maia';
+  document.getElementById('clock-bottom-label').textContent = 'You';
+  document.getElementById('clock-top-time').textContent = formatClock(topMs);
+  document.getElementById('clock-bottom-time').textContent = formatClock(bottomMs);
+
+  const top = document.getElementById('clock-top');
+  const bottom = document.getElementById('clock-bottom');
+  top.classList.toggle('active', topTurn && !p.result);
+  bottom.classList.toggle('active', !topTurn && !p.result);
+  top.classList.toggle('low', topMs < 30000);
+  bottom.classList.toggle('low', bottomMs < 30000);
+}
+
+/** Play-mode move list, reusing the analysis move table's markup so the two
+    modes look consistent. Oriented to the human, same as section 5 requires
+    for the analysis view. */
+function renderPlayMoveTable() {
+  const tbody = document.getElementById('move-table').querySelector('tbody');
+  tbody.innerHTML = '';
+  const history = state.play.sanHistory || [];
+  const humanIsWhite = state.play.humanColor === 'w';
+  for (let i = 0; i < history.length; i += 2) {
+    const whiteSan = history[i];
+    const blackSan = history[i + 1];
+    const tr = document.createElement('tr');
+    const numTd = document.createElement('td');
+    numTd.className = 'ply-num';
+    numTd.textContent = (i / 2 + 1) + '.';
+    tr.appendChild(numTd);
+    for (const san of humanIsWhite ? [whiteSan, blackSan] : [blackSan, whiteSan]) {
+      const td = document.createElement('td');
+      td.textContent = san || '';
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  const wrap = document.getElementById('move-table-wrap');
+  wrap.scrollTop = wrap.scrollHeight;
 }
 
 /* ---------------- Live eval (Stockfish over WebSocket) ---------------- */

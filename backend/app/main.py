@@ -17,6 +17,8 @@ from .fs_browse import router as fs_router
 from .games import router as games_router
 from .live_eval_ws import router as ws_router
 from .paths import ASSETS_DIR, FRONTEND_DIR, list_asset_sets
+from .play import router as play_router
+from .play import status as play_status
 
 # Managing engine subprocesses via piped stdin/stdout (section 3) only works
 # on Windows under the Proactor event loop -- it's the default today, but
@@ -46,6 +48,7 @@ app.include_router(games_router)
 app.include_router(ws_router)
 app.include_router(analysis_router)
 app.include_router(analysis_ws_router)
+app.include_router(play_router)
 
 
 @app.get("/api/asset-sets")
@@ -56,8 +59,11 @@ def get_asset_sets(user: dict = Depends(require_user)):
 @app.get("/api/engines/status")
 def engines_status(user: dict = Depends(require_user)):
     """Process accounting: how many engine processes are alive and who owns
-    each, so runaway spawning is obvious during development (section 3)."""
-    return manager.status()
+    each, so runaway spawning is obvious during development (section 3).
+    Covers both persistent pools -- live-eval sessions and play-vs-Maia
+    sessions; analysis-job engines are short-lived and listed separately at
+    /api/analysis/jobs."""
+    return [{"kind": "live-eval", **s} for s in manager.status()] + play_status()
 
 
 class RevalidatingStaticFiles(StaticFiles):

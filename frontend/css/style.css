@@ -195,6 +195,34 @@ input[type="text"], input[type="number"], textarea, select {
 #pgn-paste { width: 100%; height: 70px; margin-bottom: 8px; resize: vertical; }
 #upload-status { font-size: 13px; color: var(--muted); margin-top: 8px; }
 
+#clock-row {
+  display: flex;
+  gap: 8px;
+  width: min(90vw, 520px);
+  justify-content: space-between;
+}
+.clock {
+  flex: 1;
+  text-align: center;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+}
+.clock b { color: var(--muted); font-weight: 600; font-size: 12px; }
+.clock.active { border-color: var(--accent); background: #24314a; }
+.clock.low span { color: #e05050; font-weight: bold; }
+
+.play-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.play-grid label { font-size: 12px; color: var(--muted); display: block; }
+.play-buttons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+#p-status { font-size: 13px; margin-top: 8px; }
+#p-status.result { font-weight: bold; color: var(--text); }
+#p-notes { font-size: 11px; color: var(--muted); margin-top: 6px; white-space: pre-line; }
+#p-notes.warn { color: #e0a13a; }
+
 #analysis-progress {
   width: 100%;
   height: 8px;

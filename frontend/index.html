@@ -34,6 +34,10 @@
   <main id="layout">
     <section id="board-col">
       <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
+      <div id="clock-row" class="hidden">
+        <span class="clock" id="clock-top"><b id="clock-top-label">Maia</b> <span id="clock-top-time">--:--</span></span>
+        <span class="clock" id="clock-bottom"><b id="clock-bottom-label">You</b> <span id="clock-bottom-time">--:--</span></span>
+      </div>
       <div id="board"></div>
       <div id="nav-buttons">
         <button id="nav-start" title="First move">|&lt;</button>
@@ -63,6 +67,30 @@
       <div class="panel">
         <h3>Games</h3>
         <div id="game-picker"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Play vs Maia3</h3>
+        <div class="play-grid">
+          <label>Maia Elo <input type="number" id="p-elo" value="1500" min="100" max="4000" /></label>
+          <label>You play
+            <select id="p-color">
+              <option value="w">White</option>
+              <option value="b">Black</option>
+              <option value="random">Random</option>
+            </select>
+          </label>
+          <label>Base (min) <input type="number" id="p-base" value="10" min="0" max="180" /></label>
+          <label>Increment (s) <input type="number" id="p-inc" value="0" min="0" max="60" /></label>
+        </div>
+        <div class="play-buttons">
+          <button id="p-start">Start game</button>
+          <button id="p-resign" disabled>Resign</button>
+          <button id="p-save" disabled>Save to library</button>
+          <button id="p-exit" class="hidden">Back to analysis</button>
+        </div>
+        <div id="p-status"></div>
+        <div id="p-notes"></div>
       </div>
 
       <div class="panel">
