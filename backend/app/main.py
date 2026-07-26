@@ -18,6 +18,7 @@ from .live_eval_ws import router as ws_router
 from .paths import ASSETS_DIR, FRONTEND_DIR, list_asset_sets
 from .play import router as play_router
 from .play import status as play_status
+from .runs import router as runs_router
 from .sweep_job import router as sweep_router
 
 # Managing engine subprocesses via piped stdin/stdout (section 3) only works
@@ -49,6 +50,7 @@ app.include_router(analysis_router)
 app.include_router(analysis_ws_router)
 app.include_router(play_router)
 app.include_router(sweep_router)
+app.include_router(runs_router)
 
 
 @app.get("/api/asset-sets")

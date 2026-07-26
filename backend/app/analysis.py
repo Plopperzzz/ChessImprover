@@ -24,6 +24,7 @@ from .classify import classify_moves, eval_to_cp
 from .db import db_cursor
 from .engine_manager import engine_options_from_settings, evaluate_position, start_configured_engine
 from .engine_settings import get_effective_settings
+from .runs import load_for_game, save_analysis
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 ws_router = APIRouter()  # unprefixed -- /ws/analysis/{job_id}, matching live_eval_ws.py's pattern
@@ -36,6 +37,7 @@ class AnalysisJob:
         self.job_id = job_id
         self.user_id = user_id
         self.game_id = game_id
+        self.run_id: int | None = None
         self.events: list[dict] = []
         self.subscribers: set[WebSocket] = set()
         self.task: asyncio.Task | None = None
@@ -119,13 +121,17 @@ async def stockfish_pass(job: AnalysisJob, pgn_text: str, engine_settings: dict,
 async def _run_quick_job(job: AnalysisJob, pgn_text: str, engine_settings: dict):
     try:
         moves = await stockfish_pass(job, pgn_text, engine_settings)
-        await job.emit({"type": "done", "moves": moves})
+        # Persist before emitting, so a client that reloads the moment it sees
+        # "done" already finds the saved copy.
+        save_analysis(job.user_id, job.game_id, "quick", {"moves": moves}, run_id=job.run_id)
+        await job.emit({"type": "done", "mode": "quick", "moves": moves})
     except Exception as e:
         await job.emit({"type": "error", "message": str(e)})
 
 
 class QuickAnalysisIn(BaseModel):
     game_id: int
+    run_id: int | None = None
 
 
 @router.post("/quick")
@@ -140,10 +146,21 @@ async def start_quick_analysis(body: QuickAnalysisIn, user: dict = Depends(requi
 
     job_id = uuid.uuid4().hex
     job = AnalysisJob(job_id, user["id"], body.game_id)
+    job.run_id = body.run_id
     jobs[job_id] = job
     _evict_old_jobs()
     job.task = asyncio.create_task(_run_quick_job(job, row["pgn_text"], settings))
     return {"job_id": job_id}
+
+
+@router.get("/saved/{game_id}")
+def saved_analysis(game_id: int, user: dict = Depends(require_user)):
+    """The stored analysis for a game, so selecting it in the picker restores
+    what was already computed instead of starting from blank."""
+    saved = load_for_game(user["id"], game_id)
+    if not saved:
+        raise HTTPException(404, "no saved analysis for this game")
+    return saved
 
 
 @router.get("/jobs")

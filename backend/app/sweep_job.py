@@ -29,6 +29,7 @@ from .db import db_cursor
 from .engine_manager import EngineProcess, pick_option, read_uci_options
 from .engine_settings import get_effective_settings
 from .maia import resolve_binary as resolve_maia_binary
+from .runs import save_analysis
 from .play import ELO_OPTION_CANDIDATES, LIMIT_STRENGTH_CANDIDATES, MAIA_GO_COMMAND
 
 router = APIRouter(prefix="/api/sweep", tags=["sweep"])
@@ -269,6 +270,10 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
             classify.blunder_elo_correlation(moves, sweep_rows=rows, grid=grid)
 
         _store_matrices(job, grid, by_player, matrices)
+        save_analysis(job.user_id, job.game_id, "full", {
+            "moves": moves, "grid": grid, "results": results,
+            "model_note": sweep["note"], "sweep_cache": job.sweep_cache,
+        }, run_id=job.run_id)
         await job.emit({
             "type": "done",
             "mode": "full",
@@ -284,6 +289,7 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
 
 class FullIn(BaseModel):
     game_id: int
+    run_id: int | None = None
 
 
 @router.post("/full")
@@ -299,6 +305,7 @@ async def start_full(body: FullIn, user: dict = Depends(require_user)):
 
     job_id = uuid.uuid4().hex
     job = AnalysisJob(job_id, user["id"], body.game_id)
+    job.run_id = body.run_id
     jobs[job_id] = job
     job.task = asyncio.create_task(run_full(job, row["pgn_text"], settings, row["your_color"]))
     return {"job_id": job_id}

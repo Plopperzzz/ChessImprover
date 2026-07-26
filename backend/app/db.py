@@ -80,6 +80,62 @@ CREATE TABLE IF NOT EXISTS games (
 
 CREATE INDEX IF NOT EXISTS idx_games_user ON games(user_id);
 CREATE INDEX IF NOT EXISTS idx_games_upload ON games(upload_id);
+
+-- A saved analysis run: a named container that games get appended to, so a
+-- batch (section 12) and a one-off single-game analysis are the same shape.
+CREATE TABLE IF NOT EXISTS analysis_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- One analysed game inside a run. Re-analysing the same game in the same
+-- mode replaces the previous result rather than piling up duplicates.
+CREATE TABLE IF NOT EXISTS run_games (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL,             -- 'quick' | 'full'
+    grid_json TEXT,                 -- swept Elo grid (full mode only)
+    results_json TEXT,              -- per-side Elo estimate + confidence
+    engine_note TEXT,
+    analyzed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(run_id, game_id, mode)
+);
+
+CREATE TABLE IF NOT EXISTS analysis_moves (
+    run_game_id INTEGER NOT NULL REFERENCES run_games(id) ON DELETE CASCADE,
+    ply INTEGER NOT NULL,
+    san TEXT,
+    cp_before REAL,
+    cp_after REAL,
+    wp_drop REAL,                   -- 'drop' is a SQL keyword
+    classification TEXT,
+    maia_match_rate REAL,
+    lowest_matching_elo INTEGER,
+    PRIMARY KEY (run_game_id, ply)
+);
+
+-- Per-position sweep scores, kept so the trend view (section 15) can be
+-- recomputed or re-bucketed without re-running any engine (section 13).
+-- `scores` is one character per grid point, which keeps a 1000-game batch to
+-- a sane row count while staying trivially decodable.
+CREATE TABLE IF NOT EXISTS sweep_positions (
+    run_game_id INTEGER NOT NULL REFERENCES run_games(id) ON DELETE CASCADE,
+    side TEXT NOT NULL,
+    ply INTEGER NOT NULL,
+    fen TEXT,
+    uci TEXT,
+    scores TEXT,
+    PRIMARY KEY (run_game_id, ply)
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_games_user ON run_games(user_id);
+CREATE INDEX IF NOT EXISTS idx_run_games_game ON run_games(game_id);
 """
 
 

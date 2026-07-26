@@ -6,7 +6,7 @@ follows.
 
 ## Status
 
-This covers build-order steps 1-7 from the spec: multi-user schema and auth,
+This covers build-order steps 1-8 from the spec: multi-user schema and auth,
 PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
 backed by a persistent per-session engine process, variation support (a real
 move tree -- branch off the mainline by playing a different move, delete a
@@ -14,8 +14,32 @@ variation, the mainline itself is never lost), Quick-mode analysis (a
 Stockfish-only pass classifying every mainline move as Good/Inaccuracy/
 Mistake/Blunder, with the board animating through positions as they're
 evaluated), Play vs Maia3 with a configurable time control, the Maia Elo
-sweep, and Great/Brilliant classification with the blunder-Elo correlation.
-Saved analysis runs, batch mode, and the trend view are not yet built.
+sweep, Great/Brilliant classification with the blunder-Elo correlation, and
+saved analysis runs. Batch mode and the trend view are not yet built.
+
+### Saved analyses
+
+Every completed analysis is written to the database, so **selecting a
+different game no longer throws the result away** -- come back to a game and
+its analysis is restored, with the move badges, the summary counts and (for
+a full analysis) the Elo estimate and blunder-Elo panel. The game list marks
+which games already have one.
+
+Analyses live inside named *runs*, which is the shape batch mode needs: the
+Analysis panel has a run picker so new work lands where you want it, and an
+existing analysis can be appended into another run without re-running the
+engines. Re-analysing a game in the same mode replaces its previous result
+rather than accumulating duplicates; a full analysis takes precedence over a
+quick one when both exist, since it is a superset.
+
+Per-*position* sweep scores are stored, not just the final labels, so the
+trend view will be able to re-bucket without re-running any engine. They are
+kept as one character per grid point, which keeps a 1000-game batch to a
+sane row count.
+
+Games can be deleted from the picker. Deleting cascades to any saved
+analysis of that game, and drops the uploaded PGN blob once its last game is
+gone.
 
 ### Analysis modes
 

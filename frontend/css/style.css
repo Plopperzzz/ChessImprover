@@ -296,6 +296,25 @@ input[type="text"], input[type="number"], textarea, select {
 .game-row:hover { border-color: var(--border); }
 .game-row.active { background: #24314a; border-color: var(--accent); }
 .game-row .flag { color: #e0a13a; font-size: 11px; }
+.game-row { align-items: center; }
+.analyzed-mark { font-size: 10px; color: #6fc46f; white-space: nowrap; }
+.game-delete {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 4px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.game-row:hover .game-delete, .game-row.active .game-delete { opacity: 1; }
+.game-delete:hover { color: #e05050; }
+
+.run-row { display: block; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.run-controls { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.run-controls select { flex: 1; }
+.run-controls button { padding: 6px 10px; }
 
 #move-table-wrap { max-height: 300px; overflow-y: auto; }
 #move-table { width: 100%; border-collapse: collapse; font-size: 13px; }

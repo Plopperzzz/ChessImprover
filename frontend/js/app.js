@@ -110,6 +110,7 @@ async function initApp() {
   wirePlay();
   connectLiveEval();
 
+  await refreshRunPicker();
   await refreshGameList();
   syncBoardFull();
 }
@@ -241,6 +242,30 @@ function renderGamePicker() {
       flag.textContent = '⚠ unassigned';
       row.appendChild(flag);
     }
+    if (g.analyzed) {
+      const mark = document.createElement('span');
+      mark.className = 'analyzed-mark';
+      mark.textContent = g.analyzed === 'full' ? '\u25CF full' : '\u25CB quick';
+      mark.title = `has a saved ${g.analyzed} analysis`;
+      row.appendChild(mark);
+    }
+    const del = document.createElement('button');
+    del.className = 'game-delete';
+    del.textContent = '\u2715';
+    del.title = 'Delete this game and its saved analysis';
+    del.addEventListener('click', async (ev) => {
+      ev.stopPropagation();   // don't also select the row we're deleting
+      const who = `${g.white || '?'} vs ${g.black || '?'}`;
+      const extra = g.analyzed ? ' and its saved analysis' : '';
+      if (!confirm(`Delete ${who}${extra}? This cannot be undone.`)) return;
+      await api(`/api/games/${g.id}`, { method: 'DELETE' });
+      if (state.selectedGameId === g.id) {
+        state.selectedGameId = null;
+        resetAnalysisState();
+      }
+      await refreshGameList();
+    });
+    row.appendChild(del);
     row.addEventListener('click', () => selectGame(g.id));
     wrap.appendChild(row);
   }
@@ -256,6 +281,38 @@ async function selectGame(gameId) {
   state.explorer.goToStart();
   renderMoveTable();
   syncBoardFull();
+  await loadSavedAnalysis(gameId);
+}
+
+/** Analyses are saved, so switching games in the picker restores what was
+    already computed rather than throwing it away. A game with nothing stored
+    just leaves the panels empty. */
+async function loadSavedAnalysis(gameId) {
+  let saved;
+  try {
+    saved = await api(`/api/analysis/saved/${gameId}`);
+  } catch (e) {
+    return; // nothing analysed for this game yet
+  }
+  if (state.selectedGameId !== gameId) return; // user moved on while we fetched
+
+  state.classifications = {};
+  for (const m of saved.moves) state.classifications[m.ply] = m;
+  renderMoveTable();
+  refreshMoveTableHighlight();
+  renderAnalysisSummary(saved.moves);
+
+  const when = (saved.analyzed_at || '').replace('T', ' ');
+  document.getElementById('analysis-status').textContent =
+    `Saved ${saved.mode} analysis from ${when}.`;
+  document.getElementById('analysis-progress-fill').style.width = '100%';
+
+  if (saved.results) {
+    renderSweepResults({ results: saved.results, your_color: state.explorer.yourColor });
+    renderBlunderElo(saved.moves, state.explorer.yourColor);
+    document.getElementById('sweep-status').textContent = 'From the saved analysis.';
+    document.getElementById('sweep-progress-fill').style.width = '100%';
+  }
 }
 
 /* ---------------- Move table (mainline, two columns, + variations) ---------------- */
@@ -393,7 +450,28 @@ function resetAnalysisState() {
   document.getElementById('analysis-summary').innerHTML = '';
 }
 
+async function refreshRunPicker() {
+  const sel = document.getElementById('run-picker');
+  const previous = sel.value;
+  const runs = await api('/api/runs');
+  sel.innerHTML = '';
+  for (const run of runs) {
+    const opt = document.createElement('option');
+    opt.value = run.id;
+    opt.textContent = `${run.name} (${run.game_count})`;
+    sel.appendChild(opt);
+  }
+  if (previous && runs.some((r) => String(r.id) === previous)) sel.value = previous;
+}
+
 function wireAnalysis() {
+  document.getElementById('run-new').addEventListener('click', async () => {
+    const name = prompt('Name for the new run:');
+    if (!name || !name.trim()) return;
+    const run = await api('/api/runs', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+    await refreshRunPicker();
+    document.getElementById('run-picker').value = run.id;
+  });
   document.getElementById('quick-analysis-btn').addEventListener('click', () => startAnalysis('quick'));
   document.getElementById('full-analysis-btn').addEventListener('click', () => startAnalysis('full'));
 }
@@ -409,7 +487,11 @@ async function startAnalysis(mode) {
     mode === 'full' ? 'Starting full analysis (Stockfish, then the Maia sweep)...' : 'Starting...';
   const url = mode === 'full' ? '/api/sweep/full' : '/api/analysis/quick';
   try {
-    const res = await api(url, { method: 'POST', body: JSON.stringify({ game_id: state.selectedGameId }) });
+    const runId = document.getElementById('run-picker').value;
+    const res = await api(url, { method: 'POST', body: JSON.stringify({
+      game_id: state.selectedGameId,
+      run_id: runId ? Number(runId) : null,
+    }) });
     state.analysisJobId = res.job_id;
     watchAnalysisJob(res.job_id);
   } catch (e) {
@@ -479,9 +561,11 @@ async function handleAnalysisMessage(msg) {
       document.getElementById('sweep-status').textContent = 'From the full analysis.';
       document.getElementById('sweep-progress-fill').style.width = '100%';
     }
-    document.getElementById('analysis-status').textContent = 'Done.';
+    document.getElementById('analysis-status').textContent = 'Done and saved.';
     document.getElementById('analysis-progress-fill').style.width = '100%';
     setAnalysisButtonsEnabled(true);
+    await refreshRunPicker();
+    await refreshGameList();
     syncBoardFull();
   } else if (msg.type === 'error') {
     document.getElementById('analysis-status').textContent = 'Error: ' + msg.message;

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from .auth import require_user
 from .db import db_cursor
 from .pgn_parse import parse_games_from_text
+from .runs import analyzed_game_ids
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 
@@ -81,7 +82,30 @@ def list_games(user: dict = Depends(require_user)):
                FROM games WHERE user_id = ? ORDER BY id""",
             (user["id"],),
         ).fetchall()
-    return [dict(r) for r in rows]
+    # One lookup for the whole list rather than a request per row, so the
+    # picker can mark which games already have a saved analysis.
+    analysed = analyzed_game_ids(user["id"])
+    return [{**dict(r), "analyzed": analysed.get(r["id"])} for r in rows]
+
+
+@router.delete("/{game_id}")
+def delete_game(game_id: int, user: dict = Depends(require_user)):
+    """Deletes a game and, by cascade, any saved analysis of it. The upload
+    row goes too once its last game is gone, so repeated upload/delete cycles
+    don't leave orphaned PGN blobs behind."""
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT upload_id FROM games WHERE id = ? AND user_id = ?", (game_id, user["id"])
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "no such game")
+        conn.execute("DELETE FROM games WHERE id = ?", (game_id,))
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS n FROM games WHERE upload_id = ?", (row["upload_id"],)
+        ).fetchone()["n"]
+        if remaining == 0:
+            conn.execute("DELETE FROM uploads WHERE id = ?", (row["upload_id"],))
+    return {"ok": True}
 
 
 @router.get("/{game_id}")
