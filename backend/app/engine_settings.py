@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from .auth import require_user
 from .db import db_cursor
+from .paths import list_asset_sets
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -67,14 +68,29 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
 
 
 class ProfileUpdate(BaseModel):
-    display_name: str
+    display_name: str | None = None
+    asset_set: str | None = None
 
 
 @router.put("/profile")
 def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
-    name = body.display_name.strip()
-    if not name:
-        raise HTTPException(400, "display_name is required")
+    updates: dict = {}
+    if body.display_name is not None:
+        name = body.display_name.strip()
+        if not name:
+            raise HTTPException(400, "display_name cannot be blank")
+        updates["display_name"] = name
+    if body.asset_set is not None:
+        available = list_asset_sets()
+        if body.asset_set not in available:
+            raise HTTPException(400, f"unknown asset set '{body.asset_set}' (available: {available})")
+        updates["asset_set"] = body.asset_set
+    if not updates:
+        raise HTTPException(400, "nothing to update")
     with db_cursor() as conn:
-        conn.execute("UPDATE users SET display_name=? WHERE id=?", (name, user["id"]))
-    return {"id": user["id"], "username": user["username"], "display_name": name}
+        for column, value in updates.items():
+            conn.execute(f"UPDATE users SET {column}=? WHERE id=?", (value, user["id"]))
+        row = conn.execute(
+            "SELECT id, username, display_name, asset_set FROM users WHERE id=?", (user["id"],)
+        ).fetchone()
+    return dict(row)

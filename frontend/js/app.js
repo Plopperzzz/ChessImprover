@@ -86,7 +86,7 @@ async function initApp() {
   document.getElementById('whoami').textContent = state.user.display_name;
   state.settings = await api('/api/settings');
 
-  state.board = new Board(document.getElementById('board'), 'default');
+  state.board = new Board(document.getElementById('board'), state.user.asset_set || 'default');
   state.board.setInteractive(true, {
     getLegalTargets: (sq) => state.explorer.getLegalTargets(sq),
     getMoverColor: () => state.explorer.moverColor,
@@ -121,7 +121,7 @@ async function onBoardMove(from, to, promotion) {
   if (!res) return;
   await state.board.animateMove(from, to, state.explorer.fen);
   refreshFenBox();
-  if (state.explorer.onMainline) renderMoveTable();
+  renderMoveTable(); // a new variation node may have just been created
   refreshMoveTableHighlight();
   requestEval();
 }
@@ -171,7 +171,7 @@ function wireFenBox() {
     if (!ok) { alert('That FEN could not be parsed.'); return; }
     state.selectedGameId = null;
     renderGamePicker();
-    document.getElementById('move-table').querySelector('tbody').innerHTML = '';
+    renderMoveTable();
     syncBoardFull();
   });
 }
@@ -245,18 +245,19 @@ async function selectGame(gameId) {
   syncBoardFull();
 }
 
-/* ---------------- Move table ---------------- */
+/* ---------------- Move table (mainline, two columns, + variations) ---------------- */
 
 function renderMoveTable() {
   const tbody = document.getElementById('move-table').querySelector('tbody');
   tbody.innerHTML = '';
-  const san = state.explorer.mainlineSAN;
+  const mainlineIds = state.explorer.mainlineNodeIds;
   const yourColor = state.explorer.yourColor === 'b' ? 'b' : 'w'; // unassigned defaults to White-on-left
-  for (let i = 0; i < san.length; i += 2) {
-    const whiteMove = { san: san[i], ply: i + 1 };
-    const blackMove = san[i + 1] !== undefined ? { san: san[i + 1], ply: i + 2 } : null;
-    const yours = yourColor === 'w' ? whiteMove : blackMove;
-    const theirs = yourColor === 'w' ? blackMove : whiteMove;
+
+  for (let i = 0; i < mainlineIds.length; i += 2) {
+    const whiteId = mainlineIds[i];
+    const blackId = mainlineIds[i + 1];
+    const yourId = yourColor === 'w' ? whiteId : blackId;
+    const theirId = yourColor === 'w' ? blackId : whiteId;
 
     const tr = document.createElement('tr');
     const numTd = document.createElement('td');
@@ -264,27 +265,99 @@ function renderMoveTable() {
     numTd.textContent = (i / 2 + 1) + '.';
     tr.appendChild(numTd);
 
-    for (const mv of [yours, theirs]) {
+    for (const id of [yourId, theirId]) {
       const td = document.createElement('td');
-      if (mv) {
-        td.textContent = mv.san;
-        td.dataset.ply = mv.ply;
+      if (id !== undefined) {
+        td.textContent = state.explorer.nodes[id].san;
+        td.dataset.nodeId = id;
         td.addEventListener('click', () => {
-          state.explorer.goToPly(mv.ply);
+          state.explorer.goToNode(id);
           syncBoardFull();
         });
       }
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
+
+    // Any variations branching off either move in this pair get a full-width
+    // row underneath, so the mainline stays exactly two columns as required.
+    const branchPoints = [whiteId, blackId].filter(
+      (id) => id !== undefined && state.explorer.nodes[id].children.length > 1
+    );
+    if (branchPoints.length) {
+      const vtr = document.createElement('tr');
+      vtr.className = 'variation-row';
+      const vtd = document.createElement('td');
+      vtd.colSpan = 3;
+      for (const id of branchPoints) {
+        const node = state.explorer.nodes[id];
+        for (let k = 1; k < node.children.length; k++) {
+          vtd.appendChild(buildVariationSpan(node.children[k]));
+        }
+      }
+      vtr.appendChild(vtd);
+      tbody.appendChild(vtr);
+    }
+  }
+}
+
+/** Builds "(1...e5 2.Nf3 ...)" for one variation branch, recursing into any
+    further sub-variations found along the way, with a delete control. */
+function buildVariationSpan(startNodeId) {
+  const wrap = document.createElement('span');
+  wrap.className = 'variation';
+  wrap.appendChild(document.createTextNode('('));
+  appendVariationLine(startNodeId, wrap, true);
+  wrap.appendChild(document.createTextNode(') '));
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'var-delete';
+  del.title = 'Delete this variation';
+  del.textContent = '✕';
+  del.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    state.explorer.deleteVariation(startNodeId);
+    renderMoveTable();
+    syncBoardFull();
+  });
+  wrap.appendChild(del);
+  return wrap;
+}
+
+function appendVariationLine(nodeId, container, isFirstMove) {
+  let id = nodeId;
+  let first = isFirstMove;
+  while (id !== undefined && id !== null) {
+    const node = state.explorer.nodes[id];
+    const moveSpan = document.createElement('span');
+    moveSpan.className = 'var-move';
+    const moveNum = Math.ceil(node.ply / 2);
+    const isWhiteMove = node.ply % 2 === 1;
+    const label = isWhiteMove ? `${moveNum}.` : first ? `${moveNum}...` : '';
+    moveSpan.textContent = (label ? label + ' ' : '') + node.san;
+    moveSpan.dataset.nodeId = node.id;
+    moveSpan.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      state.explorer.goToNode(node.id);
+      syncBoardFull();
+    });
+    container.appendChild(moveSpan);
+    container.appendChild(document.createTextNode(' '));
+    first = false;
+
+    for (let k = 1; k < node.children.length; k++) {
+      container.appendChild(buildVariationSpan(node.children[k]));
+    }
+    id = node.children[0];
   }
 }
 
 function refreshMoveTableHighlight() {
-  const tbody = document.getElementById('move-table').querySelector('tbody');
-  const current = state.explorer.onMainline ? state.explorer.pointer : -1;
-  for (const td of tbody.querySelectorAll('td[data-ply]')) {
-    td.classList.toggle('current', Number(td.dataset.ply) === current);
+  const container = document.getElementById('move-table');
+  const current = state.explorer.currentNodeId;
+  for (const el of container.querySelectorAll('[data-node-id]')) {
+    el.classList.toggle('current', Number(el.dataset.nodeId) === current);
   }
 }
 
@@ -342,11 +415,17 @@ function updateEvalBar(info) {
 
 function wireSettingsDialog() {
   const dialog = document.getElementById('settings-dialog');
-  document.getElementById('settings-btn').addEventListener('click', () => {
-    fillSettingsForm();
+  document.getElementById('settings-btn').addEventListener('click', async () => {
+    await fillSettingsForm();
     dialog.classList.remove('hidden');
   });
-  document.getElementById('settings-cancel').addEventListener('click', () => dialog.classList.add('hidden'));
+  document.getElementById('settings-cancel').addEventListener('click', () => {
+    dialog.classList.add('hidden');
+    state.board.setAssetSet(state.user.asset_set || 'default'); // undo any live preview
+  });
+  document.getElementById('s-asset-set').addEventListener('change', (ev) => {
+    state.board.setAssetSet(ev.target.value); // live preview before saving
+  });
 
   document.getElementById('settings-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
@@ -365,10 +444,16 @@ function wireSettingsDialog() {
       maia_elo_step: Number(document.getElementById('s-maia-elo-step').value),
     };
     state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+
     const displayName = document.getElementById('s-display-name').value.trim();
-    if (displayName && displayName !== state.user.display_name) {
-      state.user = await api('/api/settings/profile', { method: 'PUT', body: JSON.stringify({ display_name: displayName }) });
+    const assetSet = document.getElementById('s-asset-set').value;
+    const profileBody = {};
+    if (displayName && displayName !== state.user.display_name) profileBody.display_name = displayName;
+    if (assetSet && assetSet !== state.user.asset_set) profileBody.asset_set = assetSet;
+    if (Object.keys(profileBody).length) {
+      state.user = await api('/api/settings/profile', { method: 'PUT', body: JSON.stringify(profileBody) });
       document.getElementById('whoami').textContent = state.user.display_name;
+      state.board.setAssetSet(state.user.asset_set);
     }
     dialog.classList.add('hidden');
     // Settings only take effect for new engine sessions -- reconnect live eval.
@@ -383,9 +468,21 @@ function wireSettingsDialog() {
   });
 }
 
-function fillSettingsForm() {
+async function fillSettingsForm() {
   const s = state.settings;
   document.getElementById('s-display-name').value = state.user.display_name;
+
+  const sets = await api('/api/asset-sets');
+  const sel = document.getElementById('s-asset-set');
+  sel.innerHTML = '';
+  for (const name of sets) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  sel.value = state.user.asset_set || 'default';
+
   document.getElementById('s-sf-path').value = s.stockfish_path || '';
   document.getElementById('s-sf-threads').value = s.stockfish_threads;
   document.getElementById('s-sf-hash').value = s.stockfish_hash_mb;

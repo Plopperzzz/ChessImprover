@@ -14,6 +14,7 @@ class UserOut(BaseModel):
     id: int
     username: str
     display_name: str
+    asset_set: str
 
 
 class CreateAccountIn(BaseModel):
@@ -28,7 +29,7 @@ class LoginIn(BaseModel):
 @router.get("/accounts")
 def list_accounts():
     with db_cursor() as conn:
-        rows = conn.execute("SELECT id, username, display_name FROM users ORDER BY id").fetchall()
+        rows = conn.execute("SELECT id, username, display_name, asset_set FROM users ORDER BY id").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -49,14 +50,16 @@ def create_account(body: CreateAccountIn):
         )
         user_id = cur.lastrowid
         conn.execute("INSERT INTO engine_settings (user_id) VALUES (?)", (user_id,))
-    return {"id": user_id, "username": username, "display_name": display_name}
+    return {"id": user_id, "username": username, "display_name": display_name, "asset_set": "default"}
 
 
 @router.post("/login")
 def login(body: LoginIn, response: Response):
     username = body.username.strip().lower()
     with db_cursor() as conn:
-        user = conn.execute("SELECT id, username, display_name FROM users WHERE username = ?", (username,)).fetchone()
+        user = conn.execute(
+            "SELECT id, username, display_name, asset_set FROM users WHERE username = ?", (username,)
+        ).fetchone()
         if not user:
             raise HTTPException(404, "no such account")
         token = secrets.token_urlsafe(32)
@@ -64,7 +67,7 @@ def login(body: LoginIn, response: Response):
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30, path="/"
     )
-    return {"id": user["id"], "username": user["username"], "display_name": user["display_name"]}
+    return dict(user)
 
 
 @router.post("/logout")
@@ -89,7 +92,7 @@ def _user_for_token(token: str | None):
         return None
     with db_cursor() as conn:
         row = conn.execute(
-            """SELECT u.id, u.username, u.display_name FROM sessions s
+            """SELECT u.id, u.username, u.display_name, u.asset_set FROM sessions s
                JOIN users u ON u.id = s.user_id WHERE s.token = ?""",
             (token,),
         ).fetchone()

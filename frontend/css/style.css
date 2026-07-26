@@ -222,6 +222,33 @@ input[type="text"], input[type="number"], textarea, select {
 #move-table td.current { background: #2f4a7a; font-weight: bold; }
 #move-table td.ply-num { width: auto; color: var(--muted); cursor: default; padding-right: 4px; }
 
+.variation-row td {
+  cursor: default;
+  background: #171a22;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.variation { white-space: normal; }
+.var-move {
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+.var-move:hover { background: #24314a; }
+.var-move.current { background: #2f4a7a; color: #fff; font-weight: bold; }
+.var-delete {
+  background: none;
+  border: none;
+  color: #d97070;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 4px;
+  vertical-align: middle;
+}
+.var-delete:hover { color: #ff8080; }
+
 /* ---------- Settings dialog ---------- */
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
 fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }

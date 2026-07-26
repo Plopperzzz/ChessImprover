@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 
 from fastapi import Depends, FastAPI
@@ -13,6 +12,7 @@ from .engine_settings import router as settings_router
 from .fs_browse import router as fs_router
 from .games import router as games_router
 from .live_eval_ws import router as ws_router
+from .paths import ASSETS_DIR, FRONTEND_DIR, list_asset_sets
 
 # Managing engine subprocesses via piped stdin/stdout (section 3) only works
 # on Windows under the Proactor event loop -- it's the default today, but
@@ -20,11 +20,6 @@ from .live_eval_ws import router as ws_router
 # break Stockfish/Maia process spawning there.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
-REPO_ROOT = os.path.dirname(BASE_DIR)
-ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
-FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
 
 app = FastAPI(title="ChessImprover Engine Room")
 
@@ -48,13 +43,8 @@ app.include_router(ws_router)
 
 
 @app.get("/api/asset-sets")
-def list_asset_sets(user: dict = Depends(require_user)):
-    sets_dir = os.path.join(ASSETS_DIR, "sets")
-    if not os.path.isdir(sets_dir):
-        return []
-    return sorted(
-        name for name in os.listdir(sets_dir) if os.path.isdir(os.path.join(sets_dir, name))
-    )
+def get_asset_sets(user: dict = Depends(require_user)):
+    return list_asset_sets()
 
 
 @app.get("/api/engines/status")

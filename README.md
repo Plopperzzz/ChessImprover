@@ -6,11 +6,13 @@ follows.
 
 ## Status
 
-This is an early increment covering build-order steps 1-2 from the spec:
-multi-user schema and auth, PGN upload/parsing, the board/move-table/FEN
-viewer, and a live Stockfish eval bar backed by a persistent per-session
-engine process. Move classification, the Maia Elo sweep, variations,
-play-vs-Maia, persistence, batch mode, and the trend view are not yet built.
+This covers build-order steps 1-3 from the spec: multi-user schema and auth,
+PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
+backed by a persistent per-session engine process, and variation support (a
+real move tree -- branch off the mainline by playing a different move,
+delete a variation, the mainline itself is never lost). Move classification,
+the Maia Elo sweep, play-vs-Maia, persistence, batch mode, and the trend view
+are not yet built.
 
 ## Running it
 
@@ -51,7 +53,9 @@ fallback), threads, hash, and search depth/movetime from the Settings dialog.
 The `assets/sets/default/` piece and board images are placeholders generated
 by `assets/generate_placeholder_set.py`; drop a nicer set into
 `assets/sets/<name>/` (same filenames: `board.png`, `wp.png`, `bn.png`, ...)
-whenever you want -- it's picked up automatically, no code changes needed.
+whenever you want -- no code changes needed, it shows up as another option in
+the Settings dialog's "Board / piece set" picker (each user can choose their
+own, with a live preview before saving).
 
 ## Open questions still to confirm
 

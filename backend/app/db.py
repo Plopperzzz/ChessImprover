@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
+    asset_set TEXT NOT NULL DEFAULT 'default',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -80,10 +81,21 @@ def get_conn():
     return conn
 
 
+def _ensure_column(conn, table: str, column: str, ddl: str):
+    """Adds a column to an already-existing table if it's missing, so a
+    schema addition doesn't break a database created by an earlier version
+    of this app (CREATE TABLE IF NOT EXISTS alone would silently skip new
+    columns on a table that already exists)."""
+    cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def init_db():
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
+        _ensure_column(conn, "users", "asset_set", "TEXT NOT NULL DEFAULT 'default'")
         conn.commit()
     finally:
         conn.close()
