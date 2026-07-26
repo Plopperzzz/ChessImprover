@@ -6,6 +6,9 @@
   --text: #e8eaf0;
   --muted: #8b93a7;
   --accent: #5b8dee;
+  /* One board width, shared by everything stacked with the board so the
+     column lines up instead of each element picking its own max. */
+  --board-w: min(90vw, 70vh, 520px);
 }
 
 * { box-sizing: border-box; }
@@ -94,7 +97,7 @@ input[type="text"], input[type="number"], textarea, select {
 }
 
 #eval-bar {
-  width: min(70vw, 420px);
+  width: var(--board-w);
   height: 20px;
   background: #222;
   border: 1px solid var(--border);
@@ -122,7 +125,7 @@ input[type="text"], input[type="number"], textarea, select {
 
 #board {
   position: relative;
-  width: min(90vw, 70vh, 520px);
+  width: var(--board-w);
   aspect-ratio: 1 / 1;
   user-select: none;
 }
@@ -173,8 +176,11 @@ input[type="text"], input[type="number"], textarea, select {
 }
 
 #nav-buttons { display: flex; gap: 8px; }
-#fen-row { display: flex; gap: 8px; width: min(90vw, 520px); }
-#fen-row input { flex: 1; font-family: monospace; }
+/* The plates hug the board rather than floating in the column's gap. */
+#plate-top { margin-bottom: -4px; }
+#plate-bottom { margin-top: -4px; }
+.fen-row { display: flex; gap: 8px; width: var(--board-w); }
+.fen-row input { flex: 1; font-family: monospace; }
 
 #side-col {
   flex: 1 1 320px;
@@ -195,25 +201,50 @@ input[type="text"], input[type="number"], textarea, select {
 #pgn-paste { width: 100%; height: 70px; margin-bottom: 8px; resize: vertical; }
 #upload-status { font-size: 13px; color: var(--muted); margin-top: 8px; }
 
-#clock-row {
+/* Player plates: the board's own width, so they read as part of it. The one
+   below the board is always whoever is at the bottom, which is you unless
+   the board has been flipped. */
+.player-plate {
   display: flex;
-  gap: 8px;
-  width: min(90vw, 520px);
-  justify-content: space-between;
-}
-.clock {
-  flex: 1;
-  text-align: center;
-  padding: 6px 10px;
+  align-items: center;
+  gap: 7px;
+  width: var(--board-w);
+  padding: 5px 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--panel);
-  font-variant-numeric: tabular-nums;
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1.3;
 }
-.clock b { color: var(--muted); font-weight: 600; font-size: 12px; }
-.clock.active { border-color: var(--accent); background: #24314a; }
-.clock.low span { color: #e05050; font-weight: bold; }
+.player-plate .spacer { flex: 1; }
+.plate-dot {
+  width: 11px; height: 11px; flex: none;
+  border-radius: 2px;
+  border: 1px solid #00000066;
+}
+.plate-dot.dot-w { background: #f0f0f0; }
+.plate-dot.dot-b { background: #2b2b2b; border-color: #ffffff44; }
+.plate-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plate-rating { color: var(--muted); font-size: 12px; }
+.plate-you {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .06em;
+  background: #24314a; color: #a9c3f5;
+  padding: 2px 5px; border-radius: 8px;
+}
+.plate-result { color: var(--muted); font-variant-numeric: tabular-nums; }
+.plate-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: #11141b;
+}
+.plate-clock.low { color: #e05050; font-weight: bold; }
+/* Nothing loaded yet: still frame the board, but don't pretend to name anyone. */
+.player-plate.placeholder .plate-name { color: var(--muted); font-weight: 400; }
+/* Whose move it is, without a second row of chrome to say so. */
+.player-plate.to-move { border-color: var(--accent); }
+.player-plate.to-move .plate-clock { background: #24314a; }
 
 .play-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .play-grid label { font-size: 12px; color: var(--muted); display: block; }
@@ -367,6 +398,17 @@ input[type="text"], input[type="number"], textarea, select {
 
 #move-table-wrap { max-height: 300px; overflow-y: auto; }
 #move-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#move-table thead th {
+  position: sticky; top: 0; z-index: 1;      /* stays put while the list scrolls */
+  background: var(--panel);
+  text-align: left; font-weight: normal;
+  color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 6px 5px;
+  border-bottom: 1px solid var(--border);
+  max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#move-table thead th:first-child { width: 34px; }
 #move-table td {
   padding: 4px 6px;
   border-bottom: 1px solid var(--border);
@@ -448,4 +490,9 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
 @media (max-width: 700px) {
   #layout { padding: 10px; gap: 10px; }
   #topbar { padding: 8px 10px; }
+  /* On a phone the column is one long scroll, and the move list is the panel
+     you actually read while stepping through a game -- put it directly under
+     the board instead of below six other panels. */
+  #moves-panel { order: -1; }
+  #move-table-wrap { max-height: 40vh; }
 }

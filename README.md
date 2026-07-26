@@ -6,7 +6,7 @@ follows.
 
 ## Status
 
-This covers build-order steps 1-11 from the spec: multi-user schema and auth,
+This covers build-order steps 1-12 from the spec: multi-user schema and auth,
 PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
 backed by a persistent per-session engine process, variation support (a real
 move tree -- branch off the mainline by playing a different move, delete a
@@ -16,8 +16,8 @@ Mistake/Blunder, with the board animating through positions as they're
 evaluated), Play vs Maia3 with a configurable time control, the Maia Elo
 sweep, Great/Brilliant classification with the blunder-Elo correlation,
 saved analysis runs, batch mode, the bounded worker pool that lets both of
-you analyse at once, and the trend-over-time view. What's left is the visual
-polish pass.
+you analyse at once, the trend-over-time view, and the polish pass. That is
+the whole build order from the spec.
 
 ### Sharing the machine (worker pool)
 
@@ -55,6 +55,33 @@ engines: those are one per open board, idle almost all the time, and cleaned
 up by their own idle timeout. Charging them a worker slot would leave the pool
 permanently short. `/api/engines/status` covers those and any job-owned
 engines; `/api/jobs/pool` covers the queue.
+
+### The board
+
+The board faces the side **you** played: open a game you had as Black and it
+opens flipped, with your pieces at the bottom. A plate above and below the
+board names the two players with their header ratings, marks which one is
+you, shows the result once the game is over, and carries the clocks during a
+game against Maia. The plates follow the board, so the name under the board
+is always whoever is at the bottom.
+
+`⇅` (or the `f` key) flips it manually; selecting another game clears that
+and goes back to facing you. Where your display name matches neither PGN
+header the board takes the conventional White-at-bottom view and no plate
+claims to be you, rather than guessing.
+
+The move table keeps your moves in the left column whichever colour you
+played (section 5), which is confusing without a header saying so — so the
+columns are now labelled with the two players' names.
+
+Sound effects (from `assets/audio/`) play for moves, captures, castling,
+check, promotion, an illegal move, game start and end, and a ten-second
+warning on your own clock. They follow things *you* did — never the analysis
+animation, which steps through a hundred positions. The speaker button in the
+top bar mutes them, and the choice survives a reload.
+
+On a phone the move list moves up directly under the board instead of sitting
+below six other panels.
 
 ### Trend over time
 

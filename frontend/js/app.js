@@ -22,6 +22,10 @@ const state = {
   batchWs: null,
   playMode: false,
   play: null, // { ws, chess, humanColor, turn, whiteMs, blackMs, clockEnabled, result, tick }
+  // The board faces the side you played, so a game you had as Black opens
+  // flipped. The nav flip button sets this override for the current game;
+  // selecting another game clears it.
+  flipOverride: false,
 };
 
 async function api(path, opts = {}) {
@@ -104,6 +108,7 @@ async function initApp() {
     onMove: (from, to, promo) => (state.playMode ? onPlayMove(from, to, promo) : onBoardMove(from, to, promo)),
   });
 
+  wireSound();
   wireNav();
   wireFenBox();
   wirePgnUpload();
@@ -126,6 +131,7 @@ function syncBoardFull() {
   state.board.renderFEN(state.explorer.fen);
   refreshFenBox();
   refreshMoveTableHighlight();
+  renderPlayerPlates();   // the to-move marker follows the position
   requestEval();
 }
 
@@ -136,6 +142,7 @@ function refreshFenBox() {
 async function onBoardMove(from, to, promotion) {
   const res = state.explorer.makeMove(from, to, promotion);
   if (!res) return;
+  playMoveSound(res.san || res.move || '', true);
   await state.board.animateMove(from, to, state.explorer.fen);
   refreshFenBox();
   renderMoveTable(); // a new variation node may have just been created
@@ -143,7 +150,165 @@ async function onBoardMove(from, to, promotion) {
   requestEval();
 }
 
+/* ---------------- Sound ----------------
+   The assets in assets/audio/ are the usual chess-site set. Sounds only ever
+   follow something the user did -- a move they played, a reply from Maia, a
+   game ending -- never the analysis animation, which steps through a hundred
+   positions and would be unbearable. */
+
+const SOUND_FILES = {
+  move: 'move-self.webm',
+  opponent: 'move-opponent.webm',
+  capture: 'capture.webm',
+  castle: 'castle.webm',
+  check: 'move-check.webm',
+  promote: 'promote.webm',
+  illegal: 'illegal.webm',
+  start: 'game-start.webm',
+  end: 'game-end.webm',
+  lowtime: 'tenseconds.webm',
+};
+const soundCache = {};
+
+function soundEnabled() {
+  return localStorage.getItem('sound') !== 'off';
+}
+
+function playSound(name) {
+  if (!soundEnabled()) return;
+  const file = SOUND_FILES[name];
+  if (!file) return;
+  try {
+    let audio = soundCache[name];
+    if (!audio) {
+      audio = new Audio(`/assets/audio/${file}`);
+      audio.volume = 0.55;
+      soundCache[name] = audio;
+    }
+    audio.currentTime = 0;
+    // Autoplay policy rejects until the page has been interacted with; every
+    // call here follows a click, but a rejected promise must not surface as
+    // an unhandled rejection.
+    const played = audio.play();
+    if (played && played.catch) played.catch(() => {});
+  } catch (e) { /* sound is never worth breaking a move over */ }
+}
+
+/** Picks the sound from the SAN itself, so it works for both a move the user
+    played and one that arrived from the server. */
+function playMoveSound(san, mine) {
+  if (!san) { playSound(mine ? 'move' : 'opponent'); return; }
+  if (san.includes('#') || san.includes('+')) playSound('check');
+  else if (san.includes('=')) playSound('promote');
+  else if (san.startsWith('O-O')) playSound('castle');
+  else if (san.includes('x')) playSound('capture');
+  else playSound(mine ? 'move' : 'opponent');
+}
+
+function wireSound() {
+  const btn = document.getElementById('sound-btn');
+  const paint = () => {
+    btn.textContent = soundEnabled() ? '🔊' : '🔇';
+    btn.title = soundEnabled() ? 'Sound on — click to mute' : 'Muted — click for sound';
+  };
+  btn.addEventListener('click', () => {
+    localStorage.setItem('sound', soundEnabled() ? 'off' : 'on');
+    paint();
+    if (soundEnabled()) playSound('move');   // confirm it actually works
+  });
+  paint();
+}
+
+/* ---------------- Board orientation and the player plates ----------------
+   Section 5 wants the board facing the side you played. That's one decision
+   applied in one place: everything that changes whose game is on the board
+   calls applyOrientation(), rather than each caller doing its own
+   yourColor-to-orientation dance and drifting. */
+
+function bottomColor() {
+  const base = state.playMode
+    ? (state.play && state.play.humanColor === 'b' ? 'b' : 'w')
+    // 'unassigned' (your display name matched neither header) falls back to
+    // the conventional White-at-bottom rather than guessing.
+    : (state.explorer.yourColor === 'b' ? 'b' : 'w');
+  return state.flipOverride ? (base === 'w' ? 'b' : 'w') : base;
+}
+
+function applyOrientation() {
+  state.board.setOrientation(bottomColor());
+  renderPlayerPlates();
+}
+
+/** Names, ratings, result and clocks on the two plates, keyed to which colour
+    is currently at the bottom -- so flipping the board moves the names too. */
+function renderPlayerPlates() {
+  const bottom = bottomColor();
+  const sides = { w: {}, b: {} };
+
+  if (state.playMode && state.play) {
+    const p = state.play;
+    for (const colour of ['w', 'b']) {
+      const human = colour === p.humanColor;
+      sides[colour] = {
+        name: human ? (state.user.display_name || 'You') : 'Maia3',
+        rating: human ? '' : (p.maiaElo ? String(p.maiaElo) : ''),
+        you: human,
+        result: '',
+        clock: p.clockEnabled ? formatClock(colour === 'w' ? p.whiteMs : p.blackMs) : '',
+        toMove: !p.result && p.turn === colour,
+        low: p.clockEnabled && (colour === 'w' ? p.whiteMs : p.blackMs) < 30000,
+      };
+    }
+    if (p.result) {
+      const marks = { '1-0': ['1', '0'], '0-1': ['0', '1'], '1/2-1/2': ['½', '½'] };
+      const [white, black] = marks[p.result] || ['', ''];
+      sides.w.result = white; sides.b.result = black;
+    }
+  } else {
+    const headers = state.explorer.headers || {};
+    // No game loaded (or a bare FEN) means there is nobody to name -- the
+    // placeholders must not claim one of them is you just because yourColor
+    // defaults to White.
+    const loaded = !!(headers.White || headers.Black);
+    const yours = loaded ? state.explorer.yourColor : null;
+    const marks = { '1-0': ['1', '0'], '0-1': ['0', '1'], '1/2-1/2': ['½', '½'] };
+    const [white, black] = marks[headers.Result] || ['', ''];
+    sides.w = {
+      name: headers.White || 'White', rating: headers.WhiteElo || '',
+      you: yours === 'w', result: white, placeholder: !loaded,
+      clock: '', toMove: state.explorer.moverColor === 'w',
+    };
+    sides.b = {
+      name: headers.Black || 'Black', rating: headers.BlackElo || '',
+      you: yours === 'b', result: black, placeholder: !loaded,
+      clock: '', toMove: state.explorer.moverColor === 'b',
+    };
+  }
+
+  const top = bottom === 'w' ? 'b' : 'w';
+  fillPlate(document.getElementById('plate-top'), sides[top], top);
+  fillPlate(document.getElementById('plate-bottom'), sides[bottom], bottom);
+}
+
+function fillPlate(el, data, colour) {
+  el.querySelector('.plate-dot').className = 'plate-dot dot-' + colour;
+  el.querySelector('.plate-name').textContent = data.name || '—';
+  el.querySelector('.plate-rating').textContent = data.rating ? `(${data.rating})` : '';
+  el.querySelector('.plate-you').classList.toggle('hidden', !data.you);
+  el.querySelector('.plate-result').textContent = data.result || '';
+  const clock = el.querySelector('.plate-clock');
+  clock.textContent = data.clock || '';
+  clock.classList.toggle('hidden', !data.clock);
+  clock.classList.toggle('low', !!data.low);
+  el.classList.toggle('to-move', !!data.toMove);
+  el.classList.toggle('placeholder', !!data.placeholder);
+}
+
 function wireNav() {
+  document.getElementById('nav-flip').addEventListener('click', () => {
+    state.flipOverride = !state.flipOverride;
+    applyOrientation();
+  });
   document.getElementById('nav-start').addEventListener('click', () => {
     state.explorer.goToStart();
     syncBoardFull();
@@ -151,6 +316,7 @@ function wireNav() {
   document.getElementById('nav-prev').addEventListener('click', async () => {
     const res = state.explorer.stepBackward();
     if (!res) return;
+    playMoveSound(res.san, true);
     await state.board.animateMove(res.to, res.from, state.explorer.fen);
     refreshFenBox();
     refreshMoveTableHighlight();
@@ -159,6 +325,7 @@ function wireNav() {
   document.getElementById('nav-next').addEventListener('click', async () => {
     const res = state.explorer.stepForward();
     if (!res) return;
+    playMoveSound(res.san, true);
     await state.board.animateMove(res.from, res.to, state.explorer.fen);
     refreshFenBox();
     refreshMoveTableHighlight();
@@ -174,6 +341,7 @@ function wireNav() {
     if (ev.key === 'ArrowRight') document.getElementById('nav-next').click();
     if (ev.key === 'ArrowUp') document.getElementById('nav-start').click();
     if (ev.key === 'ArrowDown') document.getElementById('nav-end').click();
+    if (ev.key === 'f' || ev.key === 'F') document.getElementById('nav-flip').click();
   });
 }
 
@@ -282,7 +450,8 @@ async function selectGame(gameId) {
   resetAnalysisState();
   renderGamePicker();
   state.explorer.loadPGN(game.pgn_text, state.user.display_name);
-  state.board.setOrientation(state.explorer.yourColor === 'b' ? 'b' : 'w');
+  state.flipOverride = false;
+  applyOrientation();
   state.explorer.goToStart();
   renderMoveTable();
   syncBoardFull();
@@ -322,11 +491,24 @@ async function loadSavedAnalysis(gameId) {
 
 /* ---------------- Move table (mainline, two columns, + variations) ---------------- */
 
+/** The left column is yours whichever colour you played (section 5), which is
+    only readable if the header says whose it is. */
+function setMoveTableHeader(yourColor, headers) {
+  const names = { w: headers.White || 'White', b: headers.Black || 'Black' };
+  const theirColor = yourColor === 'w' ? 'b' : 'w';
+  const known = !!(headers.White || headers.Black);
+  const mine = state.explorer.yourColor === 'w' || state.explorer.yourColor === 'b';
+  document.getElementById('mt-yours').textContent =
+    known ? (mine ? `${names[yourColor]} (you)` : names[yourColor]) : '';
+  document.getElementById('mt-theirs').textContent = known ? names[theirColor] : '';
+}
+
 function renderMoveTable() {
   const tbody = document.getElementById('move-table').querySelector('tbody');
   tbody.innerHTML = '';
   const mainlineIds = state.explorer.mainlineNodeIds;
   const yourColor = state.explorer.yourColor === 'b' ? 'b' : 'w'; // unassigned defaults to White-on-left
+  setMoveTableHeader(yourColor, state.explorer.headers || {});
 
   for (let i = 0; i < mainlineIds.length; i += 2) {
     const whiteId = mainlineIds[i];
@@ -781,7 +963,7 @@ async function handleBatchMessage(msg) {
     // Section 6: show whichever game is currently being processed.
     try {
       state.explorer.loadPGN(msg.pgn, state.user.display_name);
-      state.board.setOrientation(state.explorer.yourColor === 'b' ? 'b' : 'w');
+      applyOrientation();
       state.explorer.goToStart();
       state.classifications = {};
       renderMoveTable();
@@ -1232,6 +1414,7 @@ async function onPlayMove(from, to, promotion) {
   const p = state.play;
   const res = p.chess.move({ from, to, promotion: promotion || 'q' });
   if (!res) return;
+  playMoveSound(res.san, true);
   await state.board.animateMove(from, to, p.chess.fen());
   (p.sanHistory = p.sanHistory || []).push(res.san); // optimistic; the next state message is authoritative
   renderPlayMoveTable();
@@ -1245,6 +1428,7 @@ async function startPlayGame() {
   const incrementSeconds = Number(document.getElementById('p-inc').value);
 
   enterPlayMode();
+  state.play.maiaElo = elo;
   document.getElementById('p-status').textContent = 'Connecting to Maia...';
 
   if (state.play.ws && state.play.ws.readyState === WebSocket.OPEN) {
@@ -1278,11 +1462,14 @@ function enterPlayMode() {
   state.play.result = null;
   state.play.humanColor = 'w';
   state.play.sanHistory = [];
-  document.getElementById('clock-row').classList.remove('hidden');
+  state.play.greeted = false;
+  state.play.lowTimeWarned = false;
+  state.flipOverride = false;   // a new game always starts facing you
   document.getElementById('p-exit').classList.remove('hidden');
   // Showing a live Stockfish eval of your own game in progress would just be
   // cheating, so the eval bar is hidden for the duration of a played game.
   document.getElementById('eval-bar').classList.add('hidden');
+  for (const el of document.querySelectorAll('.fen-row')) el.classList.add('hidden');
   // Analysis controls act on the loaded game, which isn't what's on the board now.
   document.getElementById('quick-analysis-btn').disabled = true;
   for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
@@ -1297,9 +1484,9 @@ function exitPlayMode() {
     if (state.play.ws) state.play.ws.close();
     state.play.ws = null;
   }
-  document.getElementById('clock-row').classList.add('hidden');
   document.getElementById('p-exit').classList.add('hidden');
   document.getElementById('eval-bar').classList.remove('hidden');
+  for (const el of document.querySelectorAll('.fen-row')) el.classList.remove('hidden');
   document.getElementById('p-resign').disabled = true;
   document.getElementById('p-save').disabled = true;
   document.getElementById('p-status').textContent = '';
@@ -1308,7 +1495,8 @@ function exitPlayMode() {
     document.getElementById(id).disabled = false;
   }
   document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
-  state.board.setOrientation(state.explorer.yourColor === 'b' ? 'b' : 'w');
+  state.flipOverride = false;
+  applyOrientation();
   renderMoveTable();
   syncBoardFull();
 }
@@ -1320,6 +1508,7 @@ async function handlePlayMessage(msg) {
     return;
   }
   if (msg.type === 'illegal') {
+    playSound('illegal');
     // Server rejected it; its next state message is authoritative.
     return;
   }
@@ -1332,11 +1521,15 @@ async function handlePlayMessage(msg) {
     // Keep the local copy in step, then slide the piece.
     p.chess.move({ from: msg.from, to: msg.to, promotion: msg.promotion || 'q' });
     (p.sanHistory = p.sanHistory || []).push(msg.san);
+    playMoveSound(msg.san, false);
     await state.board.animateMove(msg.from, msg.to, msg.fen);
     renderPlayMoveTable();
     return;
   }
   if (msg.type === 'state') {
+    const wasResult = p.result;
+    if (msg.move_count === 0 && !p.greeted) { p.greeted = true; playSound('start'); }
+    if (msg.result && !wasResult) { playSound('end'); p.lowTimeWarned = false; }
     p.humanColor = msg.human_color;
     p.turn = msg.turn;
     p.result = msg.result;
@@ -1354,7 +1547,7 @@ async function handlePlayMessage(msg) {
       p.chess.load(msg.fen);
       state.board.renderFEN(msg.fen);
     }
-    state.board.setOrientation(msg.human_color === 'b' ? 'b' : 'w');
+    applyOrientation();
 
     document.getElementById('p-resign').disabled = !!msg.result;
     document.getElementById('p-save').disabled = msg.move_count === 0;
@@ -1374,7 +1567,7 @@ async function handlePlayMessage(msg) {
       status.textContent = yours ? (msg.in_check ? 'Your move — check!' : 'Your move.') : 'Maia is thinking...';
       startClockTicker();
     }
-    renderClocks();
+    renderPlayerPlates();
   }
 }
 
@@ -1389,7 +1582,14 @@ function startClockTicker() {
     if (!state.playMode || p.result) { clearInterval(p.tick); return; }
     if (p.turn === 'w') p.whiteMs = Math.max(0, p.whiteMs - 200);
     else p.blackMs = Math.max(0, p.blackMs - 200);
-    renderClocks();
+    // Warn once per game, and only on your own clock -- Maia flagging is not
+    // something you need to be alerted about.
+    const yourMs = p.humanColor === 'w' ? p.whiteMs : p.blackMs;
+    if (p.turn === p.humanColor && yourMs <= 10000 && !p.lowTimeWarned) {
+      p.lowTimeWarned = true;
+      playSound('lowtime');
+    }
+    renderPlayerPlates();
   }, 200);
 }
 
@@ -1400,30 +1600,6 @@ function formatClock(ms) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function renderClocks() {
-  const p = state.play;
-  const row = document.getElementById('clock-row');
-  if (!p || !p.clockEnabled) { row.classList.add('hidden'); return; }
-  row.classList.remove('hidden');
-
-  // Top of the board is whoever is not the human (board is oriented to them).
-  const humanIsWhite = p.humanColor === 'w';
-  const topMs = humanIsWhite ? p.blackMs : p.whiteMs;
-  const bottomMs = humanIsWhite ? p.whiteMs : p.blackMs;
-  const topTurn = humanIsWhite ? p.turn === 'b' : p.turn === 'w';
-
-  document.getElementById('clock-top-label').textContent = 'Maia';
-  document.getElementById('clock-bottom-label').textContent = 'You';
-  document.getElementById('clock-top-time').textContent = formatClock(topMs);
-  document.getElementById('clock-bottom-time').textContent = formatClock(bottomMs);
-
-  const top = document.getElementById('clock-top');
-  const bottom = document.getElementById('clock-bottom');
-  top.classList.toggle('active', topTurn && !p.result);
-  bottom.classList.toggle('active', !topTurn && !p.result);
-  top.classList.toggle('low', topMs < 30000);
-  bottom.classList.toggle('low', bottomMs < 30000);
-}
 
 /** Play-mode move list, reusing the analysis move table's markup so the two
     modes look consistent. Oriented to the human, same as section 5 requires
@@ -1433,6 +1609,8 @@ function renderPlayMoveTable() {
   tbody.innerHTML = '';
   const history = state.play.sanHistory || [];
   const humanIsWhite = state.play.humanColor === 'w';
+  document.getElementById('mt-yours').textContent = `${state.user.display_name || 'You'} (you)`;
+  document.getElementById('mt-theirs').textContent = 'Maia3';
   for (let i = 0; i < history.length; i += 2) {
     const whiteSan = history[i];
     const blackSan = history[i + 1];

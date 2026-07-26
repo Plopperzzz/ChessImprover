@@ -27,6 +27,7 @@
   <header id="topbar">
     <span id="whoami"></span>
     <div class="spacer"></div>
+    <button id="sound-btn" title="Sound effects">🔊</button>
     <button id="settings-btn">Settings</button>
     <button id="logout-btn">Log out</button>
   </header>
@@ -34,22 +35,39 @@
   <main id="layout">
     <section id="board-col">
       <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
-      <div id="clock-row" class="hidden">
-        <span class="clock" id="clock-top"><b id="clock-top-label">Maia</b> <span id="clock-top-time">--:--</span></span>
-        <span class="clock" id="clock-bottom"><b id="clock-bottom-label">You</b> <span id="clock-bottom-time">--:--</span></span>
+      <!-- The plates sit with the board and follow its orientation, so the
+           name below the board is always the player at the bottom. -->
+      <div class="player-plate" id="plate-top">
+        <span class="plate-dot"></span>
+        <span class="plate-name">—</span>
+        <span class="plate-rating"></span>
+        <span class="plate-you">you</span>
+        <span class="spacer"></span>
+        <span class="plate-result"></span>
+        <span class="plate-clock"></span>
       </div>
       <div id="board"></div>
+      <div class="player-plate" id="plate-bottom">
+        <span class="plate-dot"></span>
+        <span class="plate-name">—</span>
+        <span class="plate-rating"></span>
+        <span class="plate-you">you</span>
+        <span class="spacer"></span>
+        <span class="plate-result"></span>
+        <span class="plate-clock"></span>
+      </div>
       <div id="nav-buttons">
         <button id="nav-start" title="First move">|&lt;</button>
         <button id="nav-prev" title="Previous move">&lt;</button>
         <button id="nav-next" title="Next move">&gt;</button>
         <button id="nav-end" title="Last move">&gt;|</button>
+        <button id="nav-flip" title="Flip the board">⇅</button>
       </div>
-      <div id="fen-row">
+      <div class="fen-row">
         <input type="text" id="fen-box" readonly />
         <button id="fen-copy">Copy</button>
       </div>
-      <div id="fen-row">
+      <div class="fen-row">
         <input type="text" id="fen-goto" placeholder="paste a FEN to jump to it" />
         <button id="fen-goto-btn">Go</button>
       </div>
@@ -178,10 +196,15 @@
         <div id="trend-table"></div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="moves-panel">
         <h3>Moves</h3>
         <div id="move-table-wrap">
-          <table id="move-table"><tbody></tbody></table>
+          <!-- Section 5 puts your moves in the left column whichever colour
+               you played, so the header has to say which is which. -->
+          <table id="move-table">
+            <thead><tr><th></th><th id="mt-yours"></th><th id="mt-theirs"></th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
     </section>
