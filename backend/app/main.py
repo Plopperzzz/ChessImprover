@@ -7,11 +7,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import Scope
 
 from .analysis import router as analysis_router
+from .batch import router as batch_router
 from .analysis import ws_router as analysis_ws_router
 from .auth import require_user
 from .auth import router as auth_router
 from .db import init_db
-from .engine_manager import manager
+from .engine_manager import job_engine_status, manager
 from .engine_settings import router as settings_router
 from .games import router as games_router
 from .live_eval_ws import router as ws_router
@@ -51,6 +52,7 @@ app.include_router(analysis_ws_router)
 app.include_router(play_router)
 app.include_router(sweep_router)
 app.include_router(runs_router)
+app.include_router(batch_router)
 
 
 @app.get("/api/asset-sets")
@@ -65,7 +67,8 @@ def engines_status(user: dict = Depends(require_user)):
     Covers both persistent pools -- live-eval sessions and play-vs-Maia
     sessions; analysis-job engines are short-lived and listed separately at
     /api/analysis/jobs."""
-    return [{"kind": "live-eval", **s} for s in manager.status()] + play_status()
+    return ([{"kind": "live-eval", **s} for s in manager.status()]
+            + play_status() + job_engine_status())
 
 
 class RevalidatingStaticFiles(StaticFiles):

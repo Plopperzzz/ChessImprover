@@ -38,6 +38,7 @@ class AnalysisJob:
         self.user_id = user_id
         self.game_id = game_id
         self.run_id: int | None = None
+        self.cancelled = False
         self.events: list[dict] = []
         self.subscribers: set[WebSocket] = set()
         self.task: asyncio.Task | None = None
@@ -76,25 +77,43 @@ def _parse_game_positions(pgn_text: str):
     return fens, sans, board
 
 
+async def open_stockfish(engine_settings: dict):
+    """A configured Stockfish process. Batch mode opens one for the whole run
+    rather than paying process startup per game."""
+    path = engine_settings.get("stockfish_binary")
+    if not path:
+        raise RuntimeError("No Stockfish engine selected -- choose one in Settings")
+    return await start_configured_engine(path, engine_options_from_settings(engine_settings))
+
+
 async def stockfish_pass(job: AnalysisJob, pgn_text: str, engine_settings: dict,
-                         progress_scale: float = 1.0, progress_base: float = 0.0):
-    """The N+1-eval Stockfish pass (section 8). Shared by quick and full mode
-    so both classify identically. progress_scale/base let full mode fold this
-    into a combined progress bar."""
+                         progress_scale: float = 1.0, progress_base: float = 0.0,
+                         engine=None):
+    """The N+1-eval Stockfish pass (section 8). Shared by quick, full and batch
+    mode so all three classify identically. progress_scale/base fold this into
+    a combined progress bar; `engine` reuses a caller-owned process, in which
+    case the caller also owns closing it."""
     fens, sans, final_board = _parse_game_positions(pgn_text)
     total = len(fens) - 1
     cp_evals: list[float] = [0.0] * len(fens)
 
-    path = engine_settings.get("stockfish_binary")
-    if not path:
-        raise RuntimeError("No Stockfish engine selected -- choose one in Settings")
-
-    engine = await start_configured_engine(path, engine_options_from_settings(engine_settings))
+    owned = engine is None
+    if owned:
+        engine = await open_stockfish(engine_settings)
+    else:
+        # Fresh search state between games in a batch.
+        await engine.send_line("ucinewgame")
+        await engine.send_line("isready")
+        await engine.wait_for("readyok")
     limit_type = engine_settings.get("sf_limit_type", "depth")
     limit_value = engine_settings.get("sf_limit_value", 18)
 
     try:
         for i, fen in enumerate(fens):
+            # Checked per position, not per game: a batch cancel should land
+            # within one evaluation, not wait out a 200-ply game.
+            if getattr(job, "cancelled", False):
+                raise asyncio.CancelledError()
             is_final = i == len(fens) - 1
             if is_final and final_board.is_checkmate():
                 # the side to move at the final position is the one who got mated
@@ -109,8 +128,9 @@ async def stockfish_pass(job: AnalysisJob, pgn_text: str, engine_settings: dict,
             await job.emit({"type": "progress", "ply": i, "total": total, "fen": fen,
                             "fraction": frac, "phase": "stockfish"})
     finally:
-        engine.terminate()
-        await engine.wait_closed()
+        if owned:
+            engine.terminate()
+            await engine.wait_closed()
 
     moves = classify_moves(cp_evals)
     for m, san in zip(moves, sans):

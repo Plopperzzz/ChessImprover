@@ -111,6 +111,31 @@
       </div>
 
       <div class="panel">
+        <h3>Batch analysis</h3>
+        <div class="play-grid">
+          <label>Mode
+            <select id="batch-mode">
+              <option value="quick">Quick</option>
+              <option value="full">Full</option>
+            </select>
+          </label>
+          <label>Games
+            <select id="batch-scope">
+              <option value="unanalyzed">Not yet analysed</option>
+              <option value="all">All games</option>
+            </select>
+          </label>
+        </div>
+        <div class="play-buttons">
+          <button id="batch-start">Start batch</button>
+          <button id="batch-cancel" class="hidden">Cancel</button>
+        </div>
+        <div id="batch-progress"><div id="batch-progress-fill"></div></div>
+        <div id="batch-status"></div>
+        <div id="batch-failures"></div>
+      </div>
+
+      <div class="panel">
         <h3>Elo estimate (Maia sweep)</h3>
         <button id="sweep-btn" disabled>Run Elo sweep</button>
         <div id="sweep-progress"><div id="sweep-progress-fill"></div></div>
@@ -181,6 +206,9 @@
         <label>Elo min <input type="number" id="s-maia-elo-min" /></label>
         <label>Elo max <input type="number" id="s-maia-elo-max" /></label>
         <label>Elo step <input type="number" id="s-maia-elo-step" /></label>
+        <label>Elo step in batch (coarser keeps long runs affordable)
+          <input type="number" id="s-maia-elo-step-batch" min="10" />
+        </label>
         <label>Great: max win-prob given up vs best (0.02 = near-lossless)
           <input type="number" id="s-great-drop" step="0.01" min="0" max="0.5" />
         </label>

@@ -26,6 +26,7 @@ class EngineSettings(BaseModel):
     maia_elo_min: int = 1100
     maia_elo_max: int = 1900
     maia_elo_step: int = 100
+    maia_elo_step_batch: int = 200
     great_max_drop: float = Field(default=0.02, ge=0.0, le=0.5)
     great_max_match_rate: float = Field(default=0.20, ge=0.0, le=1.0)
     brilliant_enabled: bool = True
@@ -96,7 +97,7 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
             """UPDATE engine_settings SET
                 stockfish_path=?, stockfish_threads=?, stockfish_hash_mb=?,
                 sf_limit_type=?, sf_limit_value=?, sf_skill_level=?,
-                maia_path=?, maia_model_size=?, maia_elo_min=?, maia_elo_max=?, maia_elo_step=?,
+                maia_path=?, maia_model_size=?, maia_elo_min=?, maia_elo_max=?, maia_elo_step=?, maia_elo_step_batch=?,
                 maia_options_json=?, stockfish_options_json=?,
                 great_max_drop=?, great_max_match_rate=?, brilliant_enabled=?,
                 updated_at=datetime('now')
@@ -104,7 +105,7 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
             (
                 body.stockfish_path, body.stockfish_threads, body.stockfish_hash_mb,
                 body.sf_limit_type, body.sf_limit_value, body.sf_skill_level,
-                body.maia_path, body.maia_model_size, body.maia_elo_min, body.maia_elo_max, body.maia_elo_step,
+                body.maia_path, body.maia_model_size, body.maia_elo_min, body.maia_elo_max, body.maia_elo_step, body.maia_elo_step_batch,
                 json.dumps(body.maia_options or {}), json.dumps(body.stockfish_options or {}),
                 body.great_max_drop, body.great_max_match_rate, int(body.brilliant_enabled),
                 user["id"],

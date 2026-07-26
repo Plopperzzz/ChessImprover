@@ -76,25 +76,15 @@ async def _bestmove(engine: EngineProcess, fen: str) -> str | None:
             return parts[1] if len(parts) >= 2 else None
 
 
-async def _sweep_core(job, pgn_text: str, settings: dict,
-                      progress_scale: float = 1.0, progress_base: float = 0.0) -> dict:
-    """The engine half of a sweep: fills the (position x Elo) match matrix for
-    both players. Shared by the standalone sweep and full mode, so the two can
-    never drift apart in how they score a position."""
+async def open_maia(settings: dict):
+    """A configured Maia process plus the Elo option it actually advertises.
+    Batch mode opens one for the whole run instead of per game."""
     configured = settings.get("maia_binary")
     if not configured:
         raise RuntimeError("No Maia engine selected -- choose one in Settings")
     path, note = resolve_maia_binary(configured, settings.get("maia_model_size"))
     if not path:
         raise RuntimeError(note)
-
-    grid = build_grid(settings.get("maia_elo_min", 1100),
-                      settings.get("maia_elo_max", 1900),
-                      settings.get("maia_elo_step", 100))
-    by_player = positions_by_player(pgn_text)
-    total_work = len(grid) * sum(len(v) for v in by_player.values())
-    if total_work == 0:
-        raise RuntimeError("this game has no positions to sweep")
 
     engine = EngineProcess(path)
     await engine.start()
@@ -118,6 +108,35 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
             await engine.send_line(f"setoption name {real} value {value}")
     await engine.send_line("isready")
     await engine.wait_for("readyok")
+    return {"engine": engine, "elo_option": elo_option, "note": note}
+
+
+async def _sweep_core(job, pgn_text: str, settings: dict,
+                      progress_scale: float = 1.0, progress_base: float = 0.0,
+                      maia=None, grid: list[int] | None = None) -> dict:
+    """The engine half of a sweep: fills the (position x Elo) match matrix for
+    both players. Shared by the standalone sweep, full mode and batch, so none
+    of them can drift apart in how a position is scored.
+
+    `maia` reuses a caller-owned process (the caller then owns closing it);
+    `grid` overrides the Elo grid, which batch mode uses to sweep coarser.
+    """
+    owned = maia is None
+    if owned:
+        maia = await open_maia(settings)
+    engine, elo_option, note = maia["engine"], maia["elo_option"], maia["note"]
+
+    if grid is None:
+        grid = build_grid(settings.get("maia_elo_min", 1100),
+                          settings.get("maia_elo_max", 1900),
+                          settings.get("maia_elo_step", 100))
+    by_player = positions_by_player(pgn_text)
+    total_work = len(grid) * sum(len(v) for v in by_player.values())
+    if total_work == 0:
+        if owned:
+            engine.terminate()
+            await engine.wait_closed()
+        raise RuntimeError("this game has no positions to sweep")
 
     matrices = {side: np.zeros((len(rows), len(grid))) for side, rows in by_player.items()}
     done = 0
@@ -129,6 +148,8 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
             await engine.wait_for("readyok")
             for side, rows in by_player.items():
                 for pi, row in enumerate(rows):
+                    if getattr(job, "cancelled", False):
+                        raise asyncio.CancelledError()
                     best = await _bestmove(engine, row["fen"])
                     matrices[side][pi, gi] = 1.0 if best == row["uci"] else 0.0
                     done += 1
@@ -137,8 +158,9 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
                                         "elo": elo, "fen": row["fen"], "phase": "maia",
                                         "fraction": progress_base + progress_scale * (done / total_work)})
     finally:
-        engine.terminate()
-        await engine.wait_closed()
+        if owned:
+            engine.terminate()
+            await engine.wait_closed()
 
     return {"grid": grid, "by_player": by_player, "matrices": matrices, "note": note}
 

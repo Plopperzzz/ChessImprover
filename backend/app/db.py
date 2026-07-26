@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS engine_settings (
     maia_elo_min INTEGER NOT NULL DEFAULT 1100,
     maia_elo_max INTEGER NOT NULL DEFAULT 1900,
     maia_elo_step INTEGER NOT NULL DEFAULT 100,
+    -- Coarser grid for batch runs: a fine sweep is affordable for one game
+    -- and not for a thousand (section 9).
+    maia_elo_step_batch INTEGER NOT NULL DEFAULT 200,
     -- Great/Brilliant criteria (spec section 8 asked for these to be pinned
     -- down rather than improvised, and they're taste, so they're settings).
     great_max_drop REAL NOT NULL DEFAULT 0.02,
@@ -165,6 +168,7 @@ def init_db():
         _ensure_column(conn, "engine_settings", "great_max_drop", "REAL NOT NULL DEFAULT 0.02")
         _ensure_column(conn, "engine_settings", "great_max_match_rate", "REAL NOT NULL DEFAULT 0.20")
         _ensure_column(conn, "engine_settings", "brilliant_enabled", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "engine_settings", "maia_elo_step_batch", "INTEGER NOT NULL DEFAULT 200")
         _ensure_column(conn, "engine_settings", "stockfish_options_json", "TEXT NOT NULL DEFAULT '{}'")
         conn.commit()
     finally:

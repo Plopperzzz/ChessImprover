@@ -17,6 +17,8 @@ const state = {
   analysisJobId: null,
   analysisWs: null,
   sweepWs: null,
+  batchJobId: null,
+  batchWs: null,
   playMode: false,
   play: null, // { ws, chess, humanColor, turn, whiteMs, blackMs, clockEnabled, result, tick }
 };
@@ -107,6 +109,7 @@ async function initApp() {
   wireSettingsDialog();
   wireAnalysis();
   wireSweep();
+  wireBatch();
   wirePlay();
   connectLiveEval();
 
@@ -639,6 +642,132 @@ function renderBlunderElo(moves, yourColor) {
   box.appendChild(wrap);
 }
 
+/* ---------------- Batch analysis (spec section 12) ---------------- */
+
+function wireBatch() {
+  document.getElementById('batch-start').addEventListener('click', startBatch);
+  document.getElementById('batch-cancel').addEventListener('click', cancelBatch);
+  for (const id of ['batch-mode', 'batch-scope']) {
+    document.getElementById(id).addEventListener('change', refreshBatchPreview);
+  }
+  refreshBatchPreview();
+}
+
+/** Says how many games a batch would cover before committing to what may be
+    a very long run. */
+async function refreshBatchPreview() {
+  if (state.batchJobId) return; // mid-run, the status line is more useful
+  const mode = document.getElementById('batch-mode').value;
+  const scope = document.getElementById('batch-scope').value;
+  try {
+    const info = await api(`/api/batch/preview?mode=${mode}&scope=${scope}`);
+    document.getElementById('batch-status').textContent =
+      info.count ? `${info.count} game(s) would be analysed.` : 'Nothing to analyse for that selection.';
+    document.getElementById('batch-start').disabled = info.count === 0;
+  } catch (e) {
+    document.getElementById('batch-status').textContent = '';
+  }
+}
+
+async function startBatch() {
+  const mode = document.getElementById('batch-mode').value;
+  const scope = document.getElementById('batch-scope').value;
+  const runId = document.getElementById('run-picker').value;
+  document.getElementById('batch-start').disabled = true;
+  document.getElementById('batch-failures').innerHTML = '';
+  document.getElementById('batch-status').textContent = 'Starting...';
+  try {
+    const res = await api('/api/batch', { method: 'POST', body: JSON.stringify({
+      mode, scope, run_id: runId ? Number(runId) : null,
+    }) });
+    state.batchJobId = res.job_id;
+    state.batchTotal = res.total;
+    state.batchFailures = [];
+    document.getElementById('batch-cancel').classList.remove('hidden');
+    watchBatchJob(res.job_id);
+  } catch (e) {
+    document.getElementById('batch-status').textContent = 'Error: ' + e.message;
+    document.getElementById('batch-start').disabled = false;
+  }
+}
+
+async function cancelBatch() {
+  if (!state.batchJobId) return;
+  document.getElementById('batch-cancel').disabled = true;
+  document.getElementById('batch-status').textContent = 'Cancelling after the current game...';
+  await api(`/api/batch/${state.batchJobId}/cancel`, { method: 'POST' });
+}
+
+function watchBatchJob(jobId) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/analysis/${jobId}`);
+  state.batchWs = ws;
+  let chain = Promise.resolve();
+  ws.addEventListener('message', (ev) => {
+    const msg = JSON.parse(ev.data);
+    chain = chain.then(() => handleBatchMessage(msg)).catch((e) => console.error('batch message failed', e));
+  });
+  ws.addEventListener('close', () => {
+    // A long run outlives a phone screen lock; the server replays the backlog.
+    if (state.batchWs === ws && state.batchJobId === jobId) {
+      setTimeout(() => watchBatchJob(jobId), 2000);
+    }
+  });
+}
+
+async function handleBatchMessage(msg) {
+  const status = document.getElementById('batch-status');
+  if (msg.type === 'game_start') {
+    // Section 6: show whichever game is currently being processed.
+    try {
+      state.explorer.loadPGN(msg.pgn, state.user.display_name);
+      state.board.setOrientation(state.explorer.yourColor === 'b' ? 'b' : 'w');
+      state.explorer.goToStart();
+      state.classifications = {};
+      renderMoveTable();
+      state.board.renderFEN(state.explorer.fen);
+    } catch (e) { /* an unparseable game still gets reported by game_failed */ }
+    status.innerHTML = `Game <b>${msg.index + 1}</b> of <b>${msg.total}</b>: ${msg.white || '?'} vs ${msg.black || '?'}`;
+  } else if (msg.type === 'progress') {
+    if (msg.phase === 'maia') {
+      if (msg.fen) state.board.renderFEN(msg.fen);
+    } else if (msg.ply !== undefined) {
+      await animateToMainlinePly(msg.ply);
+    }
+    if (msg.fraction !== undefined) {
+      document.getElementById('batch-progress-fill').style.width = (msg.fraction * 100).toFixed(1) + '%';
+    }
+  } else if (msg.type === 'game_done') {
+    document.getElementById('batch-progress-fill').style.width =
+      (((msg.index + 1) / msg.total) * 100).toFixed(1) + '%';
+  } else if (msg.type === 'game_failed') {
+    // One bad game shouldn't stop a long run, but it shouldn't vanish either.
+    const div = document.createElement('div');
+    div.textContent = `Game ${msg.index + 1} failed: ${msg.message}`;
+    document.getElementById('batch-failures').appendChild(div);
+  } else if (msg.type === 'done') {
+    const bits = [`${msg.completed} analysed`];
+    if (msg.failed) bits.push(`${msg.failed} failed`);
+    if (msg.cancelled) bits.push('cancelled (finished games are saved)');
+    status.innerHTML = `Batch finished — <b>${bits.join(', ')}</b>.`;
+    document.getElementById('batch-progress-fill').style.width = '100%';
+    finishBatch();
+    await refreshGameList();
+    await refreshRunPicker();
+  } else if (msg.type === 'error') {
+    status.textContent = 'Error: ' + msg.message;
+    finishBatch();
+  }
+}
+
+function finishBatch() {
+  state.batchJobId = null;
+  if (state.batchWs) { state.batchWs.close(); state.batchWs = null; }
+  document.getElementById('batch-cancel').classList.add('hidden');
+  document.getElementById('batch-cancel').disabled = false;
+  document.getElementById('batch-start').disabled = false;
+}
+
 /* ---------------- Elo sweep (Maia, spec section 9) ---------------- */
 
 function wireSweep() {
@@ -1123,6 +1252,7 @@ function wireSettingsDialog() {
       maia_elo_min: Number(document.getElementById('s-maia-elo-min').value),
       maia_elo_max: Number(document.getElementById('s-maia-elo-max').value),
       maia_elo_step: Number(document.getElementById('s-maia-elo-step').value),
+      maia_elo_step_batch: Number(document.getElementById('s-maia-elo-step-batch').value),
       great_max_drop: Number(document.getElementById('s-great-drop').value),
       great_max_match_rate: Number(document.getElementById('s-great-rate').value),
       brilliant_enabled: document.getElementById('s-brilliant').value === '1',
@@ -1421,6 +1551,7 @@ async function fillSettingsForm() {
   document.getElementById('s-maia-elo-min').value = s.maia_elo_min;
   document.getElementById('s-maia-elo-max').value = s.maia_elo_max;
   document.getElementById('s-maia-elo-step').value = s.maia_elo_step;
+  document.getElementById('s-maia-elo-step-batch').value = s.maia_elo_step_batch ?? 200;
   document.getElementById('s-great-drop').value = s.great_max_drop ?? 0.02;
   document.getElementById('s-great-rate').value = s.great_max_match_rate ?? 0.20;
   document.getElementById('s-brilliant').value = s.brilliant_enabled ? '1' : '0';

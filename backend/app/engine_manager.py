@@ -350,3 +350,33 @@ class LiveEngineManager:
 
 
 manager = LiveEngineManager()
+
+
+# Engines owned by a running job (a batch, or a single-game analysis). These
+# are a separate pool from the persistent live-eval sessions (section 3) but
+# still need to show up in process accounting, otherwise a batch that leaks an
+# engine is invisible.
+job_engines: dict[str, dict] = {}
+
+
+def register_job_engine(job_id: str, user_id: int, kind: str, engine: EngineProcess):
+    job_engines[f"{job_id}:{kind}"] = {
+        "job_id": job_id, "user_id": user_id, "kind": kind,
+        "engine": engine, "started_at": time.monotonic(),
+    }
+
+
+def unregister_job_engine(job_id: str, kind: str):
+    job_engines.pop(f"{job_id}:{kind}", None)
+
+
+def job_engine_status() -> list[dict]:
+    now = time.monotonic()
+    return [
+        {
+            "job_id": e["job_id"], "user_id": e["user_id"], "kind": e["kind"],
+            "pid": e["engine"].pid, "binary": e["engine"].path,
+            "uptime_s": round(now - e["started_at"], 1),
+        }
+        for e in job_engines.values()
+    ]

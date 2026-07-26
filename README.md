@@ -6,7 +6,7 @@ follows.
 
 ## Status
 
-This covers build-order steps 1-8 from the spec: multi-user schema and auth,
+This covers build-order steps 1-9 from the spec: multi-user schema and auth,
 PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
 backed by a persistent per-session engine process, variation support (a real
 move tree -- branch off the mainline by playing a different move, delete a
@@ -14,8 +14,37 @@ variation, the mainline itself is never lost), Quick-mode analysis (a
 Stockfish-only pass classifying every mainline move as Good/Inaccuracy/
 Mistake/Blunder, with the board animating through positions as they're
 evaluated), Play vs Maia3 with a configurable time control, the Maia Elo
-sweep, Great/Brilliant classification with the blunder-Elo correlation, and
-saved analysis runs. Batch mode and the trend view are not yet built.
+sweep, Great/Brilliant classification with the blunder-Elo correlation,
+saved analysis runs, and batch mode. The bounded worker pool (step 10) and
+the trend view are not yet built.
+
+### Batch mode
+
+Runs Quick or Full across many games, either everything or only games not yet
+analysed in that mode -- so a cancelled run resumes where it stopped instead
+of redoing work. The button says how many games it would cover before you
+commit to a long run.
+
+Three choices come from the 1000-game target in the spec:
+
+- **Engine processes are opened once per batch, not per game.** At that scale
+  the process startup and UCI handshake would otherwise be a real share of
+  the wall clock. Verified: the engine PID stays constant across a whole run,
+  and batch engines now appear in `/api/engines/status` alongside the
+  live-eval and play pools.
+- **Each game is saved the moment it finishes.** Cancelling or crashing keeps
+  everything done so far rather than losing the lot.
+- **The sweep uses a separate, coarser Elo step in batch** (default 200 vs
+  100), since a fine grid is affordable for one game and not for a thousand.
+
+Cancel is checked per *position*, not per game, so it takes effect within one
+evaluation rather than waiting out a 200-ply game. A game that fails to parse
+is recorded and skipped rather than sinking the run.
+
+The board follows whichever game is being processed, per section 6.
+
+Batches still run their games sequentially. Letting two users' batches share
+the machine through a bounded worker pool is step 10.
 
 ### Saved analyses
 
