@@ -12,7 +12,6 @@ const state = {
   seq: 0,
   lastMoverColor: 'w',
   settings: null,
-  browseTarget: null,
   classifications: {}, // ply -> classification dict, from the last completed analysis job
   analysisJobId: null,
   analysisWs: null,
@@ -846,15 +845,54 @@ function wireSettingsDialog() {
     connectLiveEval();
   });
 
-  document.getElementById('s-sf-browse').addEventListener('click', () => openBrowse('s-sf-path'));
-  document.getElementById('s-maia-browse').addEventListener('click', () => openBrowse('s-maia-path'));
-  // Re-scan when the path changes (typed or picked) and when the size changes,
-  // so the dialog always shows the binary that will actually be launched.
+  // Re-scan when the Maia engine or size changes, so the dialog always shows
+  // the binary that will actually be launched.
   document.getElementById('s-maia-path').addEventListener('change', () => refreshMaiaModels());
   document.getElementById('s-maia-size').addEventListener('change', () => refreshMaiaModels());
-  document.getElementById('browse-cancel').addEventListener('click', () => {
-    document.getElementById('browse-panel').classList.add('hidden');
-  });
+}
+
+/** Fills both engine dropdowns from the binaries discovered under the
+    Engines directory. The browser only ever holds these names -- absolute
+    paths never leave the server, and the settings API rejects anything that
+    doesn't resolve inside that directory. */
+async function populateEngineDropdowns(selectedStockfish, selectedMaia) {
+  const hint = document.getElementById('engines-hint');
+  let info;
+  try {
+    info = await api('/api/settings/engines');
+  } catch (e) {
+    hint.textContent = 'Could not list engines: ' + e.message;
+    return;
+  }
+
+  for (const [id, selected] of [['s-sf-path', selectedStockfish], ['s-maia-path', selectedMaia]]) {
+    const sel = document.getElementById(id);
+    sel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '(none selected)';
+    sel.appendChild(none);
+    for (const eng of info.engines) {
+      const opt = document.createElement('option');
+      opt.value = eng.value;
+      opt.textContent = eng.folder ? `${eng.folder}/${eng.name}` : eng.name;
+      sel.appendChild(opt);
+    }
+    // A previously-saved selection that no longer exists falls back to
+    // "(none selected)" rather than silently pointing at nothing.
+    sel.value = selected && info.engines.some((e) => e.value === selected) ? selected : '';
+  }
+
+  if (!info.engines_dir_exists) {
+    hint.textContent = 'No assets/Engines directory yet — create it and put your engine folders inside.';
+    hint.classList.add('warn');
+  } else if (info.engines.length === 0) {
+    hint.textContent = 'No engines found under assets/Engines.';
+    hint.classList.add('warn');
+  } else {
+    hint.textContent = `${info.engines.length} engine(s) found under assets/Engines.`;
+    hint.classList.remove('warn');
+  }
 }
 
 /** Populates the model-size dropdown from the maia3-<size> executables that
@@ -934,59 +972,16 @@ async function fillSettingsForm() {
   sel.value = state.user.asset_set || 'default';
   renderAssetPreview(sel.value);
 
-  document.getElementById('s-sf-path').value = s.stockfish_path || '';
+  await populateEngineDropdowns(s.stockfish_path, s.maia_path);
   document.getElementById('s-sf-threads').value = s.stockfish_threads;
   document.getElementById('s-sf-hash').value = s.stockfish_hash_mb;
   document.getElementById('s-sf-limit-type').value = s.sf_limit_type;
   document.getElementById('s-sf-limit-value').value = s.sf_limit_value;
   document.getElementById('s-sf-skill').value = s.sf_skill_level === null || s.sf_skill_level === undefined ? '' : s.sf_skill_level;
-  document.getElementById('s-maia-path').value = s.maia_path || '';
   await refreshMaiaModels(s.maia_model_size);
   document.getElementById('s-maia-elo-min').value = s.maia_elo_min;
   document.getElementById('s-maia-elo-max').value = s.maia_elo_max;
   document.getElementById('s-maia-elo-step').value = s.maia_elo_step;
-}
-
-async function openBrowse(targetFieldId) {
-  state.browseTarget = targetFieldId;
-  const current = document.getElementById(targetFieldId).value;
-  // Works for both '/foo/bar' and 'C:\foo\bar' -- strip the last path segment
-  // regardless of which separator the server's OS uses. No match (or no
-  // existing value) means: start at the root (Unix) or the drive list (Windows).
-  const m = current.match(/^(.*)[\\/][^\\/]+[\\/]?$/);
-  const startPath = m ? m[1] : '';
-  await renderBrowse(startPath);
-  document.getElementById('browse-panel').classList.remove('hidden');
-}
-
-async function renderBrowse(path) {
-  const data = await api(`/api/fs/browse?path=${encodeURIComponent(path)}`);
-  document.getElementById('browse-path').textContent = data.path;
-  const list = document.getElementById('browse-list');
-  list.innerHTML = '';
-  // parent is null only at a true root with nowhere to go up to; '' (e.g. a
-  // Windows drive root) still means "go up" -- back to the drive list.
-  if (data.parent !== null && data.parent !== undefined) {
-    const up = document.createElement('div');
-    up.className = 'browse-entry dir';
-    up.textContent = '..';
-    up.addEventListener('click', () => renderBrowse(data.parent));
-    list.appendChild(up);
-  }
-  for (const entry of data.entries) {
-    const div = document.createElement('div');
-    div.className = 'browse-entry ' + (entry.is_dir ? 'dir' : 'file');
-    div.textContent = entry.name;
-    div.addEventListener('click', () => {
-      if (entry.is_dir) {
-        renderBrowse(entry.full_path);
-      } else {
-        document.getElementById(state.browseTarget).value = entry.full_path;
-        document.getElementById('browse-panel').classList.add('hidden');
-      }
-    });
-    list.appendChild(div);
-  }
 }
 
 boot();

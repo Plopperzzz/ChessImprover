@@ -130,11 +130,8 @@
 
       <fieldset>
         <legend>Stockfish</legend>
-        <label>Binary path
-          <div class="path-row">
-            <input type="text" id="s-sf-path" />
-            <button type="button" id="s-sf-browse">Browse&hellip;</button>
-          </div>
+        <label>Engine
+          <select id="s-sf-path"></select>
         </label>
         <label>Threads <input type="number" id="s-sf-threads" min="1" max="64" /></label>
         <label>Hash (MB) <input type="number" id="s-sf-hash" min="1" max="16384" /></label>
@@ -152,11 +149,8 @@
 
       <fieldset>
         <legend>Maia3</legend>
-        <label>Binary/weights path
-          <div class="path-row">
-            <input type="text" id="s-maia-path" />
-            <button type="button" id="s-maia-browse">Browse&hellip;</button>
-          </div>
+        <label>Engine
+          <select id="s-maia-path"></select>
         </label>
         <label>Model size
           <select id="s-maia-size"></select>
@@ -169,11 +163,7 @@
         <label>Elo step <input type="number" id="s-maia-elo-step" /></label>
       </fieldset>
 
-      <div id="browse-panel" class="hidden">
-        <div id="browse-path"></div>
-        <div id="browse-list"></div>
-        <button type="button" id="browse-cancel">Cancel</button>
-      </div>
+      <div id="engines-hint"></div>
 
       <div class="dialog-actions">
         <button type="button" id="settings-cancel">Cancel</button>

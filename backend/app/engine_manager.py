@@ -295,9 +295,9 @@ class LiveEngineManager:
         self._sweep_task: asyncio.Task | None = None
 
     async def create_session(self, connection_id, user, engine_settings, on_eval) -> LiveEngineSession:
-        path = engine_settings.get("stockfish_path")
+        path = engine_settings.get("stockfish_binary")
         if not path:
-            raise RuntimeError("Stockfish path is not configured -- set it in Settings first")
+            raise RuntimeError("No Stockfish engine selected -- choose one in Settings")
         session = LiveEngineSession(
             owner_user_id=user["id"],
             connection_id=connection_id,

@@ -2,7 +2,7 @@ import asyncio
 import sys
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import Response
+from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import Scope
 
@@ -13,7 +13,6 @@ from .auth import router as auth_router
 from .db import init_db
 from .engine_manager import manager
 from .engine_settings import router as settings_router
-from .fs_browse import router as fs_router
 from .games import router as games_router
 from .live_eval_ws import router as ws_router
 from .paths import ASSETS_DIR, FRONTEND_DIR, list_asset_sets
@@ -43,7 +42,6 @@ async def on_shutdown():
 
 app.include_router(auth_router)
 app.include_router(settings_router)
-app.include_router(fs_router)
 app.include_router(games_router)
 app.include_router(ws_router)
 app.include_router(analysis_router)
@@ -89,5 +87,17 @@ class RevalidatingStaticFiles(StaticFiles):
         return response
 
 
-app.mount("/assets", RevalidatingStaticFiles(directory=ASSETS_DIR), name="assets")
+class AssetStaticFiles(RevalidatingStaticFiles):
+    """Serves assets/ but never the Engines subdirectory. Engine binaries sit
+    under assets/ for convenience, and the app launches them server-side --
+    there is no reason to also hand them out over HTTP."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        first = path.replace("\\", "/").lstrip("/").split("/", 1)[0]
+        if first.lower() == "engines":
+            return PlainTextResponse("Not Found", status_code=404)
+        return await super().get_response(path, scope)
+
+
+app.mount("/assets", AssetStaticFiles(directory=ASSETS_DIR), name="assets")
 app.mount("/", RevalidatingStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

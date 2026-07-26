@@ -308,6 +308,8 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1
 fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
 #s-maia-resolved { font-size: 11px; color: var(--muted); margin: -4px 0 10px; word-break: break-all; }
 #s-maia-resolved.warn { color: #e0a13a; }
+#engines-hint { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+#engines-hint.warn { color: #e0a13a; }
 
 #asset-preview {
   position: relative;

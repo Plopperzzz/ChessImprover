@@ -5,6 +5,11 @@ REPO_ROOT = os.path.dirname(BASE_DIR)
 ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
 
+# The only directory engine binaries may be launched from. It lives under
+# assets/ for convenience, but is explicitly *not* served over HTTP -- see
+# the assets mount in main.py.
+ENGINES_DIR = os.path.join(ASSETS_DIR, "Engines")
+
 
 def list_asset_sets() -> list[str]:
     sets_dir = os.path.join(ASSETS_DIR, "sets")

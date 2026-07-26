@@ -80,9 +80,9 @@ async def _run_quick_job(job: AnalysisJob, pgn_text: str, engine_settings: dict)
         total = len(fens) - 1  # number of moves
         cp_evals: list[float] = [0.0] * len(fens)
 
-        path = engine_settings.get("stockfish_path")
+        path = engine_settings.get("stockfish_binary")
         if not path:
-            raise RuntimeError("Stockfish path is not configured -- set it in Settings first")
+            raise RuntimeError("No Stockfish engine selected -- choose one in Settings")
 
         engine = await start_configured_engine(path, engine_options_from_settings(engine_settings))
         limit_type = engine_settings.get("sf_limit_type", "depth")

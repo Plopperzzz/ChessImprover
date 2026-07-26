@@ -109,9 +109,9 @@ class PlaySession:
     # ---------- engine ----------
 
     async def start_engine(self, settings: dict):
-        configured = settings.get("maia_path")
+        configured = settings.get("maia_binary")
         if not configured:
-            raise RuntimeError("Maia path is not configured -- set it in Settings first")
+            raise RuntimeError("No Maia engine selected -- choose one in Settings")
 
         # Model size selects a binary, not a UCI option (see app/maia.py).
         path, note = resolve_maia_binary(configured, settings.get("maia_model_size"))

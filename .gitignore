@@ -1,5 +1,10 @@
 backend/.venv/
 backend/data/
+
+# Engine binaries. The small Maia console-script wrappers at the top level of
+# assets/Engines are tracked deliberately; whole engine releases dropped in as
+# subfolders (Stockfish is ~40MB) are not -- install those on each machine.
+assets/Engines/*/
 __pycache__/
 *.pyc
 .DS_Store

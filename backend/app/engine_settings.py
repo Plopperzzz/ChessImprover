@@ -6,8 +6,9 @@ from pydantic import BaseModel, Field
 
 from .auth import require_user
 from .db import db_cursor
+from . import engines
 from .maia import FALLBACK_SIZES, discover_sizes, resolve_binary
-from .paths import list_asset_sets
+from .paths import ENGINES_DIR, list_asset_sets
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -27,18 +28,25 @@ class EngineSettings(BaseModel):
 
 
 def get_effective_settings(user_id: int) -> dict:
-    """Settings row with the STOCKFISH_PATH env-var fallback applied. Shared
-    by the settings endpoint and the live-eval engine launcher so they never
-    disagree about which binary path is in effect."""
+    """Settings row plus the resolved absolute binaries to actually launch.
+
+    `stockfish_path` / `maia_path` are what the user selected: a path
+    relative to the Engines directory. `stockfish_binary` / `maia_binary` are
+    those resolved to absolute paths, and are the *only* values callers should
+    launch -- resolution rejects anything outside the sandbox.
+
+    STOCKFISH_PATH / MAIA_PATH still work as an escape hatch, but they're set
+    by whoever starts the server, never by the browser, so they're allowed to
+    point anywhere.
+    """
     with db_cursor() as conn:
         row = conn.execute("SELECT * FROM engine_settings WHERE user_id = ?", (user_id,)).fetchone()
     if not row:
         raise HTTPException(404, "no settings row for this user")
     d = dict(row)
-    if not d.get("stockfish_path"):
-        d["stockfish_path"] = os.environ.get("STOCKFISH_PATH")
-    if not d.get("maia_path"):
-        d["maia_path"] = os.environ.get("MAIA_PATH")
+
+    d["stockfish_binary"] = engines.resolve(d.get("stockfish_path")) or os.environ.get("STOCKFISH_PATH")
+    d["maia_binary"] = engines.resolve(d.get("maia_path")) or os.environ.get("MAIA_PATH")
     return d
 
 
@@ -56,6 +64,11 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
     # said 25m, and a future release could add more.
     if not re.fullmatch(r"\d+m", body.maia_model_size or ""):
         raise HTTPException(400, "maia_model_size must look like '5m', '23m', '79m'")
+    # Engine selections are names from the discovered list, never arbitrary
+    # paths -- reject anything that doesn't resolve inside Engines/.
+    for label, value in (("stockfish_path", body.stockfish_path), ("maia_path", body.maia_path)):
+        if not engines.is_valid_selection(value):
+            raise HTTPException(400, f"{label} must be an engine inside the Engines directory")
     with db_cursor() as conn:
         conn.execute(
             """UPDATE engine_settings SET
@@ -74,21 +87,33 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
     return get_settings(user)
 
 
+@router.get("/engines")
+def list_engines(user: dict = Depends(require_user)):
+    """Engines available to choose from, discovered under the Engines
+    directory. These names are the only values the settings API accepts --
+    the browser never handles an absolute path."""
+    return {"engines": engines.discover(), "engines_dir_exists": os.path.isdir(ENGINES_DIR)}
+
+
 @router.get("/maia-models")
 def maia_models(path: str | None = None, size: str | None = None, user: dict = Depends(require_user)):
-    """Which Maia model sizes are actually installed next to the configured
-    path, and which binary a given selection would run. `path` and `size` let
-    the settings dialog preview values the user has changed but not saved."""
+    """Which Maia model sizes are installed alongside the selected Maia
+    engine, and which binary a given selection would run. `path` (an
+    Engines-relative selection) and `size` let the settings dialog preview
+    values the user has changed but not saved."""
     settings = get_effective_settings(user["id"])
-    configured = path if path is not None else settings.get("maia_path")
+    if path is not None:
+        # Preview an unsaved selection -- still only from inside the sandbox.
+        base = engines.resolve(path) if path else None
+    else:
+        base = settings.get("maia_binary")
     chosen = size or settings.get("maia_model_size")
-    sizes = discover_sizes(configured)
-    resolved, note = resolve_binary(configured, chosen)
+    sizes = discover_sizes(base)
+    resolved, note = resolve_binary(base, chosen)
     return {
         "sizes": sizes or FALLBACK_SIZES,
         "discovered": bool(sizes),
-        "configured_path": configured,
-        "resolved_binary": resolved,
+        "resolved_binary": os.path.basename(resolved) if resolved else None,
         "note": note,
     }
 
