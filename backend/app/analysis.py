@@ -4,10 +4,10 @@ board can animate through positions as they're evaluated (section 6).
 
 Each job gets its own short-lived Stockfish process for the run's duration
 -- separate from, and never contending unmanaged with, the persistent
-live-eval session for the same user (section 3). This isn't yet running
-through the bounded CPU-sized worker pool from section 10 (multi-instance
-hardening is a later build-order step); each job is its own asyncio task for
-now.
+live-eval session for the same user (section 3). Before it opens that
+process it takes a lease from the bounded worker pool (section 10, see
+`jobqueue`), so two people analysing at once share the machine's cores
+instead of oversubscribing them.
 """
 
 import asyncio
@@ -24,6 +24,7 @@ from .classify import classify_moves, eval_to_cp
 from .db import db_cursor
 from .engine_manager import engine_options_from_settings, evaluate_position, start_configured_engine
 from .engine_settings import get_effective_settings
+from .jobqueue import pool, slots_for
 from .runs import load_for_game, save_analysis
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
@@ -58,9 +59,19 @@ class AnalysisJob:
 jobs: dict[str, AnalysisJob] = {}
 
 
+def job_finished(job: "AnalysisJob") -> bool:
+    return bool(job.events) and job.events[-1]["type"] in ("done", "error")
+
+
 def _evict_old_jobs(keep: int = MAX_RETAINED_JOBS):
-    while len(jobs) > keep:
-        jobs.pop(next(iter(jobs)), None)
+    """Drops the oldest *finished* jobs. A queued or running job is never
+    evicted -- its client is still watching it, and losing the record would
+    orphan an engine the pool still has leased out."""
+    for job_id in list(jobs.keys()):
+        if len(jobs) <= keep:
+            return
+        if job_finished(jobs[job_id]):
+            jobs.pop(job_id, None)
 
 
 def _parse_game_positions(pgn_text: str):
@@ -140,11 +151,16 @@ async def stockfish_pass(job: AnalysisJob, pgn_text: str, engine_settings: dict,
 
 async def _run_quick_job(job: AnalysisJob, pgn_text: str, engine_settings: dict):
     try:
-        moves = await stockfish_pass(job, pgn_text, engine_settings)
-        # Persist before emitting, so a client that reloads the moment it sees
-        # "done" already finds the saved copy.
-        save_analysis(job.user_id, job.game_id, "quick", {"moves": moves}, run_id=job.run_id)
+        # The lease is taken before the engine is opened, not after: a queued
+        # job should be costing nothing at all while it waits (section 10).
+        async with pool.lease(job=job, slots=slots_for(engine_settings, "quick"), label="quick"):
+            moves = await stockfish_pass(job, pgn_text, engine_settings)
+            # Persist before emitting, so a client that reloads the moment it
+            # sees "done" already finds the saved copy.
+            save_analysis(job.user_id, job.game_id, "quick", {"moves": moves}, run_id=job.run_id)
         await job.emit({"type": "done", "mode": "quick", "moves": moves})
+    except asyncio.CancelledError:
+        await job.emit({"type": "error", "message": "cancelled"})
     except Exception as e:
         await job.emit({"type": "error", "message": str(e)})
 
@@ -192,11 +208,24 @@ def list_jobs(user: dict = Depends(require_user)):
             "game_id": j.game_id,
             "subscribers": len(j.subscribers),
             "events": len(j.events),
-            "finished": bool(j.events) and j.events[-1]["type"] in ("done", "error"),
+            "finished": job_finished(j),
         }
         for j in jobs.values()
         if j.user_id == user["id"]
     ]
+
+
+@router.post("/{job_id}/cancel")
+def cancel_job(job_id: str, user: dict = Depends(require_user)):
+    """Stops a quick/full/sweep job. Needed once jobs can queue: without it a
+    job waiting behind someone else's work could only be abandoned, not
+    withdrawn, and it would still run eventually."""
+    job = jobs.get(job_id)
+    if not job or job.user_id != user["id"]:
+        raise HTTPException(404, "no such job")
+    job.cancelled = True
+    pool.cancel_job(job_id)
+    return {"ok": True}
 
 
 @ws_router.websocket("/ws/analysis/{job_id}")

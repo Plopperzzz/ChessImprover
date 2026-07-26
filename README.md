@@ -6,7 +6,7 @@ follows.
 
 ## Status
 
-This covers build-order steps 1-9 from the spec: multi-user schema and auth,
+This covers build-order steps 1-10 from the spec: multi-user schema and auth,
 PGN upload/parsing, the board/move-table/FEN viewer, a live Stockfish eval bar
 backed by a persistent per-session engine process, variation support (a real
 move tree -- branch off the mainline by playing a different move, delete a
@@ -15,8 +15,45 @@ Stockfish-only pass classifying every mainline move as Good/Inaccuracy/
 Mistake/Blunder, with the board animating through positions as they're
 evaluated), Play vs Maia3 with a configurable time control, the Maia Elo
 sweep, Great/Brilliant classification with the blunder-Elo correlation,
-saved analysis runs, and batch mode. The bounded worker pool (step 10) and
-the trend view are not yet built.
+saved analysis runs, batch mode, and the bounded worker pool that lets both
+of you analyse at once. The trend view is not yet built.
+
+### Sharing the machine (worker pool)
+
+Every piece of engine work -- a quick pass, a full analysis, a sweep, each
+game of a batch -- takes a slot from a pool sized to the server's CPU cores
+before it starts, so two people analysing at once share the hardware instead
+of each spawning as many Stockfish threads as they like. A job reserves as
+many slots as the Threads it is configured for, which is what keeps "two jobs
+running" from meaning "twelve threads on four cores". `WORKER_SLOTS=n`
+overrides the size if you want to keep cores back for something else.
+
+Three properties, all verified with two accounts against a live server:
+
+- **Neither of you gets shut out.** Waiters are ordered by how many slots
+  their owner already holds, so whoever is running nothing goes first;
+  beyond a first job, a user is capped at their share while anyone else
+  waits.
+- **A long batch yields.** The batch takes its lease *per game*, not for the
+  whole run, so its slots go back to the pool at every game boundary. In the
+  test, one user's 3-game batch handed over after game 1, the other user's
+  analysis ran to completion, and the batch picked the slots back up — rather
+  than the second user waiting out the entire run. The batch's engine
+  processes stay open across that gap (they're idle, so they cost nothing,
+  and reopening them per game is what batch mode exists to avoid).
+- **A big job isn't starved.** Admission stops at the first waiter that
+  doesn't fit rather than letting cheap jobs leapfrog it forever.
+
+When a job is waiting, the panel says so and why ("Queued — 1 job(s) ahead of
+it, needs 4 of 4 worker slot(s)") instead of showing a progress bar that never
+moves, and Cancel withdraws it from the queue. `GET /api/jobs/pool` shows
+capacity, what's running and what's queued.
+
+This pool is deliberately **not** the same thing as the persistent live-eval
+engines: those are one per open board, idle almost all the time, and cleaned
+up by their own idle timeout. Charging them a worker slot would leave the pool
+permanently short. `/api/engines/status` covers those and any job-owned
+engines; `/api/jobs/pool` covers the queue.
 
 ### Batch mode
 
@@ -43,8 +80,8 @@ is recorded and skipped rather than sinking the run.
 
 The board follows whichever game is being processed, per section 6.
 
-Batches still run their games sequentially. Letting two users' batches share
-the machine through a bounded worker pool is step 10.
+Games run sequentially within a batch, but the batch releases its worker-pool
+slots between games -- see above.
 
 ### Saved analyses
 

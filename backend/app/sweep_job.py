@@ -28,6 +28,7 @@ from .auth import SESSION_COOKIE, _user_for_token, require_user
 from .db import db_cursor
 from .engine_manager import EngineProcess, pick_option, read_uci_options
 from .engine_settings import get_effective_settings
+from .jobqueue import pool, slots_for
 from .maia import resolve_binary as resolve_maia_binary
 from .runs import save_analysis
 from .play import ELO_OPTION_CANDIDATES, LIMIT_STRENGTH_CANDIDATES, MAIA_GO_COMMAND
@@ -168,16 +169,17 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
 async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color: str):
     """Sweep on its own: the Elo estimate without the Stockfish pass."""
     try:
-        sweep = await _sweep_core(job, pgn_text, settings)
-        grid, by_player, matrices = sweep["grid"], sweep["by_player"], sweep["matrices"]
+        async with pool.lease(job=job, slots=slots_for(settings, "sweep"), label="sweep"):
+            sweep = await _sweep_core(job, pgn_text, settings)
+            grid, by_player, matrices = sweep["grid"], sweep["by_player"], sweep["matrices"]
 
-        results = {}
-        for side, matrix in matrices.items():
-            if matrix.shape[0] == 0:
-                continue
-            results[side] = elo_sweep.estimate(grid, matrix)
+            results = {}
+            for side, matrix in matrices.items():
+                if matrix.shape[0] == 0:
+                    continue
+                results[side] = elo_sweep.estimate(grid, matrix)
 
-        _store_matrices(job, grid, by_player, matrices)
+            _store_matrices(job, grid, by_player, matrices)
         await job.emit({
             "type": "done",
             "grid": grid,
@@ -185,6 +187,8 @@ async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color:
             "results": results,
             "model_note": sweep["note"],
         })
+    except asyncio.CancelledError:
+        await job.emit({"type": "error", "message": "cancelled"})
     except Exception as e:
         await job.emit({"type": "error", "message": str(e)})
 
@@ -253,49 +257,53 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
     try:
         from .analysis import stockfish_pass
 
-        # Stockfish first: the sweep is much the longer of the two, so the
-        # combined progress bar gives it the larger share.
-        moves = await stockfish_pass(job, pgn_text, settings, progress_scale=0.25, progress_base=0.0)
+        # One lease for both passes rather than swapping leases between them:
+        # a job that had to re-queue halfway through could stall with a
+        # half-finished analysis and an engine still open (section 10).
+        async with pool.lease(job=job, slots=slots_for(settings, "full"), label="full"):
+            # Stockfish first: the sweep is much the longer of the two, so the
+            # combined progress bar gives it the larger share.
+            moves = await stockfish_pass(job, pgn_text, settings, progress_scale=0.25, progress_base=0.0)
 
-        sweep = await _sweep_core(job, pgn_text, settings,
-                                  progress_scale=0.75, progress_base=0.25)
-        grid = sweep["grid"]
-        by_player = sweep["by_player"]
-        matrices = sweep["matrices"]
+            sweep = await _sweep_core(job, pgn_text, settings,
+                                      progress_scale=0.75, progress_base=0.25)
+            grid = sweep["grid"]
+            by_player = sweep["by_player"]
+            matrices = sweep["matrices"]
 
-        results = {}
-        for side, matrix in matrices.items():
-            if matrix.shape[0] == 0:
-                continue
-            results[side] = elo_sweep.estimate(grid, matrix)
+            results = {}
+            for side, matrix in matrices.items():
+                if matrix.shape[0] == 0:
+                    continue
+                results[side] = elo_sweep.estimate(grid, matrix)
 
-        # Each side is judged against its *own* estimated strength, per
-        # section 8 -- a move is Great because players of that player's level
-        # wouldn't find it, not because of the opponent's level.
-        fens_before = {r["ply"]: r["fen"] for rows in by_player.values() for r in rows}
-        ucis = {r["ply"]: r["uci"] for rows in by_player.values() for r in rows}
-        for side, matrix in matrices.items():
-            if matrix.shape[0] == 0:
-                continue
-            rows = _rows_by_ply(by_player[side], matrix)
-            classify.apply_great_brilliant(
-                moves,
-                sweep_rows=rows,
-                grid=grid,
-                estimated_elo=results[side].get("estimate"),
-                fens_before=fens_before,
-                ucis=ucis,
-                max_drop=settings.get("great_max_drop", classify.DEFAULT_GREAT_MAX_DROP),
-                max_match_rate=settings.get("great_max_match_rate", classify.DEFAULT_GREAT_MAX_MATCH_RATE),
-                brilliant_enabled=bool(settings.get("brilliant_enabled", 1)),
-            )
-            classify.blunder_elo_correlation(moves, sweep_rows=rows, grid=grid)
+            # Each side is judged against its *own* estimated strength, per
+            # section 8 -- a move is Great because players of that player's
+            # level wouldn't find it, not because of the opponent's level.
+            fens_before = {r["ply"]: r["fen"] for rows in by_player.values() for r in rows}
+            ucis = {r["ply"]: r["uci"] for rows in by_player.values() for r in rows}
+            for side, matrix in matrices.items():
+                if matrix.shape[0] == 0:
+                    continue
+                rows = _rows_by_ply(by_player[side], matrix)
+                classify.apply_great_brilliant(
+                    moves,
+                    sweep_rows=rows,
+                    grid=grid,
+                    estimated_elo=results[side].get("estimate"),
+                    fens_before=fens_before,
+                    ucis=ucis,
+                    max_drop=settings.get("great_max_drop", classify.DEFAULT_GREAT_MAX_DROP),
+                    max_match_rate=settings.get("great_max_match_rate", classify.DEFAULT_GREAT_MAX_MATCH_RATE),
+                    brilliant_enabled=bool(settings.get("brilliant_enabled", 1)),
+                )
+                classify.blunder_elo_correlation(moves, sweep_rows=rows, grid=grid)
 
-        _store_matrices(job, grid, by_player, matrices)
-        save_analysis(job.user_id, job.game_id, "full", {
-            "moves": moves, "grid": grid, "results": results,
-            "model_note": sweep["note"], "sweep_cache": job.sweep_cache,
-        }, run_id=job.run_id)
+            _store_matrices(job, grid, by_player, matrices)
+            save_analysis(job.user_id, job.game_id, "full", {
+                "moves": moves, "grid": grid, "results": results,
+                "model_note": sweep["note"], "sweep_cache": job.sweep_cache,
+            }, run_id=job.run_id)
         await job.emit({
             "type": "done",
             "mode": "full",

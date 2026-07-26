@@ -7,9 +7,12 @@ latest-requested position, and if a newer request arrives while a search is
 still running, we send `stop` to the *same* process and discard the stale
 result rather than queuing or racing two searches.
 
-This is deliberately separate from the batch/analysis worker pool (job queue)
--- that pool runs short-lived engine processes per job and is implemented
-elsewhere; the two must never share process accounting or lifecycles.
+This is deliberately separate from the batch/analysis worker pool (the job
+queue in `jobqueue`) -- that pool runs short-lived engine processes per job;
+the two must never share process accounting or lifecycles. Sessions here are
+not leased from it either: a live-eval engine spends nearly all its time idle
+waiting for the user to move, so charging it a worker slot would leave the
+pool permanently short.
 """
 
 import asyncio
@@ -289,7 +292,7 @@ class LiveEngineSession:
 
 class LiveEngineManager:
     """Registry of active live-eval sessions, for accounting and idle cleanup.
-    Distinct from the batch analysis worker pool (section 10)."""
+    Distinct from the batch analysis worker pool in `jobqueue` (section 10)."""
 
     def __init__(self, idle_timeout_seconds: int = 600):
         self.sessions: dict[str, LiveEngineSession] = {}

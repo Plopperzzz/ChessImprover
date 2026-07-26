@@ -16,6 +16,7 @@ const state = {
   classifications: {}, // ply -> classification dict, from the last completed analysis job
   analysisJobId: null,
   analysisWs: null,
+  sweepJobId: null,
   sweepWs: null,
   batchJobId: null,
   batchWs: null,
@@ -447,6 +448,7 @@ function resetAnalysisState() {
   if (state.analysisWs) { state.analysisWs.close(); state.analysisWs = null; }
   document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
   document.getElementById('full-analysis-btn').disabled = !state.selectedGameId;
+  document.getElementById('analysis-cancel').classList.add('hidden');
   resetSweepState();
   document.getElementById('analysis-progress-fill').style.width = '0%';
   document.getElementById('analysis-status').textContent = '';
@@ -477,6 +479,30 @@ function wireAnalysis() {
   });
   document.getElementById('quick-analysis-btn').addEventListener('click', () => startAnalysis('quick'));
   document.getElementById('full-analysis-btn').addEventListener('click', () => startAnalysis('full'));
+  document.getElementById('analysis-cancel').addEventListener('click', cancelAnalysis);
+}
+
+/** A job can now sit in the worker-pool queue behind the other user's run
+    (section 10), so there has to be a way to withdraw it rather than only
+    abandon it. Also stops one that's already running. */
+async function cancelAnalysis() {
+  if (!state.analysisJobId) return;
+  document.getElementById('analysis-cancel').disabled = true;
+  document.getElementById('analysis-status').textContent = 'Cancelling...';
+  try {
+    await api(`/api/analysis/${state.analysisJobId}/cancel`, { method: 'POST' });
+  } finally {
+    document.getElementById('analysis-cancel').disabled = false;
+  }
+}
+
+/** Shared wording for the pool's queue events, so all three panels explain a
+    stalled progress bar the same way. */
+function queuedText(msg) {
+  const ahead = msg.ahead
+    ? `${msg.ahead} job(s) ahead of it`
+    : 'waiting for the engines in use to free up';
+  return `Queued — ${ahead} (needs ${msg.slots} of ${msg.capacity} worker slot(s)).`;
 }
 
 /** mode: 'quick' (Stockfish only) or 'full' (adds the Maia sweep, so also
@@ -496,6 +522,7 @@ async function startAnalysis(mode) {
       run_id: runId ? Number(runId) : null,
     }) });
     state.analysisJobId = res.job_id;
+    document.getElementById('analysis-cancel').classList.remove('hidden');
     watchAnalysisJob(res.job_id);
   } catch (e) {
     document.getElementById('analysis-status').textContent = 'Error: ' + e.message;
@@ -536,7 +563,11 @@ function watchAnalysisJob(jobId) {
 }
 
 async function handleAnalysisMessage(msg) {
-  if (msg.type === 'progress') {
+  if (msg.type === 'queued') {
+    document.getElementById('analysis-status').textContent = queuedText(msg);
+  } else if (msg.type === 'started') {
+    document.getElementById('analysis-status').textContent = 'A worker freed up — starting...';
+  } else if (msg.type === 'progress') {
     // Full mode reports an overall fraction across both passes; quick mode
     // only has the one, so fall back to its ply counter.
     if (msg.phase === 'maia') {
@@ -566,14 +597,22 @@ async function handleAnalysisMessage(msg) {
     }
     document.getElementById('analysis-status').textContent = 'Done and saved.';
     document.getElementById('analysis-progress-fill').style.width = '100%';
-    setAnalysisButtonsEnabled(true);
+    finishAnalysis();
     await refreshRunPicker();
     await refreshGameList();
     syncBoardFull();
   } else if (msg.type === 'error') {
-    document.getElementById('analysis-status').textContent = 'Error: ' + msg.message;
-    setAnalysisButtonsEnabled(true);
+    document.getElementById('analysis-status').textContent =
+      msg.message === 'cancelled' ? 'Cancelled.' : 'Error: ' + msg.message;
+    finishAnalysis();
   }
+}
+
+function finishAnalysis() {
+  state.analysisJobId = null;
+  if (state.analysisWs) { state.analysisWs.close(); state.analysisWs = null; }
+  document.getElementById('analysis-cancel').classList.add('hidden');
+  setAnalysisButtonsEnabled(true);
 }
 
 /** Steps the board (and the explorer's actual position) to the mainline
@@ -717,7 +756,13 @@ function watchBatchJob(jobId) {
 
 async function handleBatchMessage(msg) {
   const status = document.getElementById('batch-status');
-  if (msg.type === 'game_start') {
+  if (msg.type === 'queued') {
+    // A batch leases per game, so this can appear mid-run when the other
+    // user's job takes the slots at a game boundary (section 10).
+    status.textContent = queuedText(msg);
+  } else if (msg.type === 'started') {
+    status.textContent = 'A worker freed up — resuming...';
+  } else if (msg.type === 'game_start') {
     // Section 6: show whichever game is currently being processed.
     try {
       state.explorer.loadPGN(msg.pgn, state.user.display_name);
@@ -772,9 +817,16 @@ function finishBatch() {
 
 function wireSweep() {
   document.getElementById('sweep-btn').addEventListener('click', startSweep);
+  document.getElementById('sweep-cancel').addEventListener('click', async () => {
+    if (!state.sweepJobId) return;
+    document.getElementById('sweep-status').textContent = 'Cancelling...';
+    await api(`/api/analysis/${state.sweepJobId}/cancel`, { method: 'POST' });
+  });
 }
 
 function resetSweepState() {
+  state.sweepJobId = null;
+  document.getElementById('sweep-cancel').classList.add('hidden');
   document.getElementById('sweep-btn').disabled = !state.selectedGameId;
   document.getElementById('sweep-progress-fill').style.width = '0%';
   document.getElementById('sweep-status').textContent = '';
@@ -789,6 +841,8 @@ async function startSweep() {
   document.getElementById('sweep-status').textContent = 'Starting sweep...';
   try {
     const res = await api('/api/sweep', { method: 'POST', body: JSON.stringify({ game_id: state.selectedGameId }) });
+    state.sweepJobId = res.job_id;
+    document.getElementById('sweep-cancel').classList.remove('hidden');
     watchSweepJob(res.job_id);
   } catch (e) {
     document.getElementById('sweep-status').textContent = 'Error: ' + e.message;
@@ -808,14 +862,18 @@ function watchSweepJob(jobId) {
     chain = chain.then(() => handleSweepMessage(msg)).catch((e) => console.error('sweep message failed', e));
   });
   ws.addEventListener('close', () => {
-    if (state.sweepWs === ws && document.getElementById('sweep-btn').disabled) {
+    if (state.sweepWs === ws && state.sweepJobId === jobId) {
       setTimeout(() => watchSweepJob(jobId), 2000); // resume after a phone screen lock
     }
   });
 }
 
 async function handleSweepMessage(msg) {
-  if (msg.type === 'progress') {
+  if (msg.type === 'queued') {
+    document.getElementById('sweep-status').textContent = queuedText(msg);
+  } else if (msg.type === 'started') {
+    document.getElementById('sweep-status').textContent = 'A worker freed up — starting...';
+  } else if (msg.type === 'progress') {
     const pct = msg.total ? Math.round((msg.done / msg.total) * 100) : 0;
     document.getElementById('sweep-progress-fill').style.width = pct + '%';
     document.getElementById('sweep-status').textContent =
@@ -825,14 +883,20 @@ async function handleSweepMessage(msg) {
     document.getElementById('sweep-progress-fill').style.width = '100%';
     document.getElementById('sweep-status').textContent = 'Sweep complete.';
     renderSweepResults(msg);
-    document.getElementById('sweep-btn').disabled = false;
-    state.sweepWs = null;
+    finishSweep();
     syncBoardFull();
   } else if (msg.type === 'error') {
-    document.getElementById('sweep-status').textContent = 'Error: ' + msg.message;
-    document.getElementById('sweep-btn').disabled = false;
-    state.sweepWs = null;
+    document.getElementById('sweep-status').textContent =
+      msg.message === 'cancelled' ? 'Cancelled.' : 'Error: ' + msg.message;
+    finishSweep();
   }
+}
+
+function finishSweep() {
+  state.sweepJobId = null;
+  state.sweepWs = null;
+  document.getElementById('sweep-btn').disabled = !state.selectedGameId;
+  document.getElementById('sweep-cancel').classList.add('hidden');
 }
 
 function renderSweepResults(msg) {

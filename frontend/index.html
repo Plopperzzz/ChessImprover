@@ -104,6 +104,7 @@
         <div class="play-buttons">
           <button id="quick-analysis-btn" disabled>Quick</button>
           <button id="full-analysis-btn" disabled title="Quick + Maia Elo sweep + Great/Brilliant">Full</button>
+          <button id="analysis-cancel" class="hidden">Cancel</button>
         </div>
         <div id="analysis-progress"><div id="analysis-progress-fill"></div></div>
         <div id="analysis-status"></div>
@@ -137,7 +138,10 @@
 
       <div class="panel">
         <h3>Elo estimate (Maia sweep)</h3>
-        <button id="sweep-btn" disabled>Run Elo sweep</button>
+        <div class="play-buttons">
+          <button id="sweep-btn" disabled>Run Elo sweep</button>
+          <button id="sweep-cancel" class="hidden">Cancel</button>
+        </div>
         <div id="sweep-progress"><div id="sweep-progress-fill"></div></div>
         <div id="sweep-status"></div>
         <div id="sweep-results"></div>

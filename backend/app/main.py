@@ -15,6 +15,7 @@ from .db import init_db
 from .engine_manager import job_engine_status, manager
 from .engine_settings import router as settings_router
 from .games import router as games_router
+from .jobqueue import pool
 from .live_eval_ws import router as ws_router
 from .paths import ASSETS_DIR, FRONTEND_DIR, list_asset_sets
 from .play import router as play_router
@@ -69,6 +70,15 @@ def engines_status(user: dict = Depends(require_user)):
     /api/analysis/jobs."""
     return ([{"kind": "live-eval", **s} for s in manager.status()]
             + play_status() + job_engine_status())
+
+
+@app.get("/api/jobs/pool")
+def pool_status(user: dict = Depends(require_user)):
+    """Worker-pool accounting (section 10): capacity, what's running and
+    what's queued behind it. Deliberately not filtered to the calling user --
+    the point is to see *why* your job is waiting, and a home server with two
+    accounts has nothing to hide here."""
+    return pool.status()
 
 
 class RevalidatingStaticFiles(StaticFiles):
