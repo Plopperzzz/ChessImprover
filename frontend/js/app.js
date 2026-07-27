@@ -475,6 +475,7 @@ async function loadSavedAnalysis(gameId) {
   renderMoveTable();
   refreshMoveTableHighlight();
   renderAnalysisSummary(saved.moves);
+  renderEvalPlot();
 
   const when = (saved.analyzed_at || '').replace('T', ' ');
   document.getElementById('analysis-status').textContent =
@@ -619,6 +620,127 @@ function refreshMoveTableHighlight() {
   for (const el of container.querySelectorAll('[data-node-id]')) {
     el.classList.toggle('current', Number(el.dataset.nodeId) === current);
   }
+  markEvalPlotPosition();
+}
+
+/* ---------------- Evaluation plot ----------------
+   The analysed game's evaluation across its whole length, always from
+   White's point of view (the convention every chess site uses: up is good
+   for White) rather than from yours, so the shape doesn't invert between a
+   game you had as White and one you had as Black.
+
+   It plots win probability, not centipawns: +3 and +9 are both "winning",
+   and on a centipawn axis the second dwarfs the first and flattens the
+   opening into a straight line. This is the same win-probability curve the
+   move classifications are computed from, so a blunder marker always sits on
+   a visible cliff. */
+
+/** Win probability for White, from a mover-perspective centipawn score at a
+    given ply. `cp_after` is scored for whoever is to move *after* that ply,
+    which is White on even plies and Black on odd ones. */
+function whiteWinProb(cp, ply) {
+  const white = ply % 2 === 1 ? -cp : cp;
+  return 1 / (1 + Math.exp(-0.00368208 * white));
+}
+
+const PLOT_MARK_COLOURS = {
+  blunder: '#e05050', mistake: '#e08040', inaccuracy: '#e0c040',
+  great: '#5fc9e8', brilliant: '#21c2a4',
+};
+
+function evalPlotMoves() {
+  const plies = Object.keys(state.classifications).map(Number).sort((a, b) => a - b);
+  return plies
+    .map((ply) => state.classifications[ply])
+    .filter((m) => m && m.cp_after !== null && m.cp_after !== undefined);
+}
+
+function renderEvalPlot() {
+  const wrap = document.getElementById('eval-plot-wrap');
+  const host = document.getElementById('eval-plot');
+  const moves = evalPlotMoves();
+  host.innerHTML = '';
+  if (moves.length < 2) { wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+
+  const W = 600, H = 110, padB = 0;
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'eval-plot-svg',
+                             preserveAspectRatio: 'none' });
+  const n = moves.length;
+  const sx = (i) => (i / n) * W;          // i = 0 is the starting position
+  const sy = (wp) => H - wp * (H - padB);
+
+  // The starting position is level by definition; including it stops the
+  // curve from beginning mid-air at move 1.
+  const points = [[sx(0), 0.5]];
+  moves.forEach((m, i) => points.push([sx(i + 1), whiteWinProb(m.cp_after, m.ply)]));
+
+  const line = points.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
+  // White's share is the filled part, which is how a chess site reads.
+  svg.appendChild(svgEl('path', {
+    d: `${line} L${W},${H} L0,${H} Z`, fill: '#d6d9e0', stroke: 'none', opacity: '0.88',
+  }));
+  svg.appendChild(svgEl('line', { x1: 0, x2: W, y1: sy(0.5), y2: sy(0.5),
+                                  stroke: '#8b93a7', 'stroke-width': 1, 'stroke-dasharray': '4,4' }));
+
+  for (let i = 0; i < moves.length; i++) {
+    const colour = PLOT_MARK_COLOURS[moves[i].classification];
+    if (!colour) continue;
+    svg.appendChild(svgEl('circle', {
+      cx: sx(i + 1), cy: sy(whiteWinProb(moves[i].cp_after, moves[i].ply)),
+      r: 5, fill: colour, stroke: '#14161c', 'stroke-width': 1.5,
+    }));
+  }
+
+  const marker = svgEl('line', { id: 'eval-plot-marker', x1: 0, x2: 0, y1: 0, y2: H,
+                                 stroke: '#5b8dee', 'stroke-width': 2, opacity: '0' });
+  svg.appendChild(marker);
+  host.appendChild(svg);
+
+  // Clicking anywhere on the plot jumps to that point in the game, which is
+  // the whole reason to draw it rather than just list the blunders.
+  host.onclick = (ev) => {
+    const rect = host.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+    const index = Math.min(moves.length - 1, Math.max(0, Math.round(frac * n) - 1));
+    goToMainlinePly(moves[index].ply);
+  };
+  host.onmousemove = (ev) => {
+    const rect = host.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+    const index = Math.min(moves.length - 1, Math.max(0, Math.round(frac * n) - 1));
+    const m = moves[index];
+    const wp = whiteWinProb(m.cp_after, m.ply);
+    document.getElementById('eval-plot-hint').textContent =
+      `${Math.ceil(m.ply / 2)}${m.ply % 2 ? '.' : '...'} ${m.san || ''}  `
+      + `White ${(wp * 100).toFixed(0)}%`
+      + (PLOT_MARK_COLOURS[m.classification] ? `  — ${m.classification}` : '');
+  };
+  host.onmouseleave = () => { document.getElementById('eval-plot-hint').textContent = ''; };
+  markEvalPlotPosition();
+}
+
+function goToMainlinePly(ply) {
+  const id = state.explorer.mainlineNodeIds[ply - 1];
+  if (id === undefined) return;
+  state.explorer.goToNode(id);
+  syncBoardFull();
+}
+
+/** Marks where in the game the board currently is. */
+function markEvalPlotPosition() {
+  const marker = document.getElementById('eval-plot-marker');
+  if (!marker) return;
+  const moves = evalPlotMoves();
+  if (!moves.length) return;
+  const ply = state.explorer.mainlineNodeIds.indexOf(state.explorer.currentNodeId) + 1;
+  if (!ply) { marker.setAttribute('opacity', '0'); return; }
+  const index = moves.findIndex((m) => m.ply === ply);
+  if (index < 0) { marker.setAttribute('opacity', '0'); return; }
+  const x = ((index + 1) / moves.length) * 600;
+  marker.setAttribute('x1', x);
+  marker.setAttribute('x2', x);
+  marker.setAttribute('opacity', '1');
 }
 
 /* ---------------- Quick analysis (Stockfish-only move classification) ---------------- */
@@ -636,6 +758,8 @@ function resetAnalysisState() {
   document.getElementById('analysis-progress-fill').style.width = '0%';
   document.getElementById('analysis-status').textContent = '';
   document.getElementById('analysis-summary').innerHTML = '';
+  document.getElementById('eval-plot-wrap').classList.add('hidden');
+  document.getElementById('eval-plot').innerHTML = '';
 }
 
 async function refreshRunPicker() {
@@ -785,6 +909,7 @@ async function handleAnalysisMessage(msg) {
     renderMoveTable();
     refreshMoveTableHighlight();
     renderAnalysisSummary(msg.moves);
+    renderEvalPlot();
     if (msg.mode === 'full') {
       renderSweepResults(msg);            // reuse the sweep panel for the estimate
       renderBlunderElo(msg.moves, msg.your_color);

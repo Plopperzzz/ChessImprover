@@ -56,6 +56,10 @@
         <span class="plate-result"></span>
         <span class="plate-clock"></span>
       </div>
+      <div id="eval-plot-wrap" class="hidden">
+        <div id="eval-plot"></div>
+        <div id="eval-plot-hint"></div>
+      </div>
       <div id="nav-buttons">
         <button id="nav-start" title="First move">|&lt;</button>
         <button id="nav-prev" title="Previous move">&lt;</button>
@@ -70,6 +74,20 @@
       <div class="fen-row">
         <input type="text" id="fen-goto" placeholder="paste a FEN to jump to it" />
         <button id="fen-goto-btn">Go</button>
+      </div>
+    </section>
+
+    <section id="moves-col">
+      <div class="panel" id="moves-panel">
+        <h3>Moves</h3>
+        <div id="move-table-wrap">
+          <!-- Section 5 puts your moves in the left column whichever colour
+               you played, so the header has to say which is which. -->
+          <table id="move-table">
+            <thead><tr><th></th><th id="mt-yours"></th><th id="mt-theirs"></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -196,17 +214,6 @@
         <div id="trend-table"></div>
       </div>
 
-      <div class="panel" id="moves-panel">
-        <h3>Moves</h3>
-        <div id="move-table-wrap">
-          <!-- Section 5 puts your moves in the left column whichever colour
-               you played, so the header has to say which is which. -->
-          <table id="move-table">
-            <thead><tr><th></th><th id="mt-yours"></th><th id="mt-theirs"></th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
     </section>
   </main>
 </div>

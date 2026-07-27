@@ -70,9 +70,29 @@ and goes back to facing you. Where your display name matches neither PGN
 header the board takes the conventional White-at-bottom view and no plate
 claims to be you, rather than guessing.
 
+On a wide screen the layout is three columns -- board, move table, then
+everything else -- putting the move table beside the board as section 5 asks.
+They wrap in that order on anything narrower, so a phone gets board, moves,
+then the panels.
+
 The move table keeps your moves in the left column whichever colour you
 played (section 5), which is confusing without a header saying so — so the
-columns are now labelled with the two players' names.
+columns are labelled with the two players' names.
+
+### Evaluation plot
+
+Under the board, once a game has been analysed: the whole game's evaluation,
+with the mistakes and blunders marked on the curve, hover for the move and
+its win probability, click anywhere to jump the board there.
+
+Two choices worth stating. It plots **win probability, not centipawns** --
++3 and +9 are both simply "winning", and on a centipawn axis the second
+dwarfs the first and squashes the whole opening into a flat line. It is also
+always from **White's** point of view, the convention every chess site uses,
+so the shape doesn't invert between a game you had as White and one you had
+as Black. Because it is the same win-probability curve the classifications
+are computed from, a blunder marker always sits on a visible cliff rather
+than somewhere the line looks level.
 
 Sound effects (from `assets/audio/`) play for moves, captures, castling,
 check, promotion, an illegal move, game start and end, and a ten-second
@@ -80,8 +100,6 @@ warning on your own clock. They follow things *you* did — never the analysis
 animation, which steps through a hundred positions. The speaker button in the
 top bar mutes them, and the choice survives a reload.
 
-On a phone the move list moves up directly under the board instead of sitting
-below six other panels.
 
 ### Trend over time
 
@@ -104,6 +122,16 @@ Two things about it are deliberate:
   their intervals allow, the slope's interval is widened to match rather than
   reporting false precision. A flat player gets "not distinguishable from the
   noise", not a trend line.
+- **The rate is quoted in a unit the games can support.** The fit is per year
+  internally, but three weeks of games turn 30 Elo of drift into "+1500 Elo a
+  year" -- arithmetically true and completely useless. So it reports per week,
+  per month or per year depending on how long a stretch the games actually
+  cover, always alongside the total change across that stretch, and under
+  three weeks it drops the rate entirely and says only how much moved over how
+  many days.
+
+The error bars on the header-rating line come from the spread of the ratings
+in each bucket, not a fixed guess.
 
 Sparse buckets are shown rather than dropped, flagged as sparse and drawn
 with a smaller marker. Games that can't contribute are counted and named --
