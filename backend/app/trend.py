@@ -215,7 +215,8 @@ def _slope(points: list[tuple[float, float, float]], label: str) -> dict:
     }
 
 
-def build(user_id: int, granularity: str, run_id: int | None = None) -> dict:
+def build(user_id: int, granularity: str, run_id: int | None = None,
+          top_n: int = 1) -> dict:
     # Same collection the pooled estimate uses, so a bucket and the overall
     # number are always built from exactly the same rows.
     entries, skipped = strength.collect(user_id, run_id)
@@ -248,7 +249,8 @@ def build(user_id: int, granularity: str, run_id: int | None = None) -> dict:
     for key in sorted(grouped):
         bucket = grouped[key]
         grid, usable, excluded = strength.common_grid(bucket["entries"])
-        matrix, groups = strength.matrix(usable, grid)
+        ranks, groups = strength.matrix(usable, grid)
+        matrix = elo_sweep.hits(ranks, top_n)
         result = (elo_sweep.estimate(grid, matrix, groups=groups)
                   if matrix.shape[0] and len(grid) >= 2
                   else {"estimate": None, "confidence": "low",
@@ -305,7 +307,7 @@ def build(user_id: int, granularity: str, run_id: int | None = None) -> dict:
 
 
 @router.get("")
-def get_trend(granularity: str = "month", run_id: int | None = None,
+def get_trend(granularity: str = "month", run_id: int | None = None, top_n: int = 1,
               user: dict = Depends(require_user)):
     """Re-bucketing is a pure re-fit of cached per-position scores, so changing
     granularity never re-runs an engine (section 15). Defined `def` rather
@@ -313,4 +315,4 @@ def get_trend(granularity: str = "month", run_id: int | None = None,
     threadpool, not on the event loop that the live engines run on."""
     if granularity not in GRANULARITIES:
         raise HTTPException(400, f"granularity must be one of {', '.join(GRANULARITIES)}")
-    return build(user["id"], granularity, run_id)
+    return build(user["id"], granularity, run_id, top_n)

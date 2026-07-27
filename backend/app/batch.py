@@ -124,7 +124,7 @@ async def run_batch(job: AnalysisJob, games: list[dict], mode: str, settings: di
                         )
                         grid, by_player, matrices = sweep["grid"], sweep["by_player"], sweep["matrices"]
                         results = {
-                            side: elo_sweep.estimate(grid, matrix)
+                            side: elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1))
                             for side, matrix in matrices.items() if matrix.shape[0]
                         }
                         fens = {r["ply"]: r["fen"] for rows in by_player.values() for r in rows}
@@ -132,7 +132,7 @@ async def run_batch(job: AnalysisJob, games: list[dict], mode: str, settings: di
                         for side, matrix in matrices.items():
                             if not matrix.shape[0]:
                                 continue
-                            rows = _rows_by_ply(by_player[side], matrix)
+                            rows = _rows_by_ply(by_player[side], elo_sweep.hits(matrix, 1))
                             classify.apply_great_brilliant(
                                 moves, sweep_rows=rows, grid=grid,
                                 estimated_elo=results[side].get("estimate"),

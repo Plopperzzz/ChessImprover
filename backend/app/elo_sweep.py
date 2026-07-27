@@ -54,8 +54,33 @@ BOOTSTRAP_SAMPLES = 400
 #     real signal, one game (~25 positions):           median 0.21, 95th 0.50
 #
 # So 0.55 rejects almost all noise and passes real signal even from one game.
+MAX_TOP_N = 9
 WIDE_INTERVAL_FRACTION = 0.55
 TIGHT_INTERVAL_FRACTION = 0.10
+
+
+def hits(rank_matrix: np.ndarray, top_n: int = 1) -> np.ndarray:
+    """Binary match indicators from a rank matrix, under a top-N objective.
+
+    The sweep stores *where* your move ranked in Maia's ordering (1 = its own
+    choice, 0 = not a candidate at all), which is strictly more information
+    than a yes/no. Everything statistical downstream still wants a 0/1 matrix,
+    so this is where the objective is applied -- and because it applies to
+    cached scores, switching objectives costs no engine time.
+
+    top_n=1 reproduces the original "did Maia play exactly this" question, and
+    is what the classification rules mean by "a player at this Elo would have
+    found it".
+    """
+    m = np.asarray(rank_matrix, dtype=float)
+    return ((m >= 1.0) & (m <= float(top_n))).astype(float)
+
+
+def decode_scores(scores: str) -> list[float]:
+    """Stored score string to ranks. Old top-1-only rows used '1'/'0', which
+    decode to rank 1 and rank 0 -- the same meaning, so nothing needs
+    migrating."""
+    return [float(c) if c.isdigit() else 0.0 for c in (scores or "")]
 
 
 def split_positions(score_matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -213,7 +238,16 @@ def estimate(elos: list[int], score_matrix: np.ndarray, rng_seed: int = 0,
             sample = fitting_matrix[idx]
             r = sample.mean(axis=0)
             peaks.append(_peak_from(elos_arr, r, binomial_se(r, sample.shape[0])))
-    ci_low, ci_high = (float(np.percentile(peaks, 2.5)), float(np.percentile(peaks, 97.5))) if peaks else (None, None)
+    if peaks:
+        ci_low = float(np.percentile(peaks, 2.5))
+        ci_high = float(np.percentile(peaks, 97.5))
+        # A percentile bootstrap interval need not contain the point estimate,
+        # and when it doesn't the pair reads as broken ("1600, 95% 1400-1400").
+        # Widening to include it is the conservative direction -- it can only
+        # ever admit more uncertainty, never hide any.
+        ci_low, ci_high = min(ci_low, peak), max(ci_high, peak)
+    else:
+        ci_low, ci_high = None, None
 
     confidence, reasons = _confidence(
         n_fit=n_fit, n_total=n_total, rates=rates, params=params, se=se,

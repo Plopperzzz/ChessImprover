@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS engine_settings (
     -- Coarser grid for batch runs: a fine sweep is affordable for one game
     -- and not for a thousand (section 9).
     maia_elo_step_batch INTEGER NOT NULL DEFAULT 200,
+    -- How many ranked candidates to record per position. At `go nodes 1` the
+    -- policy net has already ordered every legal move, so asking for several
+    -- costs no extra engine time and lets the fit use a top-N objective later
+    -- without re-running anything.
+    maia_multipv INTEGER NOT NULL DEFAULT 3,
     -- Great/Brilliant criteria (spec section 8 asked for these to be pinned
     -- down rather than improvised, and they're taste, so they're settings).
     great_max_drop REAL NOT NULL DEFAULT 0.02,
@@ -202,6 +207,7 @@ def init_db():
         _ensure_column(conn, "engine_settings", "brilliant_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "engine_settings", "maia_elo_step_batch", "INTEGER NOT NULL DEFAULT 200")
         _ensure_column(conn, "engine_settings", "stockfish_options_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "engine_settings", "maia_multipv", "INTEGER NOT NULL DEFAULT 3")
         _widen_default_elo_grid(conn)
         conn.commit()
     finally:

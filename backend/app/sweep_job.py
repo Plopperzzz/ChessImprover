@@ -65,16 +65,58 @@ def positions_by_player(pgn_text: str) -> dict[str, list[dict]]:
     return out
 
 
-async def _bestmove(engine: EngineProcess, fen: str) -> str | None:
+# One character per grid point, so a 1000-game batch stays a sane row count.
+# '1' is Maia's own first choice, '2' its second, and so on; '0' means the
+# move you played was nowhere in its top MultiPV. Crucially this is the same
+# encoding the old top-1-only sweeps used ('1' matched, '0' didn't), so
+# everything already stored keeps its meaning with no migration.
+MAX_RANK = 9
+
+
+async def _ranked_moves(engine: EngineProcess, fen: str, multipv: int) -> list[str]:
+    """Maia's move ordering for a position, best first.
+
+    At `go nodes 1` a policy net does one forward pass, so asking for several
+    ranked moves instead of one costs nothing extra -- the ordering is already
+    computed. That is the whole appeal: strictly more information per position
+    for the same engine time.
+
+    Falls back to a single-move list when the engine reports no `multipv`
+    info lines, which is what a build without MultiPV support does.
+    """
     await engine.send_line(f"position fen {fen}")
     await engine.send_line(MAIA_GO_COMMAND)
+    ranked: dict[int, str] = {}
+    best: str | None = None
     while True:
         line = await engine.readline()
         if line is None:
             raise RuntimeError("Maia exited during the sweep")
+        if line.startswith("info") and " pv " in line:
+            parts = line.split()
+            try:
+                rank = int(parts[parts.index("multipv") + 1]) if "multipv" in parts else 1
+                move = parts[parts.index("pv") + 1]
+            except (ValueError, IndexError):
+                continue
+            if 1 <= rank <= multipv:
+                ranked[rank] = move
         if line.startswith("bestmove"):
             parts = line.split()
-            return parts[1] if len(parts) >= 2 else None
+            best = parts[1] if len(parts) >= 2 else None
+            break
+    if ranked:
+        return [ranked[r] for r in sorted(ranked) if ranked.get(r)]
+    return [best] if best else []
+
+
+def rank_of(played: str, ranked: list[str]) -> int:
+    """1-based rank of the played move in Maia's ordering, or 0 if it isn't
+    in the list at all."""
+    for i, move in enumerate(ranked[:MAX_RANK], start=1):
+        if move == played:
+            return i
+    return 0
 
 
 async def open_maia(settings: dict):
@@ -103,13 +145,28 @@ async def open_maia(settings: dict):
     limit_opt = pick_option(engine.advertised_options, LIMIT_STRENGTH_CANDIDATES)
     if limit_opt:
         await engine.send_line(f"setoption name {limit_opt} value true")
+
+    # Ranked candidates cost nothing extra at `go nodes 1` -- the policy net
+    # has already ordered every legal move -- so ask for several and record
+    # where the played move landed. A build without MultiPV just keeps
+    # answering with one move and everything downstream degrades to top-1.
+    want_multipv = max(1, min(int(settings.get("maia_multipv") or 1), MAX_RANK))
+    multipv_opt = pick_option(engine.advertised_options, ["MultiPV"])
+    multipv = 1
+    if want_multipv > 1 and multipv_opt:
+        await engine.send_line(f"setoption name {multipv_opt} value {want_multipv}")
+        multipv = want_multipv
+    elif want_multipv > 1:
+        note = ((note + " ") if note else "") + (
+            "this build advertises no MultiPV option, so the sweep records "
+            "top-1 matches only")
     for name, value in (settings.get("maia_options") or {}).items():
         real = pick_option(engine.advertised_options, [name])
         if real and str(value) != "":
             await engine.send_line(f"setoption name {real} value {value}")
     await engine.send_line("isready")
     await engine.wait_for("readyok")
-    return {"engine": engine, "elo_option": elo_option, "note": note}
+    return {"engine": engine, "elo_option": elo_option, "note": note, "multipv": multipv}
 
 
 async def _sweep_core(job, pgn_text: str, settings: dict,
@@ -126,6 +183,7 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
     if owned:
         maia = await open_maia(settings)
     engine, elo_option, note = maia["engine"], maia["elo_option"], maia["note"]
+    multipv = maia.get("multipv", 1)
 
     if grid is None:
         grid = build_grid(settings.get("maia_elo_min", 600),
@@ -151,8 +209,10 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
                 for pi, row in enumerate(rows):
                     if getattr(job, "cancelled", False):
                         raise asyncio.CancelledError()
-                    best = await _bestmove(engine, row["fen"])
-                    matrices[side][pi, gi] = 1.0 if best == row["uci"] else 0.0
+                    ranked = await _ranked_moves(engine, row["fen"], multipv)
+                    # Stored as a rank, not a yes/no: 1 is Maia's own choice,
+                    # 0 means the move wasn't among its candidates at all.
+                    matrices[side][pi, gi] = rank_of(row["uci"], ranked)
                     done += 1
                     if done % 10 == 0 or done == total_work:
                         await job.emit({"type": "progress", "done": done, "total": total_work,
@@ -163,7 +223,8 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
             engine.terminate()
             await engine.wait_closed()
 
-    return {"grid": grid, "by_player": by_player, "matrices": matrices, "note": note}
+    return {"grid": grid, "by_player": by_player, "matrices": matrices,
+            "note": note, "multipv": multipv}
 
 
 async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color: str):
@@ -177,7 +238,7 @@ async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color:
             for side, matrix in matrices.items():
                 if matrix.shape[0] == 0:
                     continue
-                results[side] = elo_sweep.estimate(grid, matrix)
+                results[side] = elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1))
 
             _store_matrices(job, grid, by_player, matrices)
         await job.emit({
@@ -248,7 +309,9 @@ def get_matrix(job_id: str, user: dict = Depends(require_user)):
 
 def _rows_by_ply(positions: list[dict], matrix) -> dict[int, list[float]]:
     """Sweep matrix rows keyed by the ply they belong to, so a move's
-    classification can look up its own Maia scores."""
+    classification can look up its own Maia scores. Expects 0/1 hits, not
+    ranks -- Great/Brilliant asks whether players at that Elo would have
+    played exactly this move, which is the top-1 question."""
     return {row["ply"]: list(matrix[i]) for i, row in enumerate(positions)}
 
 
@@ -275,7 +338,7 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
             for side, matrix in matrices.items():
                 if matrix.shape[0] == 0:
                     continue
-                results[side] = elo_sweep.estimate(grid, matrix)
+                results[side] = elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1))
 
             # Each side is judged against its *own* estimated strength, per
             # section 8 -- a move is Great because players of that player's
@@ -285,7 +348,7 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
             for side, matrix in matrices.items():
                 if matrix.shape[0] == 0:
                     continue
-                rows = _rows_by_ply(by_player[side], matrix)
+                rows = _rows_by_ply(by_player[side], elo_sweep.hits(matrix, 1))
                 classify.apply_great_brilliant(
                     moves,
                     sweep_rows=rows,

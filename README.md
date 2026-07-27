@@ -281,6 +281,23 @@ number:
   move at 600 and at 2600. The panel says so and names the likely cause
   instead of reporting the meaningless number that falls out.
 
+**What counts as a match is now a choice you can change for free.** The sweep
+records *where* your move ranked in Maia's ordering, not just whether it was
+Maia's own first pick — at `go nodes 1` the policy net has already ordered
+every legal move, so asking for several ranked candidates (MultiPV, default 3)
+costs no extra engine time. The rank goes into the same one-character-per-grid-
+point encoding the old sweeps used, so `1`/`0` still means exactly what it did
+and nothing needed migrating. The strength panel can then re-fit against "Maia's
+top move", "its top 2" or "its top 3" with no engine work at all.
+
+Top-1 stays the default and is the objective the Great/Brilliant rules use —
+"a player at this Elo would have played exactly this" is a top-1 question.
+The wider objectives are offered because they use more of the information per
+position, but they are not verified against a real Maia3 build here, so they
+are yours to try rather than the default. A sweep run before MultiPV was
+recorded only stored rank 1; the panel says so rather than showing you the
+same number under a different label.
+
 Every estimate carries a High/Medium/Low label with the reasons spelled out.
 A peak on the edge of the swept range caps the label at Medium however clean
 the fit looks — the player is probably outside the grid, so the number is a

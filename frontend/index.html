@@ -190,6 +190,16 @@
           <label class="inline-label">From
             <select id="strength-run"><option value="">All runs</option></select>
           </label>
+          <!-- Re-fits cached scores, so switching costs nothing. Top-1 is the
+               verified default; the wider objectives use the ranked candidates
+               a sweep records when the engine supports MultiPV. -->
+          <label class="inline-label">Match
+            <select id="strength-topn">
+              <option value="1">Maia's top move</option>
+              <option value="2">its top 2</option>
+              <option value="3">its top 3</option>
+            </select>
+          </label>
         </div>
         <div id="strength-status"></div>
         <div id="strength-body"></div>
@@ -293,6 +303,9 @@
         <label>Elo step <input type="number" id="s-maia-elo-step" /></label>
         <label>Elo step in batch (coarser keeps long runs affordable)
           <input type="number" id="s-maia-elo-step-batch" min="10" />
+        </label>
+        <label>Ranked candidates to record (MultiPV — free at 1 node)
+          <input type="number" id="s-maia-multipv" min="1" max="9" />
         </label>
         <label>Great: max win-prob given up vs best (0.02 = near-lossless)
           <input type="number" id="s-great-drop" step="0.01" min="0" max="0.5" />

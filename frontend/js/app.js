@@ -1318,16 +1318,18 @@ function sweepChart(res) {
 function wireStrength() {
   document.getElementById('strength-refresh').addEventListener('click', refreshStrength);
   document.getElementById('strength-run').addEventListener('change', refreshStrength);
+  document.getElementById('strength-topn').addEventListener('change', refreshStrength);
   refreshStrength();
 }
 
 async function refreshStrength() {
   const runId = document.getElementById('strength-run').value;
+  const topN = document.getElementById('strength-topn').value;
   const status = document.getElementById('strength-status');
   const body = document.getElementById('strength-body');
   status.textContent = 'Fitting...';
   try {
-    const d = await api('/api/strength' + (runId ? `?run_id=${runId}` : ''));
+    const d = await api(`/api/strength?top_n=${topN}` + (runId ? `&run_id=${runId}` : ''));
     renderStrength(d, status, body);
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
@@ -1342,8 +1344,16 @@ function renderStrength(d, status, body) {
     renderTrendSkipped(body, d);
     return;
   }
+  const objective = d.top_n > 1 ? `your move in Maia's top ${d.top_n}` : "Maia's own first choice";
   status.textContent =
-    `${d.you.games} game(s), ${d.you.n_discriminative} discriminative of ${d.you.n_positions} positions.`;
+    `${d.you.games} game(s), ${d.you.n_discriminative} discriminative of ${d.you.n_positions} positions`
+    + `, matching ${objective}.`
+    // A sweep run before MultiPV was recorded only stored rank 1, so a wider
+    // objective silently collapses back to top-1. Say so rather than showing
+    // the same number under a different label.
+    + (d.top_n > 1 && d.max_rank_seen < 2
+        ? ' These sweeps recorded only Maia\'s top move, so this is the same as top-1'
+          + ' — re-run a Full analysis to record ranked candidates.' : '');
 
   const card = document.createElement('div');
   card.className = 'sweep-player';
@@ -1930,6 +1940,7 @@ function wireSettingsDialog() {
       maia_elo_max: Number(document.getElementById('s-maia-elo-max').value),
       maia_elo_step: Number(document.getElementById('s-maia-elo-step').value),
       maia_elo_step_batch: Number(document.getElementById('s-maia-elo-step-batch').value),
+      maia_multipv: Number(document.getElementById('s-maia-multipv').value),
       great_max_drop: Number(document.getElementById('s-great-drop').value),
       great_max_match_rate: Number(document.getElementById('s-great-rate').value),
       brilliant_enabled: document.getElementById('s-brilliant').value === '1',
@@ -2229,6 +2240,7 @@ async function fillSettingsForm() {
   document.getElementById('s-maia-elo-max').value = s.maia_elo_max;
   document.getElementById('s-maia-elo-step').value = s.maia_elo_step;
   document.getElementById('s-maia-elo-step-batch').value = s.maia_elo_step_batch ?? 200;
+  document.getElementById('s-maia-multipv').value = s.maia_multipv ?? 3;
   document.getElementById('s-great-drop').value = s.great_max_drop ?? 0.02;
   document.getElementById('s-great-rate').value = s.great_max_match_rate ?? 0.20;
   document.getElementById('s-brilliant').value = s.brilliant_enabled ? '1' : '0';

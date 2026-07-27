@@ -162,29 +162,36 @@ def common_grid(entries: list[dict], key: str = "you") -> tuple[list[int], list[
 
 
 def matrix(entries: list[dict], grid: list[int], key: str = "you"):
-    """(rows, game_ids) -- the game id per row is what lets the bootstrap
-    resample games instead of moves."""
+    """(rank rows, game_ids) -- the game id per row is what lets the bootstrap
+    resample games instead of moves. Rows carry Maia's rank for the played
+    move; `elo_sweep.hits` turns that into 0/1 under whichever objective."""
     rows, groups = [], []
     for entry in entries:
         index = {elo: i for i, elo in enumerate(entry["grid"])}
         columns = [index[elo] for elo in grid]
         for scores in entry.get(key, []):
-            rows.append([1.0 if scores[i] == "1" else 0.0 for i in columns])
+            decoded = elo_sweep.decode_scores(scores)
+            rows.append([decoded[i] for i in columns])
             groups.append(entry["game_id"])
     if not rows:
         return np.zeros((0, len(grid))), np.zeros(0, dtype=int)
     return np.asarray(rows, dtype=float), np.asarray(groups, dtype=int)
 
 
-def _side_estimate(entries: list[dict], key: str) -> dict:
+def _side_estimate(entries: list[dict], key: str, top_n: int = 1) -> dict:
     grid, usable, excluded = common_grid(entries, key)
     if not grid or len(grid) < 2:
         return {"estimate": None, "confidence": "low", "games": 0,
                 "reasons": ["no comparable sweep data"], "grid": grid,
                 "games_excluded_grid_mismatch": excluded}
-    rows, groups = matrix(usable, grid, key)
-    result = elo_sweep.estimate(grid, rows, groups=groups)
+    ranks, groups = matrix(usable, grid, key)
+    result = elo_sweep.estimate(grid, elo_sweep.hits(ranks, top_n), groups=groups)
     result["games"] = len({int(g) for g in groups})
+    result["top_n"] = top_n
+    # How much of the extra ordering information there is to use. Sweeps run
+    # before MultiPV was recorded, or against a build without it, only ever
+    # stored rank 1, and a top-N objective on those is just top-1 again.
+    result["max_rank_seen"] = int(ranks.max()) if ranks.size else 0
     result["games_excluded_grid_mismatch"] = excluded
     return result
 
@@ -239,10 +246,11 @@ def _calibrate(you: dict, field: dict, opponent_ratings: list) -> dict:
     }
 
 
-def build(user_id: int, run_id: int | None = None) -> dict:
+def build(user_id: int, run_id: int | None = None, top_n: int = 1) -> dict:
     entries, skipped = collect(user_id, run_id)
-    you = _side_estimate(entries, "you")
-    field = _side_estimate(entries, "opponent")
+    top_n = max(1, min(int(top_n), elo_sweep.MAX_TOP_N))
+    you = _side_estimate(entries, "you", top_n)
+    field = _side_estimate(entries, "opponent", top_n)
 
     # The field's real average rating, from the headers of the same games that
     # produced the field estimate.
@@ -258,6 +266,8 @@ def build(user_id: int, run_id: int | None = None) -> dict:
         "your_rating_mean": round(float(np.mean(your_ratings)), 1) if your_ratings else None,
         "your_rating_n": len(your_ratings),
         "games": len(entries),
+        "top_n": top_n,
+        "max_rank_seen": max(you.get("max_rank_seen", 0), field.get("max_rank_seen", 0)),
         "skipped": skipped,
         "scale_note": (
             "Maia-3's SelfElo is calibrated to Lichess ratings, so the raw estimate is on "
@@ -269,7 +279,8 @@ def build(user_id: int, run_id: int | None = None) -> dict:
 
 
 @router.get("")
-def get_strength(run_id: int | None = None, user: dict = Depends(require_user)):
+def get_strength(run_id: int | None = None, top_n: int = 1,
+                 user: dict = Depends(require_user)):
     """Pooled estimate over every game with a stored sweep. Pure re-fit of
     cached scores -- no engine runs -- so it is safe to call on every load."""
-    return build(user["id"], run_id)
+    return build(user["id"], run_id, top_n)

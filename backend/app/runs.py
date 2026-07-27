@@ -14,6 +14,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from . import elo_sweep
 from .auth import require_user
 from .db import db_cursor
 
@@ -83,7 +84,11 @@ def save_analysis(user_id: int, game_id: int, mode: str, payload: dict, run_id: 
             rows = []
             for side, block in (sweep.get("players") or {}).items():
                 for i, position in enumerate(block.get("positions", [])):
-                    scores = "".join("1" if v else "0" for v in block["matrix"][i])
+                    # One digit per grid point: the rank the played move got
+                    # in Maia's ordering, 0 for "not a candidate". '1'/'0' is
+                    # exactly what the old top-1-only sweeps wrote.
+                    scores = "".join(str(min(int(v), 9)) if v else "0"
+                                     for v in block["matrix"][i])
                     rows.append((run_game_id, side, position["ply"], position["fen"],
                                  position["uci"], scores))
             conn.executemany(
@@ -250,5 +255,5 @@ def _regroup(rows) -> dict:
     for r in rows:
         block = players.setdefault(r["side"], {"positions": [], "matrix": []})
         block["positions"].append({"ply": r["ply"], "fen": r["fen"], "uci": r["uci"]})
-        block["matrix"].append([1.0 if c == "1" else 0.0 for c in (r["scores"] or "")])
+        block["matrix"].append(elo_sweep.decode_scores(r["scores"]))
     return players
