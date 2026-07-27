@@ -353,6 +353,18 @@ input[type="text"], input[type="number"], textarea, select {
 .sweep-reasons li { margin: 2px 0; }
 .sweep-chart { width: 100%; height: 110px; margin-top: 8px; display: block; }
 
+/* Puzzle feedback: right / wrong / shown are three different things and are
+   read at a glance, so they don't share a colour. */
+#pz-status { font-size: 13px; color: var(--muted); }
+#pz-status b { color: var(--text); }
+.pz-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+#pz-feedback { margin-top: 8px; font-size: 13px; }
+.pz-prompt { color: var(--muted); }
+.pz-right { color: #7db37d; }
+.pz-wrong { color: #e08080; }
+.pz-shown { color: #5b8dee; }
+.pz-note { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.45; }
+
 .panel-note { font-size: 11px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
 
 .inline-label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }

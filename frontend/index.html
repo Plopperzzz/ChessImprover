@@ -133,6 +133,39 @@
         <div id="p-notes"></div>
       </div>
 
+      <div class="panel" id="puzzle-panel">
+        <h3>Puzzles from your games</h3>
+        <p class="panel-note">
+          Every position where you gave something away, as a puzzle. The
+          positions come from your own games — no engine runs to build them,
+          only to check an answer. The move you played is hidden until you've
+          tried, and anything as good as the engine's best counts.
+        </p>
+        <div class="play-grid">
+          <label>From
+            <select id="pz-scope">
+              <option value="blunder">Blunders</option>
+              <option value="all">Blunders + mistakes</option>
+            </select>
+          </label>
+          <label>Order
+            <select id="pz-order">
+              <option value="random">Random</option>
+              <option value="worst">Worst first</option>
+            </select>
+          </label>
+        </div>
+        <div class="play-buttons">
+          <button id="pz-start">Puzzle board</button>
+          <button id="pz-next" class="hidden">Next</button>
+          <button id="pz-reveal" class="hidden">Show me</button>
+          <button id="pz-exit" class="hidden">Game board</button>
+          <button id="pz-rebuild" title="Scan your analysed games for new mistakes">Rescan</button>
+        </div>
+        <div id="pz-status"></div>
+        <div id="pz-feedback"></div>
+      </div>
+
       <div class="panel">
         <h3>Analysis</h3>
         <label class="run-row">Save into run

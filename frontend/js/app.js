@@ -23,7 +23,9 @@ const state = {
   batchReconnect: null,        // pending reconnect timer, so retries can't stack
   batchFailures: new Set(),    // game indexes already listed, so a replay can't duplicate them
   playMode: false,
-  play: null, // { ws, chess, humanColor, turn, whiteMs, blackMs, clockEnabled, result, tick }
+  play: null,
+  puzzleMode: false,
+  puzzle: null,   // { id, chess, fen, yourColor, answered, ... } // { ws, chess, humanColor, turn, whiteMs, blackMs, clockEnabled, result, tick }
   // The board faces the side you played, so a game you had as Black opens
   // flipped. The nav flip button sets this override for the current game;
   // selecting another game clears it.
@@ -108,10 +110,16 @@ async function initApp() {
   });
   // The board is shared between analysis and play-vs-Maia, so its handlers
   // dispatch on the current mode rather than being rebound on every switch.
+  // The board serves three modes -- analysing a loaded game, playing Maia, and
+  // solving a puzzle -- so its handlers dispatch on the current one rather
+  // than being rebound on every switch.
   state.board.setInteractive(true, {
-    getLegalTargets: (sq) => (state.playMode ? playLegalTargets(sq) : state.explorer.getLegalTargets(sq)),
-    getMoverColor: () => (state.playMode ? state.play.humanColor : state.explorer.moverColor),
-    onMove: (from, to, promo) => (state.playMode ? onPlayMove(from, to, promo) : onBoardMove(from, to, promo)),
+    getLegalTargets: (sq) => (state.puzzleMode ? puzzleLegalTargets(sq)
+      : state.playMode ? playLegalTargets(sq) : state.explorer.getLegalTargets(sq)),
+    getMoverColor: () => (state.puzzleMode ? state.puzzle.chess.turn()
+      : state.playMode ? state.play.humanColor : state.explorer.moverColor),
+    onMove: (from, to, promo) => (state.puzzleMode ? onPuzzleMove(from, to, promo)
+      : state.playMode ? onPlayMove(from, to, promo) : onBoardMove(from, to, promo)),
     // Pre-move affordances: only the play side has them, and only while it's
     // the opponent's turn.
     isPremove: () => state.playMode && premovesOffered(),
@@ -129,6 +137,7 @@ async function initApp() {
   wireBatch();
   wireStrength();
   wireTrend();
+  wirePuzzles();
   wirePlay();
   connectLiveEval();
 
@@ -197,6 +206,9 @@ const SOUND_FILES = {
   start: 'game-start.webm',
   end: 'game-end.webm',
   lowtime: 'tenseconds.webm',
+  correct: 'correct-c1411f4.mp3',
+  wrong: 'fail-blip-hi-2b78df0.mp3',
+  solved: 'puzzle-solved-fee614d.mp3',
 };
 const soundCache = {};
 
@@ -256,11 +268,13 @@ function wireSound() {
    yourColor-to-orientation dance and drifting. */
 
 function bottomColor() {
-  const base = state.playMode
-    ? (state.play && state.play.humanColor === 'b' ? 'b' : 'w')
-    // 'unassigned' (your display name matched neither header) falls back to
-    // the conventional White-at-bottom rather than guessing.
-    : (state.explorer.yourColor === 'b' ? 'b' : 'w');
+  const base = state.puzzleMode
+    ? (state.puzzle && state.puzzle.your_color === 'b' ? 'b' : 'w')
+    : state.playMode
+      ? (state.play && state.play.humanColor === 'b' ? 'b' : 'w')
+      // 'unassigned' (your display name matched neither header) falls back to
+      // the conventional White-at-bottom rather than guessing.
+      : (state.explorer.yourColor === 'b' ? 'b' : 'w');
   return state.flipOverride ? (base === 'w' ? 'b' : 'w') : base;
 }
 
@@ -275,7 +289,19 @@ function renderPlayerPlates() {
   const bottom = bottomColor();
   const sides = { w: {}, b: {} };
 
-  if (state.playMode && state.play) {
+  if (state.puzzleMode && state.puzzle) {
+    // The plates name the two players from the game the puzzle came from --
+    // it happened, and whose game it was is part of recognising it.
+    const p = state.puzzle;
+    const names = { w: p.white, b: p.black };
+    for (const colour of ['w', 'b']) {
+      sides[colour] = {
+        name: names[colour] || (colour === 'w' ? 'White' : 'Black'),
+        rating: '', you: colour === p.your_color, result: '', clock: '',
+        toMove: colour === p.your_color,
+      };
+    }
+  } else if (state.playMode && state.play) {
     const p = state.play;
     for (const colour of ['w', 'b']) {
       const human = colour === p.humanColor;
@@ -2030,6 +2056,252 @@ function trendChart(buckets) {
     svg.appendChild(t);
   }
   return svg;
+}
+
+/* ---------------- Puzzles from your own games ----------------
+   The same board, in a third mode. Every position where you gave something
+   away is a puzzle: you faced it, you got it wrong, here it is again. The
+   move you actually played stays hidden until you've tried, because knowing
+   it turns "find the move" into "find the other move" -- and the reveal,
+   with what it cost you, is the lesson. */
+
+function wirePuzzles() {
+  document.getElementById('pz-start').addEventListener('click', startPuzzles);
+  document.getElementById('pz-next').addEventListener('click', () => loadNextPuzzle());
+  document.getElementById('pz-reveal').addEventListener('click', revealPuzzle);
+  document.getElementById('pz-exit').addEventListener('click', exitPuzzleMode);
+  document.getElementById('pz-rebuild').addEventListener('click', rebuildPuzzles);
+  for (const id of ['pz-scope', 'pz-order']) {
+    document.getElementById(id).addEventListener('change', () => {
+      if (state.puzzleMode) loadNextPuzzle();
+    });
+  }
+  refreshPuzzleStats();
+}
+
+function puzzleCounts(stats) {
+  if (!stats || !stats.total) {
+    return 'No puzzles yet — analyse some games (Quick is enough) and press Rescan.';
+  }
+  return `${stats.solved} of ${stats.total} solved · ${stats.blunders} from blunders.`;
+}
+
+async function refreshPuzzleStats() {
+  try {
+    const stats = await api('/api/puzzles/stats');
+    if (!state.puzzleMode) document.getElementById('pz-status').textContent = puzzleCounts(stats);
+    return stats;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Scans analysed games for mistakes worth practising. No engine runs here --
+    the position and the move come from the stored PGN. */
+async function rebuildPuzzles() {
+  const btn = document.getElementById('pz-rebuild');
+  btn.disabled = true;
+  document.getElementById('pz-status').textContent = 'Scanning your analysed games...';
+  try {
+    const result = await api('/api/puzzles/rebuild', { method: 'POST' });
+    const bits = [`${result.added} new`, `${result.total} in total`];
+    if (result.skipped_already_lost) {
+      bits.push(`${result.skipped_already_lost} skipped (the game was already lost there)`);
+    }
+    document.getElementById('pz-status').textContent = bits.join(', ') + '.';
+  } catch (e) {
+    document.getElementById('pz-status').textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function startPuzzles() {
+  if (state.playMode) exitPlayMode();
+  enterPuzzleMode();
+  await loadNextPuzzle();
+}
+
+function enterPuzzleMode() {
+  state.puzzleMode = true;
+  document.getElementById('pz-start').classList.add('hidden');
+  document.getElementById('pz-exit').classList.remove('hidden');
+  document.getElementById('pz-next').classList.remove('hidden');
+  document.getElementById('pz-reveal').classList.remove('hidden');
+  // A live engine eval of the puzzle position would simply be the answer.
+  document.getElementById('eval-bar').classList.add('hidden');
+  for (const el of document.querySelectorAll('.fen-row')) el.classList.add('hidden');
+  // Nothing to navigate: a puzzle is one position.
+  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
+    document.getElementById(id).disabled = true;
+  }
+  setAnalysisButtonsEnabled(false);
+}
+
+function exitPuzzleMode() {
+  state.puzzleMode = false;
+  state.puzzle = null;
+  document.getElementById('pz-start').classList.remove('hidden');
+  document.getElementById('pz-exit').classList.add('hidden');
+  document.getElementById('pz-next').classList.add('hidden');
+  document.getElementById('pz-reveal').classList.add('hidden');
+  document.getElementById('pz-feedback').innerHTML = '';
+  document.getElementById('eval-bar').classList.remove('hidden');
+  for (const el of document.querySelectorAll('.fen-row')) el.classList.remove('hidden');
+  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
+    document.getElementById(id).disabled = false;
+  }
+  setAnalysisButtonsEnabled(true);
+  refreshPuzzleStats();
+  state.flipOverride = false;
+  applyOrientation();
+  renderMoveTable();
+  syncBoardFull();
+}
+
+async function loadNextPuzzle() {
+  const scope = document.getElementById('pz-scope').value;
+  const order = document.getElementById('pz-order').value;
+  const previous = state.puzzle ? state.puzzle.id : null;
+  document.getElementById('pz-feedback').innerHTML = '';
+  document.getElementById('pz-status').textContent = 'Finding one...';
+  try {
+    const params = `scope=${scope}&order=${order}` + (previous ? `&exclude=${previous}` : '');
+    const data = await api(`/api/puzzles/next?${params}`);
+    showPuzzle(data);
+  } catch (e) {
+    document.getElementById('pz-status').textContent =
+      e.message.includes('no puzzles')
+        ? 'No puzzles for that selection — press Rescan, or widen it to mistakes.'
+        : 'Error: ' + e.message;
+  }
+}
+
+function showPuzzle(data) {
+  const p = data.puzzle;
+  state.puzzle = { ...p, chess: new Chess(), answered: false, busy: false };
+  state.puzzle.chess.load(p.fen);
+  state.flipOverride = false;
+  applyOrientation();                 // faces the side you played, as ever
+  state.board.renderFEN(p.fen);
+  renderPlayerPlates();
+
+  const opponent = p.your_color === 'w' ? p.black : p.white;
+  const cost = p.wp_drop != null ? ` You gave up ${(p.wp_drop * 100).toFixed(0)}% here.` : '';
+  document.getElementById('pz-status').innerHTML =
+    `<b>${p.your_color === 'w' ? 'White' : 'Black'} to move</b> — move ${p.move_number} `
+    + `vs ${opponent || '?'}${p.date ? ` (${p.date})` : ''}.${cost} `
+    + `<span class="pz-count">${data.solved}/${data.total} solved</span>`;
+  document.getElementById('pz-feedback').innerHTML =
+    '<div class="pz-prompt">Find the move you should have played.</div>';
+}
+
+function puzzleLegalTargets(square) {
+  const p = state.puzzle;
+  if (!p || p.answered || p.busy) return [];
+  const byTo = new Map();
+  for (const m of p.chess.moves({ square, verbose: true })) {
+    if (!byTo.has(m.to)) byTo.set(m.to, { to: m.to, promotion: !!m.promotion });
+  }
+  return Array.from(byTo.values());
+}
+
+async function onPuzzleMove(from, to, promotion) {
+  const p = state.puzzle;
+  if (!p || p.answered || p.busy) return;
+  const probe = new Chess();
+  probe.load(p.fen);
+  const res = probe.move({ from, to, promotion: promotion || 'q' });
+  if (!res) return;
+
+  p.busy = true;
+  playMoveSound(res.san, true);
+  await state.board.animateMove(from, to, probe.fen());
+  const feedback = document.getElementById('pz-feedback');
+  // The check is an engine search, so it isn't instant -- say so rather than
+  // leaving a board that looks stuck.
+  feedback.innerHTML = '<div class="pz-prompt">Checking...</div>';
+
+  let verdict;
+  try {
+    verdict = await api(`/api/puzzles/${p.id}/attempt`, {
+      method: 'POST',
+      body: JSON.stringify({ uci: from + to + (promotion || (res.promotion ? 'q' : '')) }),
+    });
+  } catch (e) {
+    feedback.innerHTML = `<div class="pz-wrong">Couldn't check that: ${e.message}</div>`;
+    resetPuzzleBoard();
+    p.busy = false;
+    return;
+  }
+  p.busy = false;
+  renderPuzzleVerdict(verdict);
+}
+
+/** Puts the board back to the puzzle position after a wrong answer, so the
+    next attempt starts from the same place you started from. */
+function resetPuzzleBoard() {
+  const p = state.puzzle;
+  if (!p) return;
+  state.board.renderFEN(p.fen);
+}
+
+function renderPuzzleVerdict(v) {
+  const p = state.puzzle;
+  const feedback = document.getElementById('pz-feedback');
+  const played = v.played && v.played.san
+    ? `In the game you played <b>${v.played.san}</b>.` : '';
+
+  if (v.correct) {
+    p.answered = true;
+    playSound('solved');
+    const equal = v.attempt.uci !== v.best.uci
+      ? ` (the engine prefers ${v.best.san}, but yours is as good)` : '';
+    feedback.innerHTML =
+      `<div class="pz-right">✓ <b>${v.attempt.san}</b> — that's it${equal}.</div>`
+      + `<div class="pz-note">${played}</div>`;
+    document.getElementById('pz-status').innerHTML =
+      `Solved. <span class="pz-count">${v.solved}/${v.total} solved</span>`;
+    return;
+  }
+
+  playSound('wrong');
+  const cost = `${(v.given_up * 100).toFixed(0)}%`;
+  feedback.innerHTML =
+    (v.same_as_played
+      ? `<div class="pz-wrong">✗ <b>${v.attempt.san}</b> — that's the move you played, and it gives up ${cost}.</div>`
+      : `<div class="pz-wrong">✗ <b>${v.attempt.san}</b> gives up ${cost} of the win probability.</div>`)
+    + `<div class="pz-note">Try again, or <b>Show me</b>.${v.same_as_played ? '' : ' ' + played}</div>`;
+  // A beat on the board before it goes back, so you see what you played.
+  setTimeout(resetPuzzleBoard, 650);
+}
+
+async function revealPuzzle() {
+  const p = state.puzzle;
+  if (!p || p.busy) return;
+  p.busy = true;
+  const feedback = document.getElementById('pz-feedback');
+  feedback.innerHTML = '<div class="pz-prompt">Working it out...</div>';
+  try {
+    const data = await api(`/api/puzzles/${p.id}/reveal`, { method: 'POST' });
+    p.answered = true;
+    // Play it on the board: seeing the move is the point of asking.
+    const probe = new Chess();
+    probe.load(p.fen);
+    const move = data.best.uci && probe.move({
+      from: data.best.uci.slice(0, 2), to: data.best.uci.slice(2, 4),
+      promotion: data.best.uci.slice(4) || 'q',
+    });
+    if (move) await state.board.animateMove(move.from, move.to, probe.fen());
+    feedback.innerHTML =
+      `<div class="pz-shown">The move was <b>${data.best.san}</b>.</div>`
+      + `<div class="pz-note">In the game you played <b>${data.played.san}</b>. `
+      + `This one stays unsolved — it'll come round again.</div>`;
+  } catch (e) {
+    feedback.innerHTML = `<div class="pz-wrong">Couldn't work it out: ${e.message}</div>`;
+  } finally {
+    p.busy = false;
+  }
 }
 
 /* ---------------- Play vs Maia3 ----------------

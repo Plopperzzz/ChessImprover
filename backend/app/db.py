@@ -170,6 +170,39 @@ CREATE TABLE IF NOT EXISTS sweep_positions (
     PRIMARY KEY (run_game_id, ply)
 );
 
+-- Puzzles built from your own mistakes and blunders (one per bad move you
+-- played). The position and the move come from replaying the stored PGN, so
+-- generating them needs no engine at all; the *solution* does, and is filled
+-- in lazily the first time a puzzle is actually attempted -- a library of
+-- 4000 blunders shouldn't cost 4000 searches for the dozen you look at.
+CREATE TABLE IF NOT EXISTS puzzles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    ply INTEGER NOT NULL,
+    fen TEXT NOT NULL,                -- the position you faced, before your move
+    played_uci TEXT NOT NULL,
+    played_san TEXT,
+    your_color TEXT NOT NULL,
+    classification TEXT NOT NULL,     -- 'mistake' | 'blunder'
+    wp_drop REAL,                     -- win probability you gave up with it
+    cp_before REAL,
+    solution_uci TEXT,
+    solution_san TEXT,
+    solution_cp REAL,
+    solved_at TEXT,                   -- when the engine worked the answer out
+    attempts INTEGER NOT NULL DEFAULT 0,
+    solved INTEGER NOT NULL DEFAULT 0,
+    revealed INTEGER NOT NULL DEFAULT 0,
+    last_seen_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- One puzzle per bad move, so a re-analysed or re-batched game can't
+    -- produce the same position twice.
+    UNIQUE(user_id, game_id, ply)
+);
+
+CREATE INDEX IF NOT EXISTS idx_puzzles_user ON puzzles(user_id, solved);
+
 -- Applied one-off data migrations, so a migration that rewrites user data
 -- can't run twice and undo a deliberate change made afterwards.
 CREATE TABLE IF NOT EXISTS migrations (

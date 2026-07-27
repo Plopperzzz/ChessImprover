@@ -1,0 +1,143 @@
+# To do
+
+Things worth building next, with enough notes to start from. Roughly ordered
+by value per unit of work, not by when they were thought of.
+
+Anything already built lives in the README; this file is only what isn't.
+
+---
+
+## 1. Opening repertoire report
+
+**Why:** the app can already say *that* you lost the game and *where*. It
+can't say "you lose the Caro-Kann and you're fine in everything else", which
+is the question that changes what you study next.
+
+**What:** group analysed games by opening — the `ECO` header when the export
+carries one, otherwise the first N plies as a key — and report per opening:
+games, score, average win probability at move 15, and where the mistakes
+cluster by move number.
+
+**Data:** all of it is already stored. `games.headers_json` has ECO/Opening
+for chess.com and lichess exports; `analysis_moves` has the per-ply
+classifications and evaluations; `games.result` plus `your_color` gives the
+score. No engine work, no new columns.
+
+**Watch out for:** an opening with three games in it will show a 33% score and
+mean nothing — the same sparse-bucket problem the trend view already solved,
+and it needs the same treatment (show it, mark it, don't rank on it). Group by
+colour too: your Caro-Kann as Black and the games you faced it as White are
+different repertoires.
+
+---
+
+## 2. When do you play best? (time-of-day bins)
+
+**Why:** the plausible answer ("I'm worse after 11pm") is worth knowing and
+nobody's memory is reliable about it.
+
+**What:** bin games by local time of day — four-hour blocks, or named
+(morning / afternoon / evening / night / late night) — and per bin show:
+estimated Elo with its interval, win/draw/loss record, and the *opponents'*
+estimated Elo for the same games. Chart it the way the trend view now does:
+one panel per quantity, shared axis, each on its own scale.
+
+**Data:** mostly there.
+
+* Time of day: `games.headers_json` carries `UTCTime` (and often `StartTime` /
+  `EndTime`) on chess.com and lichess exports. Nothing new to import — but the
+  column doesn't exist yet, so this needs a `games.utc_time` column plus a
+  backfill from the stored headers.
+* **Timezone is the catch.** `UTCTime` is UTC and "late night" is local, so
+  binning UTC directly would be wrong for everyone not on UTC. This needs a
+  per-user timezone (an IANA name or a fixed offset) in `users`, defaulting to
+  the browser's `Intl.DateTimeFormat().resolvedOptions().timeZone` on first
+  load. Games with no time header sit the view out and are counted in a
+  "left out" line, exactly as the trend view does for undated games.
+* Your estimated Elo per bin: pool that bin's `sweep_positions` and fit, the
+  same as `trend.build` does per date bucket — the code is nearly identical
+  and should be shared rather than copied.
+* **The opponents' estimate is already computed.** A full analysis sweeps both
+  sides, and `run_games.results_json` holds a per-side estimate; the trend view
+  simply ignores the opponent's. Pooling the opponent side per bin answers "am
+  I playing worse at midnight, or just drawing stronger opponents?" — which is
+  the confound that would otherwise make this whole view unreadable.
+
+**Watch out for:** with a hundred games spread over five bins each bin is
+twenty games, and the interval will be wide. Report the intervals honestly and
+say plainly when two bins can't be told apart, rather than declaring a best
+time of day off a 40-Elo gap with ±90 on each end. The win/loss record has the
+same problem and is worse, because a 12-8 record feels like evidence and
+isn't.
+
+---
+
+## 3. Time spent vs quality
+
+**Why:** most players have a sharp cliff below about five seconds a move, and
+seeing your own is more convincing than being told.
+
+**What:** blunder and mistake rate against time spent on the move, bucketed by
+think time.
+
+**Data:** already stored. `sweep_positions.think_ms` is read from the `%clk`
+comments at upload, and the Elo fit already uses it to drop instant moves.
+`analysis_moves.classification` is the other half. No engine work.
+
+**Watch out for:** think time and position difficulty are tangled — you think
+longer in sharp positions, which are also where you blunder. The honest
+version reports the association without claiming the direction.
+
+---
+
+## 4. Batches don't survive a restart of the *server*
+
+Running jobs live in the process, so `Ctrl-C`, a crash or a reboot ends the
+run. Every game it had finished is already saved, and re-running with "Not yet
+analysed" picks up where it stopped, but the run itself is gone — the browser
+is told so rather than left watching a bar that will never move.
+
+Surviving a restart means persisting the queued game list and the run's
+progress to the database and resuming it on startup. Closing the tab, locking
+the phone and switching apps are all fine already.
+
+---
+
+## 5. Phase breakdown
+
+Opening / middlegame / endgame accuracy separately, and — since the sweep
+stores per-position scores — three separate Elo fits rather than one. "Your
+endgame is 200 points behind your opening" is directly actionable in a way
+that a single number never is.
+
+The phase boundary has to be defined and stated, not improvised: material
+count is the usual rule (endgame below ~13 points of non-pawn material per
+side), and whatever is picked should be written down where the fit is.
+
+---
+
+## 6. Drag-and-drop pieces
+
+Click-click works everywhere and is what the board does now. Dragging is the
+expected gesture on a phone, and it pairs naturally with pre-moves. Pointer
+events, and the existing `_handleClick` path stays as the fallback — dragging
+must not become the only way to move.
+
+---
+
+## 7. Jump between mistakes in an analysed game
+
+`n` / `p` to step from one mistake or blunder to the next, instead of
+scrubbing the eval plot for the cliffs. Small, and it is what you actually do
+after an analysis finishes.
+
+---
+
+## 8. Puzzle scheduling
+
+The puzzle set has no notion of *when* to show you one again. Right now a
+solved puzzle drops to the back and a revealed one stays unsolved, which is
+enough to be useful but isn't spaced repetition. If the puzzles get used
+enough to want it, the columns to add are a next-due date and an ease factor,
+and the thing to avoid is a scheduler so eager that it shows you the same
+position every day until you resent it.

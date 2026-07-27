@@ -19,6 +19,10 @@ saved analysis runs, batch mode, the bounded worker pool that lets both of
 you analyse at once, the trend-over-time view, and the polish pass. That is
 the whole build order from the spec.
 
+Beyond the spec: puzzles built from your own mistakes, pre-moves, looking back
+through a game while you're playing it, and separate board/piece sets. What's
+next is in [`docs/TODO.md`](docs/TODO.md).
+
 ### Sharing the machine (worker pool)
 
 Every piece of engine work -- a quick pass, a full analysis, a sweep, each
@@ -234,6 +238,39 @@ The board follows whichever game is being processed, per section 6.
 
 Games run sequentially within a batch, but the batch releases its worker-pool
 slots between games -- see above.
+
+### Puzzles from your own games
+
+Every position where you gave something away, handed back as a puzzle. The
+board switches to a third mode — game board, play board, puzzle board — and
+gives you the position you faced, oriented to the side you had, with the
+opponent's name and the date, and asks for the move you should have played.
+
+Four decisions, all of them the difference between a useful set and a pile of
+positions:
+
+- **Building them runs no engine.** The position and the move you played come
+  from replaying the stored PGN to that ply, so Rescan over a thousand
+  analysed games is a few seconds of parsing. What needs an engine is the
+  *answer*, and that is computed the first time a puzzle is actually attempted
+  and then stored — a library with 4000 blunders in it must not cost 4000
+  searches for the dozen you look at.
+- **Being right is not "you found Stockfish's move".** Several moves are often
+  equally good, and a set that fails you for finding the other winning rook
+  teaches nothing. An attempt is graded by evaluating it and comparing win
+  probability with the best move; anything within 3% counts, and the feedback
+  talks about what a move gave up rather than whether it matched.
+- **The move you played is hidden until you've tried.** Knowing it turns "find
+  the move" into "find the other move". It's revealed with the verdict, which
+  is where the lesson is — and if you play it again the panel says so by name.
+- **Positions that were already lost are skipped.** "You were down a rook and
+  this made it worse" is not a lesson, and it is the largest source of junk in
+  a naive generator. Rescan says how many it left out on those grounds.
+
+Blunders only by default, or blunders and mistakes; random order or worst
+first. Show me plays the answer on the board and leaves the puzzle unsolved —
+a revealed answer isn't one you found, so it comes round again. The eval bar
+is hidden for the duration, for the obvious reason.
 
 ### Saved analyses
 
@@ -571,14 +608,11 @@ own, with a live preview before saving).
 
 ## To do
 
-- **A batch does not survive a restart of the *server*.** Running jobs live in
-  the process, so `Ctrl-C`, a crash or a reboot ends the run — every game it
-  had finished is already saved, and re-running with "Not yet analysed" picks
-  up where it stopped, but the run itself is gone and the browser is told so
-  rather than left watching a bar that will never move. Surviving a restart
-  means persisting the queued game list and the run's progress to the database
-  and resuming it on startup. Closing the tab, locking the phone or switching
-  apps are all fine already — those are covered above.
+In [`docs/TODO.md`](docs/TODO.md), with notes on what data each one already
+has and what it would need. The shortest version: an opening repertoire
+report, a "when do you play best" view binned by time of day, think-time vs
+quality, phase-by-phase Elo, drag-and-drop, and making a batch survive a
+restart of the server itself.
 
 ## Open questions still to confirm
 
