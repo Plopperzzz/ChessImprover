@@ -101,7 +101,11 @@ async function initApp() {
   document.getElementById('whoami').textContent = state.user.display_name;
   state.settings = await api('/api/settings');
 
-  state.board = new Board(document.getElementById('board'), state.user.asset_set || 'default');
+  state.board = new Board(document.getElementById('board'), {
+    board: state.user.board_set || state.user.asset_set || 'default',
+    pieces: state.user.piece_set || state.user.asset_set || 'default',
+    showLegalMoves: state.user.show_legal_moves !== 0,
+  });
   // The board is shared between analysis and play-vs-Maia, so its handlers
   // dispatch on the current mode rather than being rebound on every switch.
   state.board.setInteractive(true, {
@@ -112,6 +116,7 @@ async function initApp() {
 
   wireSound();
   wireNav();
+  wireBoardDialog();
   wireFenBox();
   wirePgnUpload();
   wireSettingsDialog();
@@ -133,10 +138,26 @@ async function initApp() {
 
 function syncBoardFull() {
   state.board.renderFEN(state.explorer.fen);
+  refreshLastMove();
   refreshFenBox();
   refreshMoveTableHighlight();
   renderPlayerPlates();   // the to-move marker follows the position
   requestEval();
+}
+
+/** Lights the two squares of the move that led to the position now shown.
+    renderFEN clears the marks (a bare FEN says nothing about how it was
+    reached), so anything that changes the position calls this afterwards --
+    including stepping *backwards*, where the move to mark is the one before
+    the one just undone, not the undone move itself. */
+function refreshLastMove() {
+  if (state.playMode) {
+    const move = state.play && (state.play.moves || [])[playViewPly() - 1];
+    state.board.setLastMove(move ? move.from : null, move ? move.to : null);
+    return;
+  }
+  const node = state.explorer.nodes[state.explorer.currentNodeId];
+  state.board.setLastMove(node && node.from, node && node.to);
 }
 
 function refreshFenBox() {
@@ -148,6 +169,7 @@ async function onBoardMove(from, to, promotion) {
   if (!res) return;
   playMoveSound(res.san || res.move || '', true);
   await state.board.animateMove(from, to, state.explorer.fen);
+  refreshLastMove();
   refreshFenBox();
   renderMoveTable(); // a new variation node may have just been created
   refreshMoveTableHighlight();
@@ -313,31 +335,43 @@ function wireNav() {
     state.flipOverride = !state.flipOverride;
     applyOrientation();
   });
+  // Each of these works on the game you're playing as readily as on a loaded
+  // one: looking back at what just happened is the most ordinary thing to
+  // want mid-game, and the board coming back to the live position is one tap.
   document.getElementById('nav-start').addEventListener('click', () => {
+    if (state.playMode) { goToPlayPly(0); return; }
     state.explorer.goToStart();
     syncBoardFull();
   });
   document.getElementById('nav-prev').addEventListener('click', async () => {
+    if (state.playMode) { await stepPlay(-1); return; }
     const res = state.explorer.stepBackward();
     if (!res) return;
     playMoveSound(res.san, true);
     await state.board.animateMove(res.to, res.from, state.explorer.fen);
+    refreshLastMove();
     refreshFenBox();
     refreshMoveTableHighlight();
     requestEval();
   });
   document.getElementById('nav-next').addEventListener('click', async () => {
+    if (state.playMode) { await stepPlay(1); return; }
     const res = state.explorer.stepForward();
     if (!res) return;
     playMoveSound(res.san, true);
     await state.board.animateMove(res.from, res.to, state.explorer.fen);
+    refreshLastMove();
     refreshFenBox();
     refreshMoveTableHighlight();
     requestEval();
   });
   document.getElementById('nav-end').addEventListener('click', () => {
+    if (state.playMode) { goToPlayPly(playLivePly()); return; }
     state.explorer.goToMainlineEnd();
     syncBoardFull();
+  });
+  document.getElementById('board-note').addEventListener('click', () => {
+    if (state.playMode) goToPlayPly(playLivePly());
   });
   document.addEventListener('keydown', (ev) => {
     if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
@@ -347,6 +381,115 @@ function wireNav() {
     if (ev.key === 'ArrowDown') document.getElementById('nav-end').click();
     if (ev.key === 'f' || ev.key === 'F') document.getElementById('nav-flip').click();
   });
+}
+
+/* ---------------- Board settings (the ⚙ beside the board) ----------------
+   How the board *looks and behaves* is a different kind of setting from which
+   engine to launch, and you want to see the board while changing it -- hence
+   its own dialog, opened from the board rather than from the top bar. */
+
+function wireBoardDialog() {
+  const dialog = document.getElementById('board-dialog');
+  const boardSel = document.getElementById('b-board-set');
+  const pieceSel = document.getElementById('b-piece-set');
+  const legal = document.getElementById('b-legal-moves');
+
+  document.getElementById('board-settings-btn').addEventListener('click', async () => {
+    await fillBoardForm();
+    dialog.classList.remove('hidden');
+  });
+
+  // Every control previews live on the real board as well as on the swatch --
+  // Cancel puts back whatever was saved.
+  const preview = () => {
+    state.board.setSets({ board: boardSel.value, pieces: pieceSel.value });
+    renderBoardPreview(boardSel.value, pieceSel.value);
+  };
+  boardSel.addEventListener('change', preview);
+  pieceSel.addEventListener('change', preview);
+  legal.addEventListener('change', () => state.board.setShowLegalMoves(legal.checked));
+
+  document.getElementById('board-cancel').addEventListener('click', () => {
+    dialog.classList.add('hidden');
+    applySavedBoardPrefs();
+  });
+
+  document.getElementById('board-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    try {
+      state.user = await api('/api/settings/profile', {
+        method: 'PUT',
+        body: JSON.stringify({
+          board_set: boardSel.value,
+          piece_set: pieceSel.value,
+          show_legal_moves: legal.checked,
+        }),
+      });
+      dialog.classList.add('hidden');
+      applySavedBoardPrefs();
+    } catch (e) {
+      alert('Could not save board settings: ' + e.message);
+    }
+  });
+}
+
+/** Puts the board back to what's stored on the account -- used by Cancel to
+    drop a live preview, and by Save to confirm what the server accepted. */
+function applySavedBoardPrefs() {
+  state.board.setSets({
+    board: state.user.board_set || 'default',
+    pieces: state.user.piece_set || 'default',
+  });
+  state.board.setShowLegalMoves(state.user.show_legal_moves !== 0);
+}
+
+async function fillBoardForm() {
+  const sets = await api('/api/asset-sets');
+  // A set with only a board.png belongs in one dropdown and not the other;
+  // offering it in both is how you get an empty board or invisible pieces.
+  for (const [id, key, chosen] of [['b-board-set', 'has_board', state.user.board_set],
+                                   ['b-piece-set', 'has_pieces', state.user.piece_set]]) {
+    const sel = document.getElementById(id);
+    sel.innerHTML = '';
+    for (const set of sets.filter((s) => s[key])) {
+      const opt = document.createElement('option');
+      opt.value = set.name;
+      opt.textContent = set.name;
+      sel.appendChild(opt);
+    }
+    const current = chosen || state.user.asset_set || 'default';
+    if (sets.some((s) => s.name === current && s[key])) sel.value = current;
+  }
+  document.getElementById('b-legal-moves').checked = state.user.show_legal_moves !== 0;
+  renderBoardPreview(document.getElementById('b-board-set').value,
+                     document.getElementById('b-piece-set').value);
+}
+
+/** A small board+pieces swatch, drawn from the two chosen sets so a mix shows
+    as the mix it is. */
+function renderBoardPreview(boardSet, pieceSet) {
+  const wrap = document.getElementById('board-preview');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const bg = document.createElement('img');
+  bg.className = 'prev-board';
+  bg.src = `/assets/sets/${boardSet}/board.png`;
+  bg.alt = '';
+  bg.onerror = () => { wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%'; };
+  wrap.appendChild(bg);
+
+  // A representative handful of pieces, laid out on the swatch's 4x4 grid.
+  const sample = [['wk', 0, 3], ['wq', 1, 3], ['bk', 3, 0], ['bq', 2, 0]];
+  for (const [piece, col, row] of sample) {
+    const img = document.createElement('img');
+    img.className = 'prev-piece';
+    img.src = `/assets/sets/${pieceSet}/${piece}.png`;
+    img.alt = '';
+    img.style.left = (col * 25) + '%';
+    img.style.top = (row * 25) + '%';
+    wrap.appendChild(img);
+  }
 }
 
 function wireFenBox() {
@@ -1798,8 +1941,98 @@ function sendPlay(msg) {
   }
 }
 
+/* ---- Looking back through the game you're playing --------------------
+   The board can show any earlier position of the live game without the game
+   pausing for it: `viewPly` is what's on screen, null meaning "the live
+   position". Everything the server sends keeps updating the model while you
+   look; only the *board* stays where you put it, and one tap brings it back. */
+
+function playLivePly() {
+  return state.play && state.play.moves ? state.play.moves.length : 0;
+}
+
+function playViewPly() {
+  const p = state.play;
+  if (!p) return 0;
+  return p.viewPly === null || p.viewPly === undefined ? playLivePly() : p.viewPly;
+}
+
+function playIsLive() {
+  return playViewPly() === playLivePly();
+}
+
+/** Rebuilds the per-ply positions from the server's move list. Cheap enough
+    to redo on every state message, and it means the review positions can
+    never drift from the game the server thinks is being played. */
+function rebuildPlayMoves() {
+  const p = state.play;
+  const replay = new Chess();
+  p.startFen = replay.fen();
+  p.moves = [];
+  for (const san of p.sanHistory || []) {
+    const res = replay.move(san) || replay.move(san, { sloppy: true });
+    if (!res) break;
+    p.moves.push({ san: res.san, from: res.from, to: res.to, fenAfter: replay.fen() });
+  }
+  // A move played while you were looking back can't drag the board with it,
+  // but the ply you're looking at has to stay the same ply.
+  if (p.viewPly !== null && p.viewPly !== undefined && p.viewPly > p.moves.length) {
+    p.viewPly = p.moves.length;
+  }
+}
+
+function playFenAt(ply) {
+  const p = state.play;
+  return ply <= 0 ? p.startFen : (p.moves[ply - 1] || {}).fenAfter;
+}
+
+/** Jumps the board to `ply` of the live game. Snaps by default; `animate`
+    slides the one move between here and there. */
+async function goToPlayPly(ply, animate = false) {
+  const p = state.play;
+  if (!p || !p.moves) return;
+  const target = Math.max(0, Math.min(ply, p.moves.length));
+  const from = playViewPly();
+  p.viewPly = target === p.moves.length ? null : target;
+
+  const fen = playFenAt(target);
+  if (animate && Math.abs(target - from) === 1) {
+    // Stepping forward slides the move being added; stepping back slides the
+    // move being undone in reverse.
+    const move = p.moves[Math.max(target, from) - 1];
+    const [a, b] = target > from ? [move.from, move.to] : [move.to, move.from];
+    await state.board.animateMove(a, b, fen);
+  } else {
+    state.board.renderFEN(fen);
+  }
+  refreshLastMove();
+  renderPlayMoveTable();
+  renderPlayReviewNote();
+}
+
+async function stepPlay(delta) {
+  await goToPlayPly(playViewPly() + delta, true);
+}
+
+/** Says the board isn't showing the live position, and takes you back. Silent
+    when you're up to date, which is nearly always. */
+function renderPlayReviewNote() {
+  const note = document.getElementById('board-note');
+  if (!state.playMode || playIsLive()) {
+    note.classList.add('hidden');
+    note.textContent = '';
+    return;
+  }
+  const behind = playLivePly() - playViewPly();
+  note.textContent = `Looking back ${behind} move(s) — tap to return to the game`;
+  note.classList.remove('hidden');
+}
+
 function playLegalTargets(square) {
   const p = state.play;
+  // Moving from a position that isn't the live one would be a move in a game
+  // that has moved on. Return to the game first.
+  if (!playIsLive()) return [];
   if (!p || p.result || p.chess.turn() !== p.humanColor) return [];
   const byTo = new Map();
   for (const m of p.chess.moves({ square, verbose: true })) {
@@ -1815,6 +2048,8 @@ async function onPlayMove(from, to, promotion) {
   playMoveSound(res.san, true);
   await state.board.animateMove(from, to, p.chess.fen());
   (p.sanHistory = p.sanHistory || []).push(res.san); // optimistic; the next state message is authoritative
+  rebuildPlayMoves();
+  refreshLastMove();
   renderPlayMoveTable();
   sendPlay({ type: 'move', uci: from + to + (promotion || (res.promotion ? 'q' : '')) });
 }
@@ -1860,8 +2095,11 @@ function enterPlayMode() {
   state.play.result = null;
   state.play.humanColor = 'w';
   state.play.sanHistory = [];
+  state.play.viewPly = null;    // null = the board is showing the live position
   state.play.greeted = false;
   state.play.lowTimeWarned = false;
+  rebuildPlayMoves();
+  renderPlayReviewNote();
   state.flipOverride = false;   // a new game always starts facing you
   document.getElementById('p-exit').classList.remove('hidden');
   // Showing a live Stockfish eval of your own game in progress would just be
@@ -1870,9 +2108,8 @@ function enterPlayMode() {
   for (const el of document.querySelectorAll('.fen-row')) el.classList.add('hidden');
   // Analysis controls act on the loaded game, which isn't what's on the board now.
   document.getElementById('quick-analysis-btn').disabled = true;
-  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
-    document.getElementById(id).disabled = true;
-  }
+  // The nav buttons stay live: they step through the game in progress rather
+  // than the loaded one (see goToPlayPly).
 }
 
 function exitPlayMode() {
@@ -1889,9 +2126,8 @@ function exitPlayMode() {
   document.getElementById('p-save').disabled = true;
   document.getElementById('p-status').textContent = '';
   document.getElementById('p-notes').textContent = '';
-  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
-    document.getElementById(id).disabled = false;
-  }
+  if (state.play) state.play.viewPly = null;
+  renderPlayReviewNote();
   document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
   state.flipOverride = false;
   applyOrientation();
@@ -1919,9 +2155,16 @@ async function handlePlayMessage(msg) {
     // Keep the local copy in step, then slide the piece.
     p.chess.move({ from: msg.from, to: msg.to, promotion: msg.promotion || 'q' });
     (p.sanHistory = p.sanHistory || []).push(msg.san);
+    rebuildPlayMoves();
     playMoveSound(msg.san, false);
-    await state.board.animateMove(msg.from, msg.to, msg.fen);
+    // If you're looking back at an earlier position, Maia's reply goes into
+    // the move list but does not yank the board out from under you.
+    if (playIsLive()) {
+      await state.board.animateMove(msg.from, msg.to, msg.fen);
+      refreshLastMove();
+    }
     renderPlayMoveTable();
+    renderPlayReviewNote();
     return;
   }
   if (msg.type === 'state') {
@@ -1937,13 +2180,20 @@ async function handlePlayMessage(msg) {
     // The move list comes from the server, not from chess.js history: a
     // resync below calls chess.load(), which throws that history away.
     p.sanHistory = msg.san_history || [];
+    rebuildPlayMoves();
     renderPlayMoveTable();
+    renderPlayReviewNote();
 
     // The server is the source of truth -- if the local copy drifted for any
     // reason, snap to what the server says rather than letting them diverge.
+    // The board only follows when it's showing the live position; while
+    // you're looking back, the correction is to the model, not the view.
     if (p.chess.fen() !== msg.fen) {
       p.chess.load(msg.fen);
-      state.board.renderFEN(msg.fen);
+      if (playIsLive()) {
+        state.board.renderFEN(msg.fen);
+        refreshLastMove();
+      }
     }
     applyOrientation();
 
@@ -2001,31 +2251,41 @@ function formatClock(ms) {
 
 /** Play-mode move list, reusing the analysis move table's markup so the two
     modes look consistent. Oriented to the human, same as section 5 requires
-    for the analysis view. */
+    for the analysis view. Clicking a move puts that position on the board --
+    the same gesture as in the analysis table, and it doesn't interrupt the
+    game (see goToPlayPly). */
 function renderPlayMoveTable() {
   const tbody = document.getElementById('move-table').querySelector('tbody');
   tbody.innerHTML = '';
   const history = state.play.sanHistory || [];
   const humanIsWhite = state.play.humanColor === 'w';
+  const shown = playViewPly();
   document.getElementById('mt-yours').textContent = `${state.user.display_name || 'You'} (you)`;
   document.getElementById('mt-theirs').textContent = 'Maia3';
   for (let i = 0; i < history.length; i += 2) {
-    const whiteSan = history[i];
-    const blackSan = history[i + 1];
     const tr = document.createElement('tr');
     const numTd = document.createElement('td');
     numTd.className = 'ply-num';
     numTd.textContent = (i / 2 + 1) + '.';
     tr.appendChild(numTd);
-    for (const san of humanIsWhite ? [whiteSan, blackSan] : [blackSan, whiteSan]) {
+    // Ply numbers are 1-based; i is the index of White's move in this row.
+    const white = { san: history[i], ply: i + 1 };
+    const black = { san: history[i + 1], ply: i + 2 };
+    for (const move of humanIsWhite ? [white, black] : [black, white]) {
       const td = document.createElement('td');
-      td.textContent = san || '';
+      td.textContent = move.san || '';
+      if (move.san) {
+        td.classList.toggle('current', move.ply === shown);
+        td.addEventListener('click', () => goToPlayPly(move.ply));
+      }
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
   }
   const wrap = document.getElementById('move-table-wrap');
-  wrap.scrollTop = wrap.scrollHeight;
+  // Chasing the newest move would fight you while you're reading back
+  // through the game, so it only follows when the board is live.
+  if (playIsLive()) wrap.scrollTop = wrap.scrollHeight;
 }
 
 /* ---------------- Live eval (Stockfish over WebSocket) ---------------- */
@@ -2088,11 +2348,6 @@ function wireSettingsDialog() {
   });
   document.getElementById('settings-cancel').addEventListener('click', () => {
     dialog.classList.add('hidden');
-    state.board.setAssetSet(state.user.asset_set || 'default'); // undo any live preview
-  });
-  document.getElementById('s-asset-set').addEventListener('change', (ev) => {
-    renderAssetPreview(ev.target.value);      // visible feedback inside the dialog
-    state.board.setAssetSet(ev.target.value); // and the real board behind it
   });
 
   document.getElementById('settings-form').addEventListener('submit', async (ev) => {
@@ -2122,14 +2377,11 @@ function wireSettingsDialog() {
     state.settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
 
     const displayName = document.getElementById('s-display-name').value.trim();
-    const assetSet = document.getElementById('s-asset-set').value;
-    const profileBody = {};
-    if (displayName && displayName !== state.user.display_name) profileBody.display_name = displayName;
-    if (assetSet && assetSet !== state.user.asset_set) profileBody.asset_set = assetSet;
-    if (Object.keys(profileBody).length) {
-      state.user = await api('/api/settings/profile', { method: 'PUT', body: JSON.stringify(profileBody) });
+    if (displayName && displayName !== state.user.display_name) {
+      state.user = await api('/api/settings/profile', {
+        method: 'PUT', body: JSON.stringify({ display_name: displayName }),
+      });
       document.getElementById('whoami').textContent = state.user.display_name;
-      state.board.setAssetSet(state.user.asset_set);
     }
     dialog.classList.add('hidden');
     // Settings only take effect for new engine sessions -- reconnect live eval.
@@ -2355,50 +2607,9 @@ async function refreshMaiaModels(selected) {
   note.classList.toggle('warn', !info.discovered || /NOT applied/.test(info.note || ''));
 }
 
-/** Draws a small board+pieces swatch for `setName` inside the settings
-    dialog. The dialog is a full-screen overlay (it has to be, to stay usable
-    on a phone), so the real board behind it can't be seen while choosing --
-    without this, picking a set looks like it does nothing. */
-function renderAssetPreview(setName) {
-  const wrap = document.getElementById('asset-preview');
-  if (!wrap) return;
-  wrap.innerHTML = '';
-
-  const bg = document.createElement('img');
-  bg.className = 'prev-board';
-  bg.src = `/assets/sets/${setName}/board.png`;
-  bg.alt = '';
-  bg.onerror = () => { wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%'; };
-  wrap.appendChild(bg);
-
-  // A representative handful of pieces, laid out on the swatch's 4x4 grid.
-  const sample = [['wk', 0, 3], ['wq', 1, 3], ['bk', 3, 0], ['bq', 2, 0]];
-  for (const [piece, col, row] of sample) {
-    const img = document.createElement('img');
-    img.className = 'prev-piece';
-    img.src = `/assets/sets/${setName}/${piece}.png`;
-    img.alt = '';
-    img.style.left = (col * 25) + '%';
-    img.style.top = (row * 25) + '%';
-    wrap.appendChild(img);
-  }
-}
-
 async function fillSettingsForm() {
   const s = state.settings;
   document.getElementById('s-display-name').value = state.user.display_name;
-
-  const sets = await api('/api/asset-sets');
-  const sel = document.getElementById('s-asset-set');
-  sel.innerHTML = '';
-  for (const name of sets) {
-    const opt = document.createElement('option');
-    opt.value = name;
-    opt.textContent = name;
-    sel.appendChild(opt);
-  }
-  sel.value = state.user.asset_set || 'default';
-  renderAssetPreview(sel.value);
 
   await populateEngineDropdowns(s.stockfish_path, s.maia_path);
   document.getElementById('s-sf-threads').value = s.stockfish_threads;

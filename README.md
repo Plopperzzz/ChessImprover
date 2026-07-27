@@ -70,6 +70,25 @@ and goes back to facing you. Where your display name matches neither PGN
 header the board takes the conventional White-at-bottom view and no plate
 claims to be you, rather than guessing.
 
+The two squares of the move that produced the position are tinted, so "what
+just moved" never needs working out from the move list. They follow the board
+when it's flipped, and they're cleared by a jump to a bare FEN -- a position
+with no known route into it has no last move to point at. Stepping *backwards*
+lights the move before the one you undid, which is the move that made the
+position you're now looking at.
+
+**⚙ beside the board** opens the board's own settings, separate from Engine
+Settings: which board, which pieces, and whether picking a piece up shows dots
+on its legal destinations. Board and pieces are chosen **separately** -- they
+are independent art, and the pairing you want is rarely both halves of one set
+-- and each dropdown offers only the sets that actually contain that half, so
+a set holding just a `board.png` can't leave you with invisible pieces. Every
+control previews on the real board while the dialog is open; Cancel puts back
+what was saved. The choices live on your account, not in the browser, so they
+follow you to the phone. With the dots turned off the square you picked up
+from is still marked -- otherwise clicking a piece looks like nothing
+happened.
+
 On a wide screen the layout is three columns -- board, move table, then
 everything else -- putting the move table beside the board as section 5 asks.
 They wrap in that order on anything narrower, so a phone gets board, moves,
@@ -179,6 +198,7 @@ progress bar and Cancel button included, and pressing Start while a batch is
 already running hands back the run in progress rather than starting another.
 Coming back to the foreground also reconnects the event socket immediately,
 since a backgrounded tab can be handed back one that looks open and isn't.
+(Restarting the *server* is a different matter — see To do.)
 
 The event log a reconnecting client is caught up with is *compacted*: one
 `game_start`, one `progress`, one `game_done`, and the failures. Replaying the
@@ -306,6 +326,29 @@ number:
   move at 600 and at 2600. The panel says so and names the likely cause
   instead of reporting the meaningless number that falls out.
 
+**A finer Elo step does not buy a better estimate.** Tempting, since the step
+is the most obvious knob, but the estimate is a *fitted* peak, not the best
+grid point: the fit returns a continuous centre from all the points at once,
+so a 200-Elo grid can and does return 1487. Simulated against the real fitting
+code, with the same positions sampled on each grid (120 replicates, true Elo
+1500, 600–2600):
+
+| positions | step 200 | step 100 | step 50 | step 25 | engine calls at 25 vs 100 |
+|---|---|---|---|---|---|
+| 30 (one game) | rmse 62 | 70 | 59 | 61 | 3.9× |
+| 400 (~15 games) | rmse 15.2 | 13.7 | 15.8 | 13.7 | 3.9× |
+| 2000 (~70 games) | rmse 6.4 | 6.0 | 6.7 | 5.7 | 3.9× |
+
+The step column is flat — the ±10% wobble is the simulation's own noise at
+120 replicates, and it isn't even monotonic. What moves the error is the
+number of positions: 62 → 15 → 6 Elo. Eleven grid points already
+over-determine a four-parameter bump, and adjacent Elos give near-identical
+Maia policies, so extra points are nearly-duplicate rows bought at one engine
+call per position each. **Pool more games; don't sweep finer.** The step does
+control one real thing: `lowest_matching_elo` in the blunder panel ("first
+played by Maia at 1400") is reported at grid resolution, so a finer step gives
+a finer answer *there*.
+
 **What counts as a match is now a choice you can change for free.** The sweep
 records *where* your move ranked in Maia's ordering, not just whether it was
 Maia's own first pick — at `go nodes 1` the policy net has already ordered
@@ -401,6 +444,18 @@ held back by a randomised ~0.5-2s pause so it doesn't answer instantly, and
 that pause is charged to Maia's own clock (capped so it can never be the
 thing that flags it).
 
+**You can look back through the game while you're playing it.** The nav
+buttons, the arrow keys and the move list all work mid-game: they walk the
+board through the game so far without pausing anything. The game carries on
+underneath -- a reply arriving while you're looking back goes into the move
+list but does not drag the board back to it, and it can't be undone by an
+animation landing a fifth of a second after you tapped away from it. While
+the board is behind the game a note under it says so and takes you back in
+one tap, and moving is refused until you are: a move from a position the game
+has left behind is a move in a different game. The clock never stops for any
+of this, which is the honest behaviour -- looking back at your own game is
+your time to spend.
+
 Still not verified against a real Maia3 build: the binaries in
 `assets/Engines/` are Windows executables and the dev environment is Linux,
 so the game loop was exercised with Stockfish and a scripted UCI stand-in.
@@ -481,6 +536,17 @@ by `assets/generate_placeholder_set.py`; drop a nicer set into
 whenever you want -- no code changes needed, it shows up as another option in
 the Settings dialog's "Board / piece set" picker (each user can choose their
 own, with a live preview before saving).
+
+## To do
+
+- **A batch does not survive a restart of the *server*.** Running jobs live in
+  the process, so `Ctrl-C`, a crash or a reboot ends the run — every game it
+  had finished is already saved, and re-running with "Not yet analysed" picks
+  up where it stopped, but the run itself is gone and the browser is told so
+  rather than left watching a bar that will never move. Surviving a restart
+  means persisting the queued game list and the run's progress to the database
+  and resuming it on startup. Closing the tab, locking the phone or switching
+  apps are all fine already — those are covered above.
 
 ## Open questions still to confirm
 

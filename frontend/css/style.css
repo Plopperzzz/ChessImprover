@@ -141,7 +141,15 @@ input[type="text"], input[type="number"], textarea, select {
   user-select: none;
 }
 .board-bg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.piece-layer, .highlight-layer { position: absolute; inset: 0; }
+.piece-layer, .highlight-layer, .last-move-layer { position: absolute; inset: 0; }
+/* Under the pieces: this tints the square, it doesn't sit on top of whatever
+   is standing on it. */
+.sq-last {
+  position: absolute;
+  width: 12.5%;
+  height: 12.5%;
+  background: rgba(224, 196, 74, 0.38);
+}
 .piece {
   position: absolute;
   width: 12.5%;
@@ -204,6 +212,20 @@ input[type="text"], input[type="number"], textarea, select {
 }
 
 #nav-buttons { display: flex; gap: 8px; }
+#board-settings-btn { margin-left: auto; }
+/* Only visible when the board is showing an earlier position of a game still
+   in progress, so it reads as a state you're in, not as decoration. */
+#board-note {
+  width: var(--board-w);
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid #6b5a1f;
+  border-radius: 6px;
+  background: #2b2510;
+  color: #e0c46a;
+  font-size: 12px;
+  cursor: pointer;
+}
 /* The plates hug the board rather than floating in the column's gap. */
 #plate-top { margin-bottom: -4px; }
 #plate-bottom { margin-top: -4px; }
@@ -507,7 +529,7 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
 .engine-options.warn { color: #e0a13a; }
 .engine-options-title { text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
 
-#asset-preview {
+#board-preview {
   position: relative;
   width: 160px;
   aspect-ratio: 1 / 1;
@@ -517,8 +539,11 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
   overflow: hidden;
   background: #11141b;
 }
-#asset-preview .prev-board { position: absolute; inset: 0; width: 100%; height: 100%; }
-#asset-preview .prev-piece { position: absolute; width: 25%; height: 25%; }
+#board-preview .prev-board { position: absolute; inset: 0; width: 100%; height: 100%; }
+#board-preview .prev-piece { position: absolute; width: 25%; height: 25%; }
+
+.check-row { display: flex; align-items: center; gap: 8px; }
+.check-row input { width: auto; }
 
 .path-row { display: flex; gap: 6px; }
 .path-row input { flex: 1; }

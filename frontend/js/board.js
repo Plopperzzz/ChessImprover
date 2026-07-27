@@ -1,37 +1,59 @@
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 class Board {
-  constructor(el, assetSet = 'default') {
+  /** opts: { board, pieces, showLegalMoves }. The board and the pieces are
+      separate sets -- they're independent art, and the pairing someone wants
+      is rarely both halves of one set. */
+  constructor(el, opts = {}) {
     this.el = el;
-    this.assetSet = assetSet;
+    this.boardSet = opts.board || 'default';
+    this.pieceSet = opts.pieces || opts.board || 'default';
+    this.showLegalMoves = opts.showLegalMoves !== false;
     this.orientation = 'w'; // 'w' -> white at bottom (standard), 'b' -> flipped
     this.currentFEN = START_FEN;
     this.pieceEls = {};
     // Interactivity state lives for the life of the Board instance, not just
-    // one _build() -- setAssetSet() rebuilds the DOM layers on every switch
+    // one _build() -- setSets() rebuilds the DOM layers on every switch
     // and must not silently drop click-to-move handlers set up earlier.
     this.interactive = false;
     this.handlers = {};
     this.selected = null;
     this.legalTargets = [];
+    this.lastMove = null;   // {from, to} of the move that produced this position
+    // Bumped on every position change. A slide finishes ~235ms after it
+    // starts, and whatever the board was asked to show in the meantime must
+    // win -- see animateMove.
+    this._renderSeq = 0;
     this._clickHandler = (ev) => this._handleClick(ev);
     this.el.addEventListener('click', this._clickHandler);
     this._build();
     this.renderFEN(START_FEN);
   }
 
-  /** Switch to a different asset set (directory under /assets/sets/) and
-      redraw the current position with it. */
-  setAssetSet(name) {
-    this.assetSet = name;
+  /** Switch board and/or piece art (directories under /assets/sets/) and
+      redraw the current position with it. Either may be omitted to leave that
+      half alone, which is what the live preview in the board dialog does. */
+  setSets({ board, pieces } = {}) {
+    if (board) this.boardSet = board;
+    if (pieces) this.pieceSet = pieces;
+    const last = this.lastMove;
     this._build();
     this.renderFEN(this.currentFEN);
+    if (last) this.setLastMove(last.from, last.to);
+  }
+
+  /** Whether clicking a piece shows dots on its legal destinations. The
+      selected square is always marked -- without it, clicking a piece with
+      the dots off looks like nothing happened. */
+  setShowLegalMoves(enabled) {
+    this.showLegalMoves = !!enabled;
+    if (this.selected) this._showHighlights(this.selected, this.legalTargets);
   }
 
   _build() {
     this.el.innerHTML = '';
     const bg = document.createElement('img');
-    bg.src = `/assets/sets/${this.assetSet}/board.png`;
+    bg.src = `/assets/sets/${this.boardSet}/board.png`;
     bg.className = 'board-bg';
     bg.draggable = false;
     bg.alt = '';
@@ -39,6 +61,12 @@ class Board {
       this.el.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 25% 25%';
     };
     this.el.appendChild(bg);
+
+    // Under the pieces: the last-move squares tint the board, they don't sit
+    // on top of the piece standing on them.
+    this.lastMoveLayer = document.createElement('div');
+    this.lastMoveLayer.className = 'last-move-layer';
+    this.el.appendChild(this.lastMoveLayer);
 
     this.pieceLayer = document.createElement('div');
     this.pieceLayer.className = 'piece-layer';
@@ -49,6 +77,23 @@ class Board {
     this.el.appendChild(this.highlightLayer);
 
     this._clearSelection();
+  }
+
+  /** Marks the two squares of the move that led to the position on the board.
+      Call with no arguments to clear it. */
+  setLastMove(from, to) {
+    this.lastMove = from && to ? { from, to } : null;
+    if (!this.lastMoveLayer) return;
+    this.lastMoveLayer.innerHTML = '';
+    if (!this.lastMove) return;
+    for (const square of [from, to]) {
+      const mark = document.createElement('div');
+      mark.className = 'sq-last';
+      const { x, y } = this._squareToXY(square);
+      mark.style.left = (x * 12.5) + '%';
+      mark.style.top = (y * 12.5) + '%';
+      this.lastMoveLayer.appendChild(mark);
+    }
   }
 
   /** enabled: bool. handlers: { getLegalTargets(square) -> [{to, promotion}],
@@ -128,6 +173,7 @@ class Board {
     sel.style.left = (x * 12.5) + '%';
     sel.style.top = (y * 12.5) + '%';
     this.highlightLayer.appendChild(sel);
+    if (!this.showLegalMoves) return;
     for (const t of targets) {
       const dot = document.createElement('div');
       dot.className = 'sq-dot';
@@ -151,7 +197,11 @@ class Board {
     const next = color === 'b' ? 'b' : 'w';
     if (next === this.orientation) return;
     this.orientation = next;
+    // The marks are positioned in board coordinates, so flipping has to
+    // redraw them -- and re-render is what would otherwise drop them.
+    const last = this.lastMove;
     this.renderFEN(this.currentFEN);
+    if (last) this.setLastMove(last.from, last.to);
   }
 
   _squareToXY(square) {
@@ -166,14 +216,21 @@ class Board {
   _pieceSrc(ch) {
     const color = ch === ch.toUpperCase() ? 'w' : 'b';
     const type = ch.toLowerCase();
-    return `/assets/sets/${this.assetSet}/${color}${type}.png`;
+    return `/assets/sets/${this.pieceSet}/${color}${type}.png`;
   }
 
+  /** Snaps to a position. The last-move marks go with it: a bare FEN says
+      nothing about how it was reached, and leaving the previous move's
+      squares lit would point at squares this position never came from.
+      Callers that do know the move (animateMove, or a jump through a game)
+      set it again afterwards. */
   renderFEN(fen) {
+    this._renderSeq++;
     this.currentFEN = fen;
     this.pieceLayer.innerHTML = '';
     this.pieceEls = {};
     this._clearSelection();
+    this.setLastMove(null, null);
     const placement = fen.split(' ')[0];
     const rows = placement.split('/');
     for (let r = 0; r < 8; r++) {
@@ -206,7 +263,11 @@ class Board {
   animateMove(from, to, fenAfter, duration = 220) {
     return new Promise((resolve) => {
       const mover = this.pieceEls[from];
-      if (!mover) { this.renderFEN(fenAfter); resolve(); return; }
+      if (!mover) { this.renderFEN(fenAfter); this.setLastMove(from, to); resolve(); return; }
+      // Anything that repositions the board while this slide is in flight
+      // supersedes it -- tapping back through a live game mid-animation must
+      // not be undone by the animation landing a fifth of a second later.
+      const seq = ++this._renderSeq;
 
       const captured = this.pieceEls[to];
       if (captured && captured !== mover) {
@@ -223,7 +284,12 @@ class Board {
       mover.style.left = (x * 12.5) + '%';
       mover.style.top = (y * 12.5) + '%';
 
-      setTimeout(() => { this.renderFEN(fenAfter); resolve(); }, duration + 15);
+      setTimeout(() => {
+        if (this._renderSeq !== seq) { resolve(); return; }   // superseded
+        this.renderFEN(fenAfter);
+        this.setLastMove(from, to);
+        resolve();
+      }, duration + 15);
     });
   }
 

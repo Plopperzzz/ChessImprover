@@ -10,7 +10,17 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
+    -- The set a board and its pieces came from together. Kept because the two
+    -- below were split out of it, and it is still what "use one set for both"
+    -- writes to.
     asset_set TEXT NOT NULL DEFAULT 'default',
+    -- Board and pieces are chosen separately: the two are independent art, and
+    -- the combination someone wants is rarely both halves of one set.
+    board_set TEXT NOT NULL DEFAULT 'default',
+    piece_set TEXT NOT NULL DEFAULT 'default',
+    -- Board-view preferences live with the user rather than in the browser, so
+    -- they follow you from the desktop to the phone.
+    show_legal_moves INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -209,11 +219,25 @@ def _widen_default_elo_grid(conn):
     )
 
 
+def _split_asset_set(conn):
+    """board_set/piece_set were split out of the single asset_set. Adding the
+    columns gives every existing user the column default rather than the set
+    they had chosen, so seed both from asset_set -- once, so a user who later
+    mixes a board from one set with pieces from another keeps that."""
+    if _applied(conn, "split_asset_set"):
+        return
+    conn.execute("UPDATE users SET board_set = asset_set, piece_set = asset_set")
+
+
 def init_db():
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
         _ensure_column(conn, "users", "asset_set", "TEXT NOT NULL DEFAULT 'default'")
+        _ensure_column(conn, "users", "board_set", "TEXT NOT NULL DEFAULT 'default'")
+        _ensure_column(conn, "users", "piece_set", "TEXT NOT NULL DEFAULT 'default'")
+        _ensure_column(conn, "users", "show_legal_moves", "INTEGER NOT NULL DEFAULT 1")
+        _split_asset_set(conn)
         _ensure_column(conn, "engine_settings", "maia_options_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "engine_settings", "great_max_drop", "REAL NOT NULL DEFAULT 0.02")
         _ensure_column(conn, "engine_settings", "great_max_match_rate", "REAL NOT NULL DEFAULT 0.20")

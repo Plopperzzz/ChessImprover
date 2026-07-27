@@ -5,7 +5,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .auth import require_user
+from .auth import USER_FIELDS, require_user
 from .db import db_cursor
 from . import engine_probe, engines
 from .maia import FALLBACK_SIZES, discover_sizes, resolve_binary
@@ -168,7 +168,10 @@ def maia_models(path: str | None = None, size: str | None = None, user: dict = D
 
 class ProfileUpdate(BaseModel):
     display_name: str | None = None
-    asset_set: str | None = None
+    asset_set: str | None = None       # legacy: one set for both halves
+    board_set: str | None = None
+    piece_set: str | None = None
+    show_legal_moves: bool | None = None
 
 
 @router.put("/profile")
@@ -179,17 +182,32 @@ def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
         if not name:
             raise HTTPException(400, "display_name cannot be blank")
         updates["display_name"] = name
+
+    available = list_asset_sets()
+
+    def check(value: str) -> str:
+        if value not in available:
+            raise HTTPException(400, f"unknown asset set '{value}' (available: {available})")
+        return value
+
+    # asset_set predates the board/piece split and means "use this set for
+    # both", which is still what a client that doesn't know about the split
+    # intends by sending it.
     if body.asset_set is not None:
-        available = list_asset_sets()
-        if body.asset_set not in available:
-            raise HTTPException(400, f"unknown asset set '{body.asset_set}' (available: {available})")
-        updates["asset_set"] = body.asset_set
+        updates["asset_set"] = check(body.asset_set)
+        updates["board_set"] = body.asset_set
+        updates["piece_set"] = body.asset_set
+    if body.board_set is not None:
+        updates["board_set"] = check(body.board_set)
+    if body.piece_set is not None:
+        updates["piece_set"] = check(body.piece_set)
+    if body.show_legal_moves is not None:
+        updates["show_legal_moves"] = int(body.show_legal_moves)
+
     if not updates:
         raise HTTPException(400, "nothing to update")
     with db_cursor() as conn:
         for column, value in updates.items():
             conn.execute(f"UPDATE users SET {column}=? WHERE id=?", (value, user["id"]))
-        row = conn.execute(
-            "SELECT id, username, display_name, asset_set FROM users WHERE id=?", (user["id"],)
-        ).fetchone()
+        row = conn.execute(f"SELECT {USER_FIELDS} FROM users WHERE id=?", (user["id"],)).fetchone()
     return dict(row)

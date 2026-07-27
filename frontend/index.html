@@ -66,7 +66,11 @@
         <button id="nav-next" title="Next move">&gt;</button>
         <button id="nav-end" title="Last move">&gt;|</button>
         <button id="nav-flip" title="Flip the board">⇅</button>
+        <button id="board-settings-btn" title="Board settings — board, pieces, legal moves">⚙</button>
       </div>
+      <!-- Only ever shown when the board is behind the live game: the nav
+           buttons work during a game, so there has to be a way back. -->
+      <div id="board-note" class="hidden"></div>
       <div class="fen-row">
         <input type="text" id="fen-box" readonly />
         <button id="fen-copy">Copy</button>
@@ -258,12 +262,8 @@
         <label>Display name (matched against PGN White/Black headers)
           <input type="text" id="s-display-name" />
         </label>
-        <label>Board / piece set
-          <select id="s-asset-set"></select>
-        </label>
-        <!-- The dialog is a full-screen overlay, so the real board behind it
-             is not visible while choosing -- this swatch is the feedback. -->
-        <div id="asset-preview" aria-hidden="true"></div>
+        <!-- Board and piece art moved to the ⚙ beside the board itself:
+             it's a view setting, and it belongs where you can see it. -->
       </fieldset>
 
       <fieldset>
@@ -329,6 +329,46 @@
 
       <div class="dialog-actions">
         <button type="button" id="settings-cancel">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="board-dialog" class="overlay hidden">
+  <div class="dialog-card">
+    <h2>Board</h2>
+    <form id="board-form">
+      <fieldset>
+        <legend>Look</legend>
+        <!-- Board and pieces are picked separately: they're independent art,
+             and each dropdown only offers sets that actually contain that
+             half. -->
+        <label>Board
+          <select id="b-board-set"></select>
+        </label>
+        <label>Pieces
+          <select id="b-piece-set"></select>
+        </label>
+        <!-- The dialog is a full-screen overlay, so the real board behind it
+             is not visible while choosing -- this swatch is the feedback. -->
+        <div id="board-preview" aria-hidden="true"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Moving pieces</legend>
+        <label class="check-row">
+          <input type="checkbox" id="b-legal-moves" />
+          Show legal moves when you pick a piece up
+        </label>
+        <p class="panel-note">
+          The square you picked up from is always marked; this is about the
+          dots on where it can go.
+        </p>
+      </fieldset>
+
+      <div class="dialog-actions">
+        <button type="button" id="board-cancel">Cancel</button>
         <button type="submit">Save</button>
       </div>
     </form>

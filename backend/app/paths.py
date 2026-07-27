@@ -11,8 +11,30 @@ FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
 ENGINES_DIR = os.path.join(ASSETS_DIR, "Engines")
 
 
+PIECE_FILES = [f"{colour}{piece}.png" for colour in "wb" for piece in "kqrbnp"]
+
+
 def list_asset_sets() -> list[str]:
     sets_dir = os.path.join(ASSETS_DIR, "sets")
     if not os.path.isdir(sets_dir):
         return []
     return sorted(name for name in os.listdir(sets_dir) if os.path.isdir(os.path.join(sets_dir, name)))
+
+
+def asset_set_details() -> list[dict]:
+    """Each set with what it actually contains. Board and pieces are picked
+    separately, so a set holding only a board.png belongs in one dropdown and
+    not the other -- and offering it in both is how you end up with an empty
+    board or invisible pieces."""
+    sets_dir = os.path.join(ASSETS_DIR, "sets")
+    out = []
+    for name in list_asset_sets():
+        directory = os.path.join(sets_dir, name)
+        out.append({
+            "name": name,
+            "has_board": os.path.isfile(os.path.join(directory, "board.png")),
+            # A set that's missing a piece or two would render gaps, so it only
+            # counts as a piece set if it has the full twelve.
+            "has_pieces": all(os.path.isfile(os.path.join(directory, f)) for f in PIECE_FILES),
+        })
+    return out
