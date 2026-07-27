@@ -9,6 +9,9 @@ Aimed at runs on the order of a thousand games, which drives three choices:
   keeps everything completed so far instead of losing the lot.
 * The sweep uses a separate, coarser Elo step in batch mode -- a fine grid is
   affordable for one game and not for a thousand (section 9).
+* The run belongs to the server, not to the page that started it. Locking the
+  phone, switching apps or closing the tab doesn't touch it; a browser that
+  comes back asks `/api/analysis/active` what's still going and reattaches.
 
 Games run sequentially within a batch, but the batch takes its worker-pool
 lease *per game* rather than for the whole run (section 10). That is what
@@ -25,7 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from . import classify, elo_sweep
-from .analysis import AnalysisJob, jobs, open_stockfish, stockfish_pass
+from .analysis import AnalysisJob, job_finished, jobs, open_stockfish, stockfish_pass
 from .auth import require_user
 from .db import db_cursor
 from .engine_manager import register_job_engine, unregister_job_engine
@@ -196,21 +199,41 @@ class BatchIn(BaseModel):
     run_id: int | None = None
 
 
+def active_batch(user_id: int) -> AnalysisJob | None:
+    """The user's batch that hasn't reported a terminal event yet, if any."""
+    for job in jobs.values():
+        if job.kind == "batch" and job.user_id == user_id and not job_finished(job):
+            return job
+    return None
+
+
 @router.post("")
 async def start_batch(body: BatchIn, user: dict = Depends(require_user)):
     if body.mode not in ("quick", "full"):
         raise HTTPException(400, "mode must be 'quick' or 'full'")
+
+    # A batch outlives the page that started it, so the browser can easily come
+    # back looking idle over a run that never stopped -- a phone discarding the
+    # tab while you're in another app does exactly that. Pressing Start again
+    # from that state should reattach to the run, not put a second one on the
+    # same games alongside it.
+    running = active_batch(user["id"])
+    if running:
+        if running.cancelled:
+            raise HTTPException(409, "the previous batch is still stopping -- try again in a moment")
+        return {"job_id": running.job_id, "total": running.total, "attached": True}
+
     games = _select_games(user["id"], body.scope, body.mode)
     if not games:
         raise HTTPException(400, "no games to analyse for that selection")
     settings = get_effective_settings(user["id"])
 
     job_id = uuid.uuid4().hex
-    job = AnalysisJob(job_id, user["id"], games[0]["id"])
+    job = AnalysisJob(job_id, user["id"], games[0]["id"], kind="batch", total=len(games))
     job.run_id = body.run_id
     jobs[job_id] = job
     job.task = asyncio.create_task(run_batch(job, games, body.mode, settings))
-    return {"job_id": job_id, "total": len(games)}
+    return {"job_id": job_id, "total": len(games), "attached": False}
 
 
 @router.get("/preview")

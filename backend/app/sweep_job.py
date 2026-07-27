@@ -285,7 +285,7 @@ async def start_sweep(body: SweepIn, user: dict = Depends(require_user)):
     settings = get_effective_settings(user["id"])
 
     job_id = uuid.uuid4().hex
-    job = AnalysisJob(job_id, user["id"], body.game_id)
+    job = AnalysisJob(job_id, user["id"], body.game_id, kind="sweep")
     jobs[job_id] = job
     job.task = asyncio.create_task(run_sweep(job, row["pgn_text"], settings, row["your_color"]))
     return {"job_id": job_id}
@@ -397,7 +397,7 @@ async def start_full(body: FullIn, user: dict = Depends(require_user)):
     settings = get_effective_settings(user["id"])
 
     job_id = uuid.uuid4().hex
-    job = AnalysisJob(job_id, user["id"], body.game_id)
+    job = AnalysisJob(job_id, user["id"], body.game_id, kind="full")
     job.run_id = body.run_id
     jobs[job_id] = job
     job.task = asyncio.create_task(run_full(job, row["pgn_text"], settings, row["your_color"]))

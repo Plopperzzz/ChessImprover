@@ -169,9 +169,27 @@ Three choices come from the 1000-game target in the spec:
 - **The sweep uses a separate, coarser Elo step in batch** (default 200 vs
   100), since a fine grid is affordable for one game and not for a thousand.
 
+**The run belongs to the server, not to the page that started it.** Locking
+the phone, switching apps or closing the tab doesn't touch it -- a mobile
+browser that discards the tab while you're elsewhere used to come back to an
+idle-looking panel over a run that had never stopped, which then invited a
+second run to be started on top of the first. A browser now asks
+`GET /api/analysis/active` on load and reattaches to whatever is still going,
+progress bar and Cancel button included, and pressing Start while a batch is
+already running hands back the run in progress rather than starting another.
+Coming back to the foreground also reconnects the event socket immediately,
+since a backgrounded tab can be handed back one that looks open and isn't.
+
+The event log a reconnecting client is caught up with is *compacted*: one
+`game_start`, one `progress`, one `game_done`, and the failures. Replaying the
+real transcript would walk the board through all thousand games again on every
+reconnect -- which looks exactly like the batch having restarted -- and would
+grow a per-position event log without bound for the length of the run.
+
 Cancel is checked per *position*, not per game, so it takes effect within one
-evaluation rather than waiting out a 200-ply game. A game that fails to parse
-is recorded and skipped rather than sinking the run.
+evaluation rather than waiting out a 200-ply game. Everything finished by then
+is already saved. A game that fails to parse is recorded and skipped rather
+than sinking the run.
 
 The board follows whichever game is being processed, per section 6.
 
@@ -197,6 +215,13 @@ Per-*position* sweep scores are stored, not just the final labels, which is
 what lets the trend view re-bucket without re-running any engine. They are
 kept as one character per grid point, which keeps a 1000-game batch to a
 sane row count.
+
+A run can be deleted from the picker (🗑), which throws away every analysis in
+it -- moves and per-position sweep rows included, so the trend and strength
+fits stop counting it immediately. The *games* stay in your library: it's the
+analysis that goes, so a run swept with settings you've since changed can be
+redone rather than lived with. The default run is emptied rather than removed,
+since something has to catch the next analysis and most work lands there.
 
 Games can be deleted from the picker. Deleting cascades to any saved
 analysis of that game, and drops the uploaded PGN blob once its last game is

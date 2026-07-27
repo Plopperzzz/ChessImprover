@@ -20,6 +20,8 @@ const state = {
   sweepWs: null,
   batchJobId: null,
   batchWs: null,
+  batchReconnect: null,        // pending reconnect timer, so retries can't stack
+  batchFailures: new Set(),    // game indexes already listed, so a replay can't duplicate them
   playMode: false,
   play: null, // { ws, chess, humanColor, turn, whiteMs, blackMs, clockEnabled, result, tick }
   // The board faces the side you played, so a game you had as Black opens
@@ -124,6 +126,7 @@ async function initApp() {
   await refreshRunPicker();
   await refreshGameList();
   syncBoardFull();
+  await reattachRunningJobs();
 }
 
 /* ---------------- Board <-> Explorer sync ---------------- */
@@ -772,6 +775,11 @@ async function refreshRunPicker() {
     const opt = document.createElement('option');
     opt.value = run.id;
     opt.textContent = `${run.name} (${run.game_count})`;
+    // Kept on the option so the delete button can say what it's about to
+    // destroy without another request.
+    opt.dataset.name = run.name;
+    opt.dataset.count = run.game_count;
+    opt.dataset.default = run.is_default ? '1' : '';
     sel.appendChild(opt);
   }
   if (previous && runs.some((r) => String(r.id) === previous)) sel.value = previous;
@@ -792,6 +800,48 @@ async function refreshRunPicker() {
   }
 }
 
+/** Throws away a run and everything analysed into it. The games stay in the
+    library -- it's the analysis that goes, so a run that was swept with the
+    wrong settings can be redone rather than lived with. The default run is
+    emptied instead of removed, since something has to catch the next
+    analysis. */
+async function deleteSelectedRun() {
+  const sel = document.getElementById('run-picker');
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt) return;
+  const name = opt.dataset.name || opt.textContent;
+  const count = Number(opt.dataset.count || 0);
+  const held = count ? `the ${count} analysed game(s) in it` : 'it (nothing analysed in it yet)';
+  const question = opt.dataset.default
+    ? `Clear "${name}"? That deletes ${held}. The run itself is kept — it's the default one. The games stay in your library.`
+    : `Delete "${name}" and ${held}? The games stay in your library.`;
+  if (!confirm(question + '\n\nThis cannot be undone.')) return;
+
+  const btn = document.getElementById('run-delete');
+  btn.disabled = true;
+  try {
+    const res = await api(`/api/runs/${sel.value}`, { method: 'DELETE' });
+    await refreshRunPicker();
+    await refreshGameList();     // the analysed/quick/full marks change with it
+    // What's on screen may be exactly what was just deleted, so clear the
+    // panels and reload whatever (if anything) is still stored for this game.
+    if (state.selectedGameId && !state.analysisJobId) {
+      resetAnalysisState();
+      renderMoveTable();
+      refreshMoveTableHighlight();
+      await loadSavedAnalysis(state.selectedGameId);
+    }
+    refreshTrend();              // both fits are over stored runs, so both move
+    refreshStrength();
+    document.getElementById('analysis-status').textContent =
+      `${res.cleared ? 'Cleared' : 'Deleted'} "${res.name}" (${res.games_removed} analysed game(s)).`;
+  } catch (e) {
+    alert('Could not delete that run: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function wireAnalysis() {
   document.getElementById('run-new').addEventListener('click', async () => {
     const name = prompt('Name for the new run:');
@@ -800,6 +850,7 @@ function wireAnalysis() {
     await refreshRunPicker();
     document.getElementById('run-picker').value = run.id;
   });
+  document.getElementById('run-delete').addEventListener('click', deleteSelectedRun);
   document.getElementById('quick-analysis-btn').addEventListener('click', () => startAnalysis('quick'));
   document.getElementById('full-analysis-btn').addEventListener('click', () => startAnalysis('full'));
   document.getElementById('analysis-cancel').addEventListener('click', cancelAnalysis);
@@ -1006,6 +1057,60 @@ function renderBlunderElo(moves, yourColor) {
   box.appendChild(wrap);
 }
 
+/* ---------------- Picking running jobs back up ---------------- */
+
+/** Jobs live in the server, not in this page. A phone that gets switched away
+    from will happily discard the tab, and the batch it was watching carries on
+    regardless -- so on load we ask what's still running and reattach to it,
+    rather than showing an idle panel over a run that never stopped (and
+    inviting a second run to be started on top of the first). */
+async function reattachRunningJobs() {
+  let active = [];
+  try {
+    active = await api('/api/analysis/active');
+  } catch (e) {
+    return;
+  }
+  const batch = active.find((j) => j.kind === 'batch');
+  if (batch) attachBatch(batch);
+
+  // A single-game Full analysis is long enough to survive a screen lock too.
+  // It needs its game loaded to make sense of the progress, which a reload
+  // will have forgotten, so select it first.
+  const single = active.find((j) => ['quick', 'full', 'sweep'].includes(j.kind));
+  if (single && !state.batchJobId) {
+    if (state.selectedGameId !== single.game_id) await selectGame(single.game_id);
+    if (single.kind === 'sweep') {
+      state.sweepJobId = single.job_id;
+      document.getElementById('sweep-cancel').classList.remove('hidden');
+      watchSweepJob(single.job_id);
+    } else {
+      state.analysisJobId = single.job_id;
+      setAnalysisButtonsEnabled(false);
+      document.getElementById('analysis-cancel').classList.remove('hidden');
+      watchAnalysisJob(single.job_id);
+    }
+  }
+}
+
+/** Reconnects sockets the moment the page is looked at again. A backgrounded
+    tab has its timers throttled and can come back holding a socket that looks
+    open but is dead, so waiting for the retry timer would leave the panel
+    frozen for however long the phone feels like. */
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || !state.user) return;
+  if (state.batchJobId) {
+    if (state.batchWs) {
+      const stale = state.batchWs;
+      state.batchWs = null;      // so its close handler doesn't also reconnect
+      stale.close();
+    }
+    watchBatchJob(state.batchJobId);
+  } else {
+    await reattachRunningJobs();
+  }
+});
+
 /* ---------------- Batch analysis (spec section 12) ---------------- */
 
 function wireBatch() {
@@ -1025,6 +1130,7 @@ async function refreshBatchPreview() {
   const scope = document.getElementById('batch-scope').value;
   try {
     const info = await api(`/api/batch/preview?mode=${mode}&scope=${scope}`);
+    if (state.batchJobId) return;   // reattached while this was in flight
     document.getElementById('batch-status').textContent =
       info.count ? `${info.count} game(s) would be analysed.` : 'Nothing to analyse for that selection.';
     document.getElementById('batch-start').disabled = info.count === 0;
@@ -1038,31 +1144,62 @@ async function startBatch() {
   const scope = document.getElementById('batch-scope').value;
   const runId = document.getElementById('run-picker').value;
   document.getElementById('batch-start').disabled = true;
-  document.getElementById('batch-failures').innerHTML = '';
   document.getElementById('batch-status').textContent = 'Starting...';
   try {
     const res = await api('/api/batch', { method: 'POST', body: JSON.stringify({
       mode, scope, run_id: runId ? Number(runId) : null,
     }) });
-    state.batchJobId = res.job_id;
-    state.batchTotal = res.total;
-    state.batchFailures = [];
-    document.getElementById('batch-cancel').classList.remove('hidden');
-    watchBatchJob(res.job_id);
+    attachBatch(res);
+    if (res.attached) {
+      document.getElementById('batch-status').textContent =
+        'That batch is already running — reattached to it.';
+    }
   } catch (e) {
     document.getElementById('batch-status').textContent = 'Error: ' + e.message;
     document.getElementById('batch-start').disabled = false;
   }
 }
 
+/** Points the panel at a running batch, whether we just started it or found it
+    already going. */
+function attachBatch(info) {
+  state.batchJobId = info.job_id;
+  state.batchTotal = info.total;
+  state.batchFailures = new Set();
+  document.getElementById('batch-failures').innerHTML = '';
+  document.getElementById('batch-start').disabled = true;
+  document.getElementById('batch-cancel').classList.remove('hidden');
+  document.getElementById('batch-cancel').disabled = false;
+  document.getElementById('batch-progress-fill').style.width =
+    ((info.fraction || 0) * 100).toFixed(1) + '%';
+  document.getElementById('batch-status').textContent = 'Picking the run back up...';
+  watchBatchJob(info.job_id);
+}
+
 async function cancelBatch() {
   if (!state.batchJobId) return;
   document.getElementById('batch-cancel').disabled = true;
-  document.getElementById('batch-status').textContent = 'Cancelling after the current game...';
-  await api(`/api/batch/${state.batchJobId}/cancel`, { method: 'POST' });
+  document.getElementById('batch-status').textContent =
+    'Stopping — every game already finished stays saved.';
+  try {
+    await api(`/api/batch/${state.batchJobId}/cancel`, { method: 'POST' });
+  } catch (e) {
+    // Either the server has already forgotten the job -- which is as stopped
+    // as it gets -- or the request never landed. Asking what's still running
+    // settles which, rather than leaving a dead Cancel button either way.
+    let active = [];
+    try { active = await api('/api/analysis/active'); } catch (err) { /* offline */ }
+    if (active.some((j) => j.job_id === state.batchJobId)) {
+      document.getElementById('batch-cancel').disabled = false;
+      document.getElementById('batch-status').textContent = "Couldn't stop it: " + e.message;
+    } else {
+      await batchNoLongerRunning();
+    }
+  }
 }
 
 function watchBatchJob(jobId) {
+  clearTimeout(state.batchReconnect);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws/analysis/${jobId}`);
   state.batchWs = ws;
@@ -1071,12 +1208,32 @@ function watchBatchJob(jobId) {
     const msg = JSON.parse(ev.data);
     chain = chain.then(() => handleBatchMessage(msg)).catch((e) => console.error('batch message failed', e));
   });
-  ws.addEventListener('close', () => {
-    // A long run outlives a phone screen lock; the server replays the backlog.
-    if (state.batchWs === ws && state.batchJobId === jobId) {
-      setTimeout(() => watchBatchJob(jobId), 2000);
+  ws.addEventListener('close', (ev) => {
+    // A long run outlives a phone screen lock; the server replays where the
+    // job has got to on the new socket, so reconnecting is all it takes.
+    if (state.batchWs !== ws || state.batchJobId !== jobId) return;
+    state.batchWs = null;
+    if (ev.code === 4404 || ev.code === 4401) {
+      batchNoLongerRunning();     // finished and evicted, or the server restarted
+      return;
     }
+    clearTimeout(state.batchReconnect);
+    state.batchReconnect = setTimeout(() => {
+      if (state.batchJobId === jobId && !state.batchWs) watchBatchJob(jobId);
+    }, 2000);
   });
+}
+
+/** The job is gone from the server. Whatever it completed is saved, so show
+    that instead of leaving a progress bar that will never move again. */
+async function batchNoLongerRunning() {
+  document.getElementById('batch-status').textContent =
+    'That batch is no longer running — anything it finished is saved.';
+  finishBatch();
+  await refreshGameList();
+  await refreshRunPicker();
+  refreshTrend();
+  refreshStrength();
 }
 
 async function handleBatchMessage(msg) {
@@ -1112,9 +1269,14 @@ async function handleBatchMessage(msg) {
       (((msg.index + 1) / msg.total) * 100).toFixed(1) + '%';
   } else if (msg.type === 'game_failed') {
     // One bad game shouldn't stop a long run, but it shouldn't vanish either.
-    const div = document.createElement('div');
-    div.textContent = `Game ${msg.index + 1} failed: ${msg.message}`;
-    document.getElementById('batch-failures').appendChild(div);
+    // Keyed by game index: a reconnect replays the failures it still holds,
+    // and they shouldn't pile up a second copy of each.
+    if (!state.batchFailures.has(msg.index)) {
+      state.batchFailures.add(msg.index);
+      const div = document.createElement('div');
+      div.textContent = `Game ${msg.index + 1} failed: ${msg.message}`;
+      document.getElementById('batch-failures').appendChild(div);
+    }
   } else if (msg.type === 'done') {
     const bits = [`${msg.completed} analysed`];
     if (msg.failed) bits.push(`${msg.failed} failed`);
@@ -1134,7 +1296,8 @@ async function handleBatchMessage(msg) {
 
 function finishBatch() {
   state.batchJobId = null;
-  if (state.batchWs) { state.batchWs.close(); state.batchWs = null; }
+  clearTimeout(state.batchReconnect);
+  if (state.batchWs) { const ws = state.batchWs; state.batchWs = null; ws.close(); }
   document.getElementById('batch-cancel').classList.add('hidden');
   document.getElementById('batch-cancel').disabled = false;
   document.getElementById('batch-start').disabled = false;

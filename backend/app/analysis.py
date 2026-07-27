@@ -12,6 +12,7 @@ instead of oversubscribing them.
 
 import asyncio
 import io
+import time
 import uuid
 
 import chess
@@ -32,20 +33,52 @@ ws_router = APIRouter()  # unprefixed -- /ws/analysis/{job_id}, matching live_ev
 
 MAX_RETAINED_JOBS = 50
 
+# Event types a reconnecting client only needs the *most recent* of. The
+# backlog is replayed on every reconnect, and a phone that locks its screen
+# mid-batch reconnects a lot: replaying a thousand `game_start`s would walk the
+# board through every game of the run again, which reads as the batch having
+# restarted from the beginning. Keeping one of each also stops the log growing
+# without bound -- a full batch emits a `progress` event per position per game.
+COALESCED_EVENTS = ("progress", "game_start", "game_done", "queued", "started")
+
+# Failures are per-game and each one is a distinct thing to report, so they
+# aren't coalesced -- just capped, since a run where thousands fail has a
+# problem no list is going to explain.
+MAX_RETAINED_FAILURES = 50
+
 
 class AnalysisJob:
-    def __init__(self, job_id: str, user_id: int, game_id: int):
+    def __init__(self, job_id: str, user_id: int, game_id: int,
+                 kind: str = "quick", total: int = 1):
         self.job_id = job_id
         self.user_id = user_id
         self.game_id = game_id
+        self.kind = kind          # 'quick' | 'full' | 'sweep' | 'batch'
+        self.total = total        # games in the run; 1 for everything but batch
         self.run_id: int | None = None
         self.cancelled = False
         self.events: list[dict] = []
         self.subscribers: set[WebSocket] = set()
         self.task: asyncio.Task | None = None
+        self.started_at = time.time()
+
+    def _record(self, event: dict):
+        """Keeps the replay log to a summary of where the job is now rather
+        than a transcript of how it got there."""
+        kind = event["type"]
+        if kind in COALESCED_EVENTS:
+            for i in range(len(self.events) - 1, -1, -1):
+                if self.events[i]["type"] == kind:
+                    self.events.pop(i)
+                    break
+        self.events.append(event)
+        if kind == "game_failed":
+            failures = [i for i, e in enumerate(self.events) if e["type"] == "game_failed"]
+            for i in reversed(failures[:-MAX_RETAINED_FAILURES]):
+                self.events.pop(i)
 
     async def emit(self, event: dict):
-        self.events.append(event)
+        self._record(event)
         dead = []
         for ws in list(self.subscribers):
             try:
@@ -54,6 +87,33 @@ class AnalysisJob:
                 dead.append(ws)
         for ws in dead:
             self.subscribers.discard(ws)
+
+    def summary(self) -> dict:
+        """Enough for a browser that has just loaded to find a job it started
+        before and pick it back up. Switching apps on a phone can tear the page
+        down; the job itself lives in this process and carries on regardless,
+        so 'what is still running for me' has to be answerable from the server.
+        """
+        latest: dict[str, dict] = {}
+        for event in self.events:
+            latest[event["type"]] = event
+        progress, done = latest.get("progress", {}), latest.get("game_done", {})
+        fraction = progress.get("fraction")
+        if done and self.total:
+            fraction = max(fraction or 0.0, (done.get("index", 0) + 1) / self.total)
+        return {
+            "job_id": self.job_id,
+            "kind": self.kind,
+            "game_id": self.game_id,
+            "run_id": self.run_id,
+            "total": self.total,
+            "finished": job_finished(self),
+            "cancelled": self.cancelled,
+            "completed": done.get("completed", 0),
+            "failed": done.get("failed", 0),
+            "fraction": fraction,
+            "running_s": round(time.time() - self.started_at, 1),
+        }
 
 
 jobs: dict[str, AnalysisJob] = {}
@@ -181,7 +241,7 @@ async def start_quick_analysis(body: QuickAnalysisIn, user: dict = Depends(requi
     settings = get_effective_settings(user["id"])
 
     job_id = uuid.uuid4().hex
-    job = AnalysisJob(job_id, user["id"], body.game_id)
+    job = AnalysisJob(job_id, user["id"], body.game_id, kind="quick")
     job.run_id = body.run_id
     jobs[job_id] = job
     _evict_old_jobs()
@@ -199,12 +259,23 @@ def saved_analysis(game_id: int, user: dict = Depends(require_user)):
     return saved
 
 
+@router.get("/active")
+def active_jobs(user: dict = Depends(require_user)):
+    """Your jobs that are still going. A browser asks this on load so a run
+    started before the page was closed (or discarded by the phone when you
+    switched apps) is picked back up instead of being started again on top of
+    itself -- the work never stopped, only the page watching it did."""
+    return [j.summary() for j in jobs.values()
+            if j.user_id == user["id"] and not job_finished(j)]
+
+
 @router.get("/jobs")
 def list_jobs(user: dict = Depends(require_user)):
     """Process/job accounting, mirroring the live-engine status endpoint."""
     return [
         {
             "job_id": j.job_id,
+            "kind": j.kind,
             "game_id": j.game_id,
             "subscribers": len(j.subscribers),
             "events": len(j.events),
@@ -241,7 +312,11 @@ async def analysis_ws(websocket: WebSocket, job_id: str):
         return
 
     await websocket.accept()
-    for event in job.events:  # catch a reconnecting client up on what it missed
+    # Catches a reconnecting client up on where the job is now. The log is
+    # compacted (see COALESCED_EVENTS), so this is a handful of events even
+    # halfway through a thousand-game batch -- replaying the real transcript
+    # would re-animate the whole run and look like it had started over.
+    for event in job.events:
         await websocket.send_json(event)
     job.subscribers.add(websocket)
     try:

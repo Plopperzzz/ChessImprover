@@ -436,6 +436,7 @@ input[type="text"], input[type="number"], textarea, select {
 .run-controls { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
 .run-controls select { flex: 1; }
 .run-controls button { padding: 6px 10px; }
+#run-delete:hover { color: #e05050; border-color: #e05050; }
 
 #move-table-wrap { max-height: 300px; overflow-y: auto; }
 @media (min-width: 1150px) { #move-table-wrap { max-height: calc(var(--board-w) + 60px); } }

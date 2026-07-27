@@ -218,16 +218,31 @@ def get_run(run_id: int, user: dict = Depends(require_user)):
 
 @router.delete("/{run_id}")
 def delete_run(run_id: int, user: dict = Depends(require_user)):
+    """Throws away a run and everything analysed into it -- the moves and the
+    per-position sweep rows go with it through the schema's cascades, so the
+    trend and strength fits stop counting it immediately.
+
+    The default run is emptied rather than removed. Something has to catch the
+    next analysis, and most work lands in the default run, so refusing to touch
+    it would leave the bulk of a library with no way to be cleared. The games
+    themselves are never deleted here; only their analysis is.
+    """
     with db_cursor() as conn:
         run = conn.execute(
-            "SELECT is_default FROM analysis_runs WHERE id = ? AND user_id = ?", (run_id, user["id"])
+            "SELECT name, is_default FROM analysis_runs WHERE id = ? AND user_id = ?",
+            (run_id, user["id"]),
         ).fetchone()
         if not run:
             raise HTTPException(404, "no such run")
+        removed = conn.execute(
+            "SELECT COUNT(*) AS n FROM run_games WHERE run_id = ?", (run_id,)
+        ).fetchone()["n"]
         if run["is_default"]:
-            raise HTTPException(400, "the default run can't be deleted")
-        conn.execute("DELETE FROM analysis_runs WHERE id = ?", (run_id,))
-    return {"ok": True}
+            conn.execute("DELETE FROM run_games WHERE run_id = ?", (run_id,))
+        else:
+            conn.execute("DELETE FROM analysis_runs WHERE id = ?", (run_id,))
+    return {"ok": True, "name": run["name"], "cleared": bool(run["is_default"]),
+            "games_removed": removed}
 
 
 class AppendIn(BaseModel):
