@@ -307,6 +307,9 @@
         <label>Ranked candidates to record (MultiPV — free at 1 node)
           <input type="number" id="s-maia-multipv" min="1" max="9" />
         </label>
+        <label>Ignore moves played faster than (ms; 0 = off)
+          <input type="number" id="s-min-think-ms" min="0" max="120000" step="500" />
+        </label>
         <label>Great: max win-prob given up vs best (0.02 = near-lossless)
           <input type="number" id="s-great-drop" step="0.01" min="0" max="0.5" />
         </label>

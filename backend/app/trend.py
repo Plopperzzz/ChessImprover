@@ -216,10 +216,14 @@ def _slope(points: list[tuple[float, float, float]], label: str) -> dict:
 
 
 def build(user_id: int, granularity: str, run_id: int | None = None,
-          top_n: int = 1) -> dict:
+          top_n: int = 1, min_think_ms: int | None = None) -> dict:
     # Same collection the pooled estimate uses, so a bucket and the overall
     # number are always built from exactly the same rows.
     entries, skipped = strength.collect(user_id, run_id)
+    # Same think-time rule as the pooled estimate, so a bucket and the overall
+    # number are never built from different sets of moves.
+    strength.apply_think_filter(entries, "you", min_think_ms if min_think_ms is not None
+                                else strength.get_effective_settings(user_id).get("min_think_ms", 0) or 0)
     skipped.setdefault("undated", 0)
     dated = []
     for entry in entries:
@@ -308,11 +312,11 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
 
 @router.get("")
 def get_trend(granularity: str = "month", run_id: int | None = None, top_n: int = 1,
-              user: dict = Depends(require_user)):
+              min_think_ms: int | None = None, user: dict = Depends(require_user)):
     """Re-bucketing is a pure re-fit of cached per-position scores, so changing
     granularity never re-runs an engine (section 15). Defined `def` rather
     than `async def` on purpose: the bootstrap is CPU work and belongs on the
     threadpool, not on the event loop that the live engines run on."""
     if granularity not in GRANULARITIES:
         raise HTTPException(400, f"granularity must be one of {', '.join(GRANULARITIES)}")
-    return build(user["id"], granularity, run_id, top_n)
+    return build(user["id"], granularity, run_id, top_n, min_think_ms)

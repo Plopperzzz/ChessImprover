@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS engine_settings (
     -- costs no extra engine time and lets the fit use a top-N objective later
     -- without re-running anything.
     maia_multipv INTEGER NOT NULL DEFAULT 3,
+    -- Moves played in less than this are dropped from the Elo fit: a move
+    -- made in half a second is a premove or an instant recapture, not
+    -- evidence of how well you play. Ignored when the games carry no clocks,
+    -- and disabled automatically when it would remove most of a library.
+    min_think_ms INTEGER NOT NULL DEFAULT 2000,
     -- Great/Brilliant criteria (spec section 8 asked for these to be pinned
     -- down rather than improvised, and they're taste, so they're settings).
     great_max_drop REAL NOT NULL DEFAULT 0.02,
@@ -87,6 +92,10 @@ CREATE TABLE IF NOT EXISTS games (
     your_color TEXT,       -- 'w' | 'b' | 'unassigned'
     pgn_text TEXT NOT NULL,
     headers_json TEXT NOT NULL,
+    -- Milliseconds spent per ply, from the %clk comments in the export. Read
+    -- at upload because pgn_text is stored without comments -- once a game is
+    -- in, its clocks are unrecoverable. NULL when the export carried none.
+    clocks_json TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -143,6 +152,10 @@ CREATE TABLE IF NOT EXISTS sweep_positions (
     fen TEXT,
     uci TEXT,
     scores TEXT,
+    -- How long the player took over this move, so a re-fit can drop moves
+    -- played with no thought without re-parsing any PGN. NULL means unknown,
+    -- which is never treated as "instant".
+    think_ms INTEGER,
     PRIMARY KEY (run_game_id, ply)
 );
 
@@ -208,6 +221,9 @@ def init_db():
         _ensure_column(conn, "engine_settings", "maia_elo_step_batch", "INTEGER NOT NULL DEFAULT 200")
         _ensure_column(conn, "engine_settings", "stockfish_options_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "engine_settings", "maia_multipv", "INTEGER NOT NULL DEFAULT 3")
+        _ensure_column(conn, "engine_settings", "min_think_ms", "INTEGER NOT NULL DEFAULT 2000")
+        _ensure_column(conn, "games", "clocks_json", "TEXT")
+        _ensure_column(conn, "sweep_positions", "think_ms", "INTEGER")
         _widen_default_elo_grid(conn)
         conn.commit()
     finally:

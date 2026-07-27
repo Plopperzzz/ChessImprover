@@ -298,6 +298,23 @@ are yours to try rather than the default. A sweep run before MultiPV was
 recorded only stored rank 1; the panel says so rather than showing you the
 same number under a different label.
 
+**Moves you didn't think about are left out.** Chess.com and lichess exports
+carry `%clk` comments, so the time spent on each move is read at upload —
+it has to be read then, because the stored PGN drops comments and the clocks
+would be unrecoverable — and stored against each swept position. A move played
+in under two seconds (configurable) is a premove or an automatic recapture and
+says nothing about how well you play, so it doesn't go into the fit. Positions
+with no clock recorded are always kept: unknown is not instant, and every game
+uploaded before this existed has no clock at all.
+
+The filter refuses to run when it would remove more than 60% of your timed
+moves, and says so — point it at a bullet library and it would leave you a
+different, much smaller dataset rather than a cleaner one. Whatever it does,
+the panel reports it ("Left out 32 of 56 timed moves played in under 2s"). The
+opposition is filtered on the same rule so the calibration compares like with
+like, and the trend uses it too, so a bucket and the overall number are never
+built from different sets of moves.
+
 Every estimate carries a High/Medium/Low label with the reasons spelled out.
 A peak on the edge of the swept range caps the label at Medium however clean
 the fit looks — the player is probably outside the grid, so the number is a

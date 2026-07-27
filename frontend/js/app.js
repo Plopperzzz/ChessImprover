@@ -1400,6 +1400,14 @@ function renderStrength(d, status, body) {
       + `${cal.reason || 'not enough to calibrate from'}. The figure above stays on the raw `
       + `Maia scale.</div>`;
   }
+  const tf = d.think_filter || {};
+  if (tf.applied) {
+    note.innerHTML += `<div class="cal-detail">Left out <b>${tf.dropped}</b> of ${tf.eligible} `
+      + `timed moves played in under ${tf.min_think_ms / 1000}s — a premove or an instant `
+      + `recapture says nothing about how well you play.</div>`;
+  } else if (tf.reason && tf.reason !== 'off') {
+    note.innerHTML += `<div class="cal-detail">Think-time filter not applied: ${tf.reason}.</div>`;
+  }
   note.innerHTML += `<div class="cal-detail scale-note">${d.scale_note}</div>`;
   body.appendChild(note);
   renderTrendSkipped(body, d);
@@ -1941,6 +1949,7 @@ function wireSettingsDialog() {
       maia_elo_step: Number(document.getElementById('s-maia-elo-step').value),
       maia_elo_step_batch: Number(document.getElementById('s-maia-elo-step-batch').value),
       maia_multipv: Number(document.getElementById('s-maia-multipv').value),
+      min_think_ms: Number(document.getElementById('s-min-think-ms').value),
       great_max_drop: Number(document.getElementById('s-great-drop').value),
       great_max_match_rate: Number(document.getElementById('s-great-rate').value),
       brilliant_enabled: document.getElementById('s-brilliant').value === '1',
@@ -2241,6 +2250,7 @@ async function fillSettingsForm() {
   document.getElementById('s-maia-elo-step').value = s.maia_elo_step;
   document.getElementById('s-maia-elo-step-batch').value = s.maia_elo_step_batch ?? 200;
   document.getElementById('s-maia-multipv').value = s.maia_multipv ?? 3;
+  document.getElementById('s-min-think-ms').value = s.min_think_ms ?? 2000;
   document.getElementById('s-great-drop').value = s.great_max_drop ?? 0.02;
   document.getElementById('s-great-rate').value = s.great_max_match_rate ?? 0.20;
   document.getElementById('s-brilliant').value = s.brilliant_enabled ? '1' : '0';

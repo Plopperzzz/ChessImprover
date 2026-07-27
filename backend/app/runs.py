@@ -81,6 +81,14 @@ def save_analysis(user_id: int, game_id: int, mode: str, payload: dict, run_id: 
 
         sweep = payload.get("sweep_cache")
         if sweep:
+            # Attached from the game rather than threaded through the sweep:
+            # the clocks were read at upload and never change, and the sweep
+            # has no business knowing about them.
+            think = conn.execute("SELECT clocks_json FROM games WHERE id = ?", (game_id,)).fetchone()
+            try:
+                per_ply = json.loads(think["clocks_json"]) if think and think["clocks_json"] else []
+            except (ValueError, TypeError):
+                per_ply = []
             rows = []
             for side, block in (sweep.get("players") or {}).items():
                 for i, position in enumerate(block.get("positions", [])):
@@ -89,11 +97,14 @@ def save_analysis(user_id: int, game_id: int, mode: str, payload: dict, run_id: 
                     # exactly what the old top-1-only sweeps wrote.
                     scores = "".join(str(min(int(v), 9)) if v else "0"
                                      for v in block["matrix"][i])
-                    rows.append((run_game_id, side, position["ply"], position["fen"],
-                                 position["uci"], scores))
+                    ply = position["ply"]
+                    think_ms = per_ply[ply - 1] if 0 < ply <= len(per_ply) else None
+                    rows.append((run_game_id, side, ply, position["fen"],
+                                 position["uci"], scores, think_ms))
             conn.executemany(
-                """INSERT INTO sweep_positions (run_game_id, side, ply, fen, uci, scores)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sweep_positions
+                   (run_game_id, side, ply, fen, uci, scores, think_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 rows,
             )
 

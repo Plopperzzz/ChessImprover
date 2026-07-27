@@ -41,12 +41,13 @@ async def upload_games(
                     """INSERT INTO games (
                         user_id, upload_id, batch_index, source_name, game_index_in_source,
                         white, black, result, event, date_header, utc_date_header,
-                        year, month, your_color, pgn_text, headers_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        year, month, your_color, pgn_text, headers_json, clocks_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         user["id"], upload_id, batch_index, g["source_name"], g["game_index_in_source"],
                         g["white"], g["black"], g["result"], g["event"], g["date_header"], g["utc_date_header"],
                         g["year"], g["month"], g["your_color"], g["pgn_text"], g["headers_json"],
+                        g.get("clocks_json"),
                     ),
                 )
                 created.append({"id": cur.lastrowid, "batch_index": batch_index, **g})

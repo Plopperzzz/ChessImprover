@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from . import elo_sweep
 from .auth import require_user
 from .db import db_cursor
+from .engine_settings import get_effective_settings
 
 router = APIRouter(prefix="/api/strength", tags=["strength"])
 
@@ -105,11 +106,12 @@ def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
             yours, theirs = row["your_color"], "b" if row["your_color"] == "w" else "w"
             scores = {"w": [], "b": []}
             for r in conn.execute(
-                "SELECT side, scores FROM sweep_positions WHERE run_game_id = ? ORDER BY ply",
+                "SELECT side, scores, think_ms FROM sweep_positions "
+                "WHERE run_game_id = ? ORDER BY ply",
                 (row["run_game_id"],),
             ):
                 if r["scores"] and len(r["scores"]) == len(grid):
-                    scores.setdefault(r["side"], []).append(r["scores"])
+                    scores.setdefault(r["side"], []).append((r["scores"], r["think_ms"]))
             if not scores[yours]:
                 skipped["no_sweep_positions"] += 1
                 continue
@@ -161,6 +163,53 @@ def common_grid(entries: list[dict], key: str = "you") -> tuple[list[int], list[
     return best, kept, len(usable) - len(kept)
 
 
+# Refuse to apply the think-time filter when it would take more than this
+# share of the positions. That is not a filter, it is a different (much
+# smaller) dataset, and it happens the moment someone points this at a bullet
+# library where every move is under a second.
+MAX_FILTERED_FRACTION = 0.6
+
+
+def apply_think_filter(entries: list[dict], key: str, min_think_ms: int) -> dict:
+    """Drops positions the player barely thought about, and reports what it
+    did. A move played in half a second is a premove or an automatic
+    recapture; it says nothing about how well someone plays.
+
+    Positions with no clock recorded are kept -- unknown is not instant, and
+    every game uploaded before clocks were captured has no clock at all.
+    """
+    info = {"applied": False, "min_think_ms": int(min_think_ms),
+            "eligible": 0, "would_drop": 0, "dropped": 0, "reason": None}
+    if min_think_ms <= 0:
+        info["reason"] = "off"
+        return info
+    eligible = would_drop = 0
+    for entry in entries:
+        for _scores, think in entry.get(key, []):
+            if think is None:
+                continue
+            eligible += 1
+            if think < min_think_ms:
+                would_drop += 1
+    info["eligible"] = eligible
+    info["would_drop"] = would_drop
+    if not eligible:
+        info["reason"] = "these games carry no clock times"
+        return info
+    if would_drop >= MAX_FILTERED_FRACTION * eligible:
+        info["reason"] = (f"{would_drop / eligible:.0%} of your moves were played in under "
+                          f"{min_think_ms / 1000:g}s, so filtering them would leave a different "
+                          f"library rather than a cleaner one -- left off")
+        return info
+
+    for entry in entries:
+        entry[key] = [(sc, th) for sc, th in entry.get(key, [])
+                      if th is None or th >= min_think_ms]
+    info["applied"] = True
+    info["dropped"] = would_drop
+    return info
+
+
 def matrix(entries: list[dict], grid: list[int], key: str = "you"):
     """(rank rows, game_ids) -- the game id per row is what lets the bootstrap
     resample games instead of moves. Rows carry Maia's rank for the played
@@ -169,7 +218,7 @@ def matrix(entries: list[dict], grid: list[int], key: str = "you"):
     for entry in entries:
         index = {elo: i for i, elo in enumerate(entry["grid"])}
         columns = [index[elo] for elo in grid]
-        for scores in entry.get(key, []):
+        for scores, _think in entry.get(key, []):
             decoded = elo_sweep.decode_scores(scores)
             rows.append([decoded[i] for i in columns])
             groups.append(entry["game_id"])
@@ -246,9 +295,16 @@ def _calibrate(you: dict, field: dict, opponent_ratings: list) -> dict:
     }
 
 
-def build(user_id: int, run_id: int | None = None, top_n: int = 1) -> dict:
+def build(user_id: int, run_id: int | None = None, top_n: int = 1,
+          min_think_ms: int | None = None) -> dict:
     entries, skipped = collect(user_id, run_id)
     top_n = max(1, min(int(top_n), elo_sweep.MAX_TOP_N))
+    if min_think_ms is None:
+        min_think_ms = get_effective_settings(user_id).get("min_think_ms", 0) or 0
+    think = apply_think_filter(entries, "you", min_think_ms)
+    # The opposition is filtered on the same rule, so the calibration compares
+    # like with like rather than your considered moves against their premoves.
+    apply_think_filter(entries, "opponent", min_think_ms)
     you = _side_estimate(entries, "you", top_n)
     field = _side_estimate(entries, "opponent", top_n)
 
@@ -267,6 +323,7 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1) -> dict:
         "your_rating_n": len(your_ratings),
         "games": len(entries),
         "top_n": top_n,
+        "think_filter": think,
         "max_rank_seen": max(you.get("max_rank_seen", 0), field.get("max_rank_seen", 0)),
         "skipped": skipped,
         "scale_note": (
@@ -280,7 +337,8 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1) -> dict:
 
 @router.get("")
 def get_strength(run_id: int | None = None, top_n: int = 1,
+                 min_think_ms: int | None = None,
                  user: dict = Depends(require_user)):
     """Pooled estimate over every game with a stored sweep. Pure re-fit of
     cached scores -- no engine runs -- so it is safe to call on every load."""
-    return build(user["id"], run_id, top_n)
+    return build(user["id"], run_id, top_n, min_think_ms)
