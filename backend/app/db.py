@@ -31,8 +31,12 @@ CREATE TABLE IF NOT EXISTS engine_settings (
     sf_skill_level INTEGER,                        -- NULL = full strength
     maia_path TEXT,
     maia_model_size TEXT NOT NULL DEFAULT '5m',     -- '5m' | '25m' | '79m'
-    maia_elo_min INTEGER NOT NULL DEFAULT 1100,
-    maia_elo_max INTEGER NOT NULL DEFAULT 1900,
+    -- Wide by default. A narrow grid can't locate a peak near its edge, and
+    -- the fit has fewer points to work with; the sweep costs one engine call
+    -- per grid point per position, so widen the range and coarsen the step in
+    -- batch rather than sweeping a narrow window finely.
+    maia_elo_min INTEGER NOT NULL DEFAULT 600,
+    maia_elo_max INTEGER NOT NULL DEFAULT 2600,
     maia_elo_step INTEGER NOT NULL DEFAULT 100,
     -- Coarser grid for batch runs: a fine sweep is affordable for one game
     -- and not for a thousand (section 9).
@@ -137,6 +141,13 @@ CREATE TABLE IF NOT EXISTS sweep_positions (
     PRIMARY KEY (run_game_id, ply)
 );
 
+-- Applied one-off data migrations, so a migration that rewrites user data
+-- can't run twice and undo a deliberate change made afterwards.
+CREATE TABLE IF NOT EXISTS migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_run_games_user ON run_games(user_id);
 CREATE INDEX IF NOT EXISTS idx_run_games_game ON run_games(game_id);
 """
@@ -159,6 +170,27 @@ def _ensure_column(conn, table: str, column: str, ddl: str):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
+def _applied(conn, name: str) -> bool:
+    row = conn.execute("SELECT 1 FROM migrations WHERE name = ?", (name,)).fetchone()
+    if row:
+        return True
+    conn.execute("INSERT INTO migrations (name) VALUES (?)", (name,))
+    return False
+
+
+def _widen_default_elo_grid(conn):
+    """The original default sweep range was 1100-1900, which is too narrow to
+    locate a peak reliably and biased the old curve fit. Widen it for anyone
+    still sitting on that exact pair -- and only once, so a user who
+    deliberately narrows the range again keeps it."""
+    if _applied(conn, "widen_default_elo_grid"):
+        return
+    conn.execute(
+        """UPDATE engine_settings SET maia_elo_min = 600, maia_elo_max = 2600
+           WHERE maia_elo_min = 1100 AND maia_elo_max = 1900"""
+    )
+
+
 def init_db():
     conn = get_conn()
     try:
@@ -170,6 +202,7 @@ def init_db():
         _ensure_column(conn, "engine_settings", "brilliant_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "engine_settings", "maia_elo_step_batch", "INTEGER NOT NULL DEFAULT 200")
         _ensure_column(conn, "engine_settings", "stockfish_options_json", "TEXT NOT NULL DEFAULT '{}'")
+        _widen_default_elo_grid(conn)
         conn.commit()
     finally:
         conn.close()

@@ -72,8 +72,8 @@ async def run_batch(job: AnalysisJob, games: list[dict], mode: str, settings: di
     # Coarser by default in batch: a fine grid is affordable for one game and
     # not for a thousand (section 9).
     batch_grid = build_grid(
-        settings.get("maia_elo_min", 1100),
-        settings.get("maia_elo_max", 1900),
+        settings.get("maia_elo_min", 600),
+        settings.get("maia_elo_max", 2600),
         settings.get("maia_elo_step_batch") or settings.get("maia_elo_step", 100),
     ) if mode == "full" else None
     batch_slots = slots_for(settings, mode)

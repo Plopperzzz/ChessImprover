@@ -232,33 +232,85 @@ so one noisy value can't award a Great on its own. If your Maia build turns
 out to expose per-candidate policy probabilities, that would be a more direct
 measure and worth switching to.
 
-### Elo sweep
+### Elo estimate
 
-Maia is asked to move in each of your positions at every Elo on the
-configured grid; the Elo whose match rate peaks is the estimate, shown per
-player with a fitted curve and a 95% interval.
+Maia is asked to move in each of your positions at every Elo on the grid.
+Where its choice matches the move you actually played, that Elo "explains"
+the move; the Elo where the match rate peaks is the estimate.
 
-Three things about it are deliberate, and worth knowing before trusting a
+**Use the "Your strength (all games)" panel, not the per-game one.** A single
+game is about 25 of your moves, half of them uninformative, and at that size
+the estimate has a standard deviation near 90 Elo — it is a coin flip with an
+Elo label. The per-game panel is there to show the shape of one game's curve;
+the pooled panel fits one curve to every position from every game with a
+stored sweep, and that is the number to act on. Both re-fit cached scores, so
+neither runs an engine.
+
+Five things about it are deliberate, and worth knowing before trusting a
 number:
 
-- Positions where Maia's choice never changes across the whole grid carry no
-  information about strength, so they're split out and only the
-  discriminative ones are fitted. Both counts are reported.
-- The same positions are scored at every grid point, so errors are
-  correlated along the grid rather than independent. The usual i.i.d.
-  smoothing heuristic under-smooths badly here and lets the fitted peak get
-  captured by boundary overshoot, so smoothing starts above that heuristic
-  and escalates until the curve stops overshooting, falling back to a
-  heavily smoothed weighted polynomial if a spline can't be tamed.
-- The bootstrap resamples *positions*, the independent sampling unit, and
-  rebuilds the curve from the cached score matrix -- so no engine work is
-  repeated, and the interval reflects the real sampling noise.
+- **The peak comes from a parametric fit, not from smoothing.** The curve is
+  a broad hump on a baseline — some share of your moves are the obvious move
+  every Elo finds, and on top sits a bump centred on your strength — so that
+  is what gets fitted (baseline, height, centre, width) and the centre *is*
+  the estimate. This replaced a smoothing spline whose argmax was taken as
+  the peak, which was measurably biased: on a noiseless symmetric test curve
+  peaking at 1300 it returned 1288 over a 1100–1900 grid and **1211** over
+  600–2600, because smoothing drags the apex toward the flat tails, worse the
+  wider the grid. Simulated at ~1300 discriminative positions the spline gave
+  bias −61 / sd 30 Elo where the bump fit gives −1 / sd 10.
+- **Positions where Maia's choice never changes across the grid are split
+  out.** They carry no information about strength and only add noise. Both
+  counts are reported.
+- **The interval resamples games, not moves, when games are pooled.** Moves
+  from one game share an opponent, an opening and a sitting. With realistic
+  between-game variation, resampling moves reported ±18 Elo where resampling
+  games reported ±31 — the move-level figure is simply wrong.
+- **The noise test is the interval, and it is measured rather than guessed.**
+  The obvious alternative — "is the fitted bump tall enough" — is worthless:
+  a free-centre fit spikes through a single high point, so under pure noise
+  the fitted height reaches 10–90 standard errors, taller than real signal
+  ever needs. The bootstrap separates them cleanly, because noise puts the
+  peak somewhere else every resample (noise: 5th percentile 0.60 of the swept
+  range, median 0.90; real signal with 100+ positions: 95th percentile 0.12).
+  An interval covering more than 55% of the range forces Low confidence
+  however large the sample — a big sample that still can't locate the peak is
+  more evidence there is nothing to locate, not less.
+- **A match rate that barely moves across the grid is called out by name.**
+  That is what a mis-named Elo option looks like: the engine plays the same
+  move at 600 and at 2600. The panel says so and names the likely cause
+  instead of reporting the meaningless number that falls out.
 
-Every estimate carries a High/Medium/Low label with the reasons spelled out
-(sample size, peak prominence, interval width). A peak sitting on the edge
-of the swept range caps the label at Medium however clean the fit looks: it
-means the player is probably outside the grid, so the number is a bound, not
-a measurement -- widen the Elo range and re-run.
+Every estimate carries a High/Medium/Low label with the reasons spelled out.
+A peak on the edge of the swept range caps the label at Medium however clean
+the fit looks — the player is probably outside the grid, so the number is a
+bound, not a measurement. Widen the range and re-run.
+
+The default grid is **600–2600 step 100**. It used to be 1100–1900, which is
+too narrow to locate a peak reliably; anyone still on that exact pair is
+widened once automatically, and a range you set deliberately is left alone.
+
+### Which scale is that number on?
+
+Maia-3's SelfElo is calibrated to **Lichess** ratings, which sit a few hundred
+points above Chess.com or FIDE at club level. So a raw estimate of 1290 next
+to a Chess.com rating of 900 is not a contradiction.
+
+Rather than make you remember a conversion, the panel measures it from your
+own games. The sweep already scores your opponents' moves as well as yours,
+and the PGN headers say what those opponents were actually rated — so the
+same run estimates the field you played, and the gap between the field's
+estimate and the field's real average rating *is* the offset between the two
+scales. Your estimate is then reported on your opponents' scale too:
+
+> **On your opponents' scale: 944** (95% 916–969)
+> Your 104 opponents are rated 908 on average and this sweep estimates them
+> at 1255, so the Maia scale sits +347 above the rating pool you play in.
+
+The conversion is withheld — with the reason given — when the opposition
+estimate isn't firm enough to anchor it (low confidence, or a peak pinned to
+the edge of the grid). Subtracting an offset measured off a curve that isn't
+there would produce a confident-looking figure built on nothing.
 
 The full per-(position, Elo) score matrix is kept, so re-fitting later never
 re-runs the engine.

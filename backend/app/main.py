@@ -21,6 +21,7 @@ from .paths import ASSETS_DIR, FRONTEND_DIR, list_asset_sets
 from .play import router as play_router
 from .play import status as play_status
 from .runs import router as runs_router
+from .strength import router as strength_router
 from .sweep_job import router as sweep_router
 from .trend import router as trend_router
 
@@ -56,6 +57,7 @@ app.include_router(sweep_router)
 app.include_router(runs_router)
 app.include_router(batch_router)
 app.include_router(trend_router)
+app.include_router(strength_router)
 
 
 @app.get("/api/asset-sets")

@@ -116,6 +116,7 @@ async function initApp() {
   wireAnalysis();
   wireSweep();
   wireBatch();
+  wireStrength();
   wireTrend();
   wirePlay();
   connectLiveEval();
@@ -777,16 +778,18 @@ async function refreshRunPicker() {
 
   // The trend panel can be scoped to one run; "All runs" is the default
   // because a trend built from a single batch is usually what you don't want.
-  const trendSel = document.getElementById('trend-run');
-  const trendPrevious = trendSel.value;
-  trendSel.innerHTML = '<option value="">All runs</option>';
-  for (const run of runs) {
-    const opt = document.createElement('option');
-    opt.value = run.id;
-    opt.textContent = run.name;
-    trendSel.appendChild(opt);
+  for (const id of ['trend-run', 'strength-run']) {
+    const sel = document.getElementById(id);
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">All runs</option>';
+    for (const run of runs) {
+      const opt = document.createElement('option');
+      opt.value = run.id;
+      opt.textContent = run.name;
+      sel.appendChild(opt);
+    }
+    if (prev && runs.some((r) => String(r.id) === prev)) sel.value = prev;
   }
-  if (trendPrevious && runs.some((r) => String(r.id) === trendPrevious)) trendSel.value = trendPrevious;
 }
 
 function wireAnalysis() {
@@ -921,7 +924,7 @@ async function handleAnalysisMessage(msg) {
     finishAnalysis();
     await refreshRunPicker();
     await refreshGameList();
-    if (msg.mode === 'full') refreshTrend();  // a new sweep is a new trend point
+    if (msg.mode === 'full') { refreshTrend(); refreshStrength(); }  // new sweep data
     syncBoardFull();
   } else if (msg.type === 'error') {
     document.getElementById('analysis-status').textContent =
@@ -1122,6 +1125,7 @@ async function handleBatchMessage(msg) {
     await refreshGameList();
     await refreshRunPicker();
     refreshTrend();
+    refreshStrength();
   } else if (msg.type === 'error') {
     status.textContent = 'Error: ' + msg.message;
     finishBatch();
@@ -1301,6 +1305,94 @@ function sweepChart(res) {
     svg.appendChild(line);
   }
   return svg;
+}
+
+/* ---------------- Pooled strength estimate (spec section 9) ----------------
+   The per-game number is far too noisy to act on; this is the one that pools
+   every stored sweep into a single fit. It also reports the opposition field,
+   which is what makes the calibration possible: your opponents' real ratings
+   are in the PGN headers, so the gap between their Maia estimate and their
+   actual average measures the offset between the two scales on your own
+   games rather than from a conversion table. */
+
+function wireStrength() {
+  document.getElementById('strength-refresh').addEventListener('click', refreshStrength);
+  document.getElementById('strength-run').addEventListener('change', refreshStrength);
+  refreshStrength();
+}
+
+async function refreshStrength() {
+  const runId = document.getElementById('strength-run').value;
+  const status = document.getElementById('strength-status');
+  const body = document.getElementById('strength-body');
+  status.textContent = 'Fitting...';
+  try {
+    const d = await api('/api/strength' + (runId ? `?run_id=${runId}` : ''));
+    renderStrength(d, status, body);
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    body.innerHTML = '';
+  }
+}
+
+function renderStrength(d, status, body) {
+  body.innerHTML = '';
+  if (!d.you || d.you.estimate == null) {
+    status.textContent = 'Nothing to fit yet — run a Full analysis (or a Full batch) first.';
+    renderTrendSkipped(body, d);
+    return;
+  }
+  status.textContent =
+    `${d.you.games} game(s), ${d.you.n_discriminative} discriminative of ${d.you.n_positions} positions.`;
+
+  const card = document.createElement('div');
+  card.className = 'sweep-player';
+  const head = document.createElement('div');
+  head.className = 'sweep-head';
+  head.innerHTML =
+    `<span class="sweep-who">You</span><span class="sweep-elo">${d.you.estimate}</span>`
+    + (d.you.ci_low != null ? `<span class="sweep-ci">95% ${d.you.ci_low}–${d.you.ci_high}</span>` : '')
+    + `<span class="conf-badge conf-${d.you.confidence}">${d.you.confidence}</span>`;
+  card.appendChild(head);
+  card.appendChild(sweepChart(d.you));
+  const ul = document.createElement('ul');
+  ul.className = 'sweep-reasons';
+  for (const reason of d.you.reasons || []) {
+    const li = document.createElement('li');
+    li.textContent = reason;
+    ul.appendChild(li);
+  }
+  card.appendChild(ul);
+  body.appendChild(card);
+
+  // The calibration is the useful half: a raw Maia number on the Lichess
+  // scale means little next to a Chess.com rating.
+  const cal = d.calibration || {};
+  const note = document.createElement('div');
+  note.className = 'calibration';
+  if (cal.available) {
+    note.innerHTML =
+      `<div class="cal-headline">On your opponents' scale: <b>${cal.your_calibrated}</b>`
+      + (cal.your_calibrated_low != null
+          ? ` <span class="sweep-ci">95% ${cal.your_calibrated_low}–${cal.your_calibrated_high}</span>` : '')
+      + '</div>'
+      + `<div class="cal-detail">Your ${cal.field_actual_n} opponents are rated <b>${cal.field_actual}</b> `
+      + `on average and this sweep estimates them at <b>${cal.field_estimate}</b>, so the Maia scale sits `
+      + `<b>${cal.offset > 0 ? '+' : ''}${cal.offset}</b> above the rating pool you play in. `
+      + `That offset is measured from your own games, not looked up.</div>`
+      + (d.your_rating_mean != null
+          ? `<div class="cal-detail">Your own header rating averages ${d.your_rating_mean} `
+            + `across ${d.your_rating_n} game(s).</div>` : '');
+  } else {
+    // Withheld on purpose: subtracting an offset measured from a flat or
+    // edge-pinned opposition curve would look authoritative and mean nothing.
+    note.innerHTML = `<div class="cal-detail">Not converted to your pool's scale — `
+      + `${cal.reason || 'not enough to calibrate from'}. The figure above stays on the raw `
+      + `Maia scale.</div>`;
+  }
+  note.innerHTML += `<div class="cal-detail scale-note">${d.scale_note}</div>`;
+  body.appendChild(note);
+  renderTrendSkipped(body, d);
 }
 
 /* ---------------- Trend over time (spec section 15) ----------------

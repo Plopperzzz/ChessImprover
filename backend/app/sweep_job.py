@@ -128,8 +128,8 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
     engine, elo_option, note = maia["engine"], maia["elo_option"], maia["note"]
 
     if grid is None:
-        grid = build_grid(settings.get("maia_elo_min", 1100),
-                          settings.get("maia_elo_max", 1900),
+        grid = build_grid(settings.get("maia_elo_min", 600),
+                          settings.get("maia_elo_max", 2600),
                           settings.get("maia_elo_step", 100))
     by_player = positions_by_player(pgn_text)
     total_work = len(grid) * sum(len(v) for v in by_player.values())

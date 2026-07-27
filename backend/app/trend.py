@@ -28,44 +28,32 @@ from datetime import date
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
-from . import elo_sweep
+from . import elo_sweep, strength
 from .auth import require_user
-from .db import db_cursor
 
 router = APIRouter(prefix="/api/trend", tags=["trend"])
 
 GRANULARITIES = ("year", "month", "week")
-MIN_COMMON_GRID = 3
 
 
-def _parse_date(row) -> date | None:
+def _parse_date(raw) -> date | None:
     """PGN dates are 'YYYY.MM.DD', often with '??' for unknown parts. A game
     whose day is unknown can still be bucketed by month or year, so return
     what's parseable and let the caller decide."""
-    for raw in (row["utc_date_header"], row["date_header"]):
-        if not raw:
-            continue
-        parts = str(raw).replace("-", ".").split(".")
-        if len(parts) < 2:
-            continue
-        try:
-            year, month = int(parts[0]), int(parts[1])
-            day = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
-        except ValueError:
-            continue
-        if not (1000 <= year <= 3000 and 1 <= month <= 12):
-            continue
-        day = min(max(day, 1), calendar.monthrange(year, month)[1])
-        return date(year, month, day)
-    return None
-
-
-def _day_known(row) -> bool:
-    for raw in (row["utc_date_header"], row["date_header"]):
-        if raw:
-            parts = str(raw).replace("-", ".").split(".")
-            return len(parts) > 2 and parts[2].isdigit()
-    return False
+    if not raw:
+        return None
+    parts = str(raw).replace("-", ".").split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        year, month = int(parts[0]), int(parts[1])
+        day = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
+    except ValueError:
+        return None
+    if not (1000 <= year <= 3000 and 1 <= month <= 12):
+        return None
+    day = min(max(day, 1), calendar.monthrange(year, month)[1])
+    return date(year, month, day)
 
 
 def _bucket(day: date, granularity: str) -> tuple[str, str, float]:
@@ -83,130 +71,6 @@ def _bucket(day: date, granularity: str) -> tuple[str, str, float]:
     days_in_year = 366 if calendar.isleap(thursday.year) else 365
     x = thursday.year + (thursday.timetuple().tm_yday - 0.5) / days_in_year
     return f"{iso_year:04d}-W{iso_week:02d}", f"W{iso_week} {iso_year}", x
-
-
-def _header_elo(headers_json: str, side: str):
-    try:
-        headers = json.loads(headers_json or "{}")
-    except ValueError:
-        return None
-    raw = headers.get("WhiteElo" if side == "w" else "BlackElo")
-    try:
-        value = int(str(raw).strip())
-    except (TypeError, ValueError):
-        return None
-    return value if 100 <= value <= 4000 else None
-
-
-def _collect(user_id: int, run_id: int | None) -> tuple[list[dict], dict]:
-    """One entry per analysed game that can contribute, plus a tally of what
-    was left out and why -- a silently short trend is worse than a short one
-    that says which games it couldn't use."""
-    skipped = {"no_full_analysis": 0, "undated": 0, "unassigned_color": 0,
-               "no_sweep_positions": 0, "no_header_elo": 0}
-    with db_cursor() as conn:
-        # Counted separately because it's the actionable one: a game analysed
-        # in Quick mode has no Elo sweep, so it can never appear here until
-        # it's run in Full. Saying nothing would look like the games vanished.
-        skipped["no_full_analysis"] = conn.execute(
-            """SELECT COUNT(*) AS n FROM games g
-               WHERE g.user_id = ? AND NOT EXISTS (
-                 SELECT 1 FROM run_games rg
-                 WHERE rg.game_id = g.id AND rg.user_id = g.user_id AND rg.mode = 'full')""",
-            (user_id,),
-        ).fetchone()["n"]
-    params: list = [user_id]
-    run_clause = ""
-    if run_id is not None:
-        run_clause = " AND rg.run_id = ?"
-        params.append(run_id)
-
-    with db_cursor() as conn:
-        # A game re-analysed, or appended into a second run, would otherwise
-        # contribute its positions twice; keep only its latest analysis.
-        rows = conn.execute(
-            f"""SELECT rg.id AS run_game_id, rg.grid_json, rg.analyzed_at,
-                       g.id AS game_id, g.your_color, g.white, g.black,
-                       g.utc_date_header, g.date_header, g.headers_json
-                FROM run_games rg
-                JOIN games g ON g.id = rg.game_id
-                WHERE rg.user_id = ? AND rg.mode = 'full'{run_clause}
-                ORDER BY g.id, rg.analyzed_at DESC""",
-            params,
-        ).fetchall()
-
-        seen: set[int] = set()
-        entries = []
-        for row in rows:
-            if row["game_id"] in seen:
-                continue
-            seen.add(row["game_id"])
-            if row["your_color"] not in ("w", "b"):
-                skipped["unassigned_color"] += 1
-                continue
-            day = _parse_date(row)
-            if not day:
-                skipped["undated"] += 1
-                continue
-            try:
-                grid = json.loads(row["grid_json"] or "null")
-            except ValueError:
-                grid = None
-            if not grid:
-                skipped["no_sweep_positions"] += 1
-                continue
-            scores = conn.execute(
-                "SELECT scores FROM sweep_positions WHERE run_game_id = ? AND side = ? ORDER BY ply",
-                (row["run_game_id"], row["your_color"]),
-            ).fetchall()
-            usable = [s["scores"] for s in scores if s["scores"] and len(s["scores"]) == len(grid)]
-            if not usable:
-                skipped["no_sweep_positions"] += 1
-                continue
-            actual = _header_elo(row["headers_json"], row["your_color"])
-            if actual is None:
-                skipped["no_header_elo"] += 1
-            entries.append({
-                "game_id": row["game_id"],
-                "date": day,
-                "day_known": _day_known(row),
-                "grid": [int(v) for v in grid],
-                "scores": usable,
-                "actual_elo": actual,
-            })
-    return entries, skipped
-
-
-def _common_grid(entries: list[dict]) -> tuple[list[int], list[dict], int]:
-    """A bucket may mix grids -- a single-game sweep at step 100 and a batch
-    at step 200 over the same range. Pool on the Elos they share rather than
-    interpolating: every score used is one the engine actually produced.
-    Falls back to the most-represented grid when the shared set is too thin
-    to fit, and says how many games that dropped."""
-    if not entries:
-        return [], [], 0
-    shared = set(entries[0]["grid"])
-    for entry in entries[1:]:
-        shared &= set(entry["grid"])
-    if len(shared) >= MIN_COMMON_GRID:
-        return sorted(shared), entries, 0
-
-    tally: dict[tuple, int] = {}
-    for entry in entries:
-        tally[tuple(entry["grid"])] = tally.get(tuple(entry["grid"]), 0) + len(entry["scores"])
-    best = list(max(tally, key=lambda g: tally[g]))
-    kept = [e for e in entries if set(best) <= set(e["grid"])]
-    return best, kept, len(entries) - len(kept)
-
-
-def _matrix(entries: list[dict], grid: list[int]) -> np.ndarray:
-    rows = []
-    for entry in entries:
-        index = {elo: i for i, elo in enumerate(entry["grid"])}
-        columns = [index[elo] for elo in grid]
-        for scores in entry["scores"]:
-            rows.append([1.0 if scores[i] == "1" else 0.0 for i in columns])
-    return np.asarray(rows, dtype=float) if rows else np.zeros((0, len(grid)))
 
 
 def _se_from_ci(bucket: dict) -> float | None:
@@ -352,7 +216,19 @@ def _slope(points: list[tuple[float, float, float]], label: str) -> dict:
 
 
 def build(user_id: int, granularity: str, run_id: int | None = None) -> dict:
-    entries, skipped = _collect(user_id, run_id)
+    # Same collection the pooled estimate uses, so a bucket and the overall
+    # number are always built from exactly the same rows.
+    entries, skipped = strength.collect(user_id, run_id)
+    skipped.setdefault("undated", 0)
+    dated = []
+    for entry in entries:
+        day = _parse_date(entry["date"])
+        if day is None:
+            skipped["undated"] += 1
+            continue
+        entry["day"] = day
+        dated.append(entry)
+    entries = dated
 
     if granularity == "week":
         # A game dated only to the month can't be put in a week without
@@ -364,20 +240,21 @@ def build(user_id: int, granularity: str, run_id: int | None = None) -> dict:
 
     grouped: dict[str, dict] = {}
     for entry in entries:
-        key, label, x = _bucket(entry["date"], granularity)
+        key, label, x = _bucket(entry["day"], granularity)
         bucket = grouped.setdefault(key, {"key": key, "label": label, "x": x, "entries": []})
         bucket["entries"].append(entry)
 
     buckets = []
     for key in sorted(grouped):
         bucket = grouped[key]
-        grid, usable, excluded = _common_grid(bucket["entries"])
-        matrix = _matrix(usable, grid)
-        result = (elo_sweep.estimate(grid, matrix) if matrix.shape[0] and len(grid) >= 2
+        grid, usable, excluded = strength.common_grid(bucket["entries"])
+        matrix, groups = strength.matrix(usable, grid)
+        result = (elo_sweep.estimate(grid, matrix, groups=groups)
+                  if matrix.shape[0] and len(grid) >= 2
                   else {"estimate": None, "confidence": "low",
                         "reasons": ["not enough comparable sweep data in this bucket"],
                         "n_positions": int(matrix.shape[0]), "n_discriminative": 0})
-        actuals = [e["actual_elo"] for e in usable if e["actual_elo"] is not None]
+        actuals = [e["your_elo"] for e in usable if e["your_elo"] is not None]
         buckets.append({
             "key": key,
             "label": bucket["label"],

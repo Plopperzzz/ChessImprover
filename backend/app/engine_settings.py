@@ -23,8 +23,8 @@ class EngineSettings(BaseModel):
     sf_skill_level: int | None = Field(default=None, ge=0, le=20)
     maia_path: str | None = None
     maia_model_size: str = "5m"  # '5m' | '25m' | '79m'
-    maia_elo_min: int = 1100
-    maia_elo_max: int = 1900
+    maia_elo_min: int = 600
+    maia_elo_max: int = 2600
     maia_elo_step: int = 100
     maia_elo_step_batch: int = 200
     great_max_drop: float = Field(default=0.02, ge=0.0, le=0.5)
