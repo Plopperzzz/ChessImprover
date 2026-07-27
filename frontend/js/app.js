@@ -1587,10 +1587,15 @@ function renderSweepResults(msg) {
     who.textContent = side === msg.your_color ? 'You' : 'Opponent';
     const elo = document.createElement('span');
     elo.className = 'sweep-elo';
-    elo.textContent = res.estimate ?? '—';
+    // Same rule as the pooled view: a peak that never reached the match rate
+    // this model manages at that Elo is the grid running out, not a reading.
+    elo.textContent = res.estimate == null ? '—'
+      : res.bound === 'lower' ? `≥ ${res.estimate}`
+      : res.bound === 'upper' ? `≤ ${res.estimate}` : `${res.estimate}`;
     const ci = document.createElement('span');
     ci.className = 'sweep-ci';
-    ci.textContent = res.ci_low != null ? `95% CI ${res.ci_low}–${res.ci_high}` : '';
+    ci.textContent = res.bound ? 'outside the swept range'
+      : res.ci_low != null ? `95% CI ${res.ci_low}–${res.ci_high}` : '';
     const badge = document.createElement('span');
     badge.className = 'conf-badge conf-' + res.confidence;
     badge.textContent = res.confidence;
@@ -1704,9 +1709,18 @@ function renderStrength(d, status, body) {
   card.className = 'sweep-player';
   const head = document.createElement('div');
   head.className = 'sweep-head';
+  // A bound is not an estimate. When the match rate never got near what this
+  // model manages on players at the fitted Elo, the sweep ran out of grid
+  // before it ran out of player, and showing a bare number would be a lie
+  // dressed as a measurement.
+  const bound = d.you.bound;
+  const shown = bound === 'lower' ? `≥ ${d.you.estimate}`
+    : bound === 'upper' ? `≤ ${d.you.estimate}` : `${d.you.estimate}`;
   head.innerHTML =
-    `<span class="sweep-who">You</span><span class="sweep-elo">${d.you.estimate}</span>`
-    + (d.you.ci_low != null ? `<span class="sweep-ci">95% ${d.you.ci_low}–${d.you.ci_high}</span>` : '')
+    `<span class="sweep-who">You</span><span class="sweep-elo">${shown}</span>`
+    + (!bound && d.you.ci_low != null
+        ? `<span class="sweep-ci">95% ${d.you.ci_low}–${d.you.ci_high}</span>` : '')
+    + (bound ? `<span class="sweep-ci">outside the swept range</span>` : '')
     + `<span class="conf-badge conf-${d.you.confidence}">${d.you.confidence}</span>`;
   card.appendChild(head);
   card.appendChild(sweepChart(d.you));
@@ -1745,6 +1759,39 @@ function renderStrength(d, status, body) {
       + `${cal.reason || 'not enough to calibrate from'}. The figure above stays on the raw `
       + `Maia scale.</div>`;
   }
+  // How predictable you are, next to how strong you are. These come from the
+  // same fit but from different parts of it -- one from where the match rate
+  // peaks, one from how high it got -- so a wide gap is not an error, it is
+  // the part of someone's play that a single strength doesn't describe.
+  const pr = d.predictability || {};
+  if (pr.available) {
+    const pct = (v) => `${(v * 100).toFixed(1)}%`;
+    const over = pr.observed >= pr.expected;
+    note.innerHTML +=
+      `<div class="cal-detail">Your moves match ${pr.model} <b>${pct(pr.observed)}</b> of the time `
+      + `at its best setting, against the <b>${pct(pr.expected)}</b> it manages on players at `
+      + `${d.you.estimate}. `
+      + (pr.gap_significant
+          ? (over
+              ? `You are more predictable than your estimate implies — your play is consistent, `
+                + `with fewer moves that a player at your level wouldn't make.`
+              : `You are less predictable than the field at your level: your moves are spread `
+                + `across a wider range of strengths than one rating explains.`)
+          : `That is within the noise — at this many positions the match rate can't pin `
+            + `down consistency any tighter.`)
+      + `</div>`
+      + (pr.think_filtered
+          ? `<div class="cal-detail">Instant moves were left out before this was measured, `
+            + `which raises it — the moves dropped are the least predictable ones. Comparable `
+            + `with other filtered figures, not with unfiltered ones.</div>` : '')
+      + (pr.share_known < 1
+          ? `<div class="cal-detail">${Math.round((1 - pr.share_known) * 100)}% of these positions `
+            + `don't record which Maia model swept them and sit out of this comparison.</div>` : '')
+      + `<div class="cal-detail scale-note">${pr.note}</div>`;
+  } else if (pr.reason) {
+    note.innerHTML += `<div class="cal-detail">Predictability not measured — ${pr.reason}.</div>`;
+  }
+
   const tf = d.think_filter || {};
   if (tf.applied) {
     note.innerHTML += `<div class="cal-detail">Left out <b>${tf.dropped}</b> of ${tf.eligible} `
@@ -2863,6 +2910,7 @@ function wireSettingsDialog() {
       maia_elo_step_batch: Number(document.getElementById('s-maia-elo-step-batch').value),
       maia_multipv: Number(document.getElementById('s-maia-multipv').value),
       min_think_ms: Number(document.getElementById('s-min-think-ms').value),
+      maia_accuracy_offset: Number(document.getElementById('s-maia-accuracy-offset').value),
       great_max_drop: Number(document.getElementById('s-great-drop').value),
       great_max_match_rate: Number(document.getElementById('s-great-rate').value),
       brilliant_enabled: document.getElementById('s-brilliant').value === '1',
@@ -3120,6 +3168,7 @@ async function fillSettingsForm() {
   document.getElementById('s-maia-elo-step-batch').value = s.maia_elo_step_batch ?? 200;
   document.getElementById('s-maia-multipv').value = s.maia_multipv ?? 3;
   document.getElementById('s-min-think-ms').value = s.min_think_ms ?? 2000;
+  document.getElementById('s-maia-accuracy-offset').value = s.maia_accuracy_offset ?? 0;
   document.getElementById('s-great-drop').value = s.great_max_drop ?? 0.02;
   document.getElementById('s-great-rate').value = s.great_max_match_rate ?? 0.20;
   document.getElementById('s-brilliant').value = s.brilliant_enabled ? '1' : '0';

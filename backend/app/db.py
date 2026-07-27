@@ -57,6 +57,12 @@ CREATE TABLE IF NOT EXISTS engine_settings (
     -- costs no extra engine time and lets the fit use a top-N objective later
     -- without re-running anything.
     maia_multipv INTEGER NOT NULL DEFAULT 3,
+    -- Shifts Maia's published accuracy curves before the match rate is scored
+    -- against them. The curves are measured on Lichess blitz, so a library of
+    -- rapid or classical games sits a little below them through no fault of
+    -- the player -- longer thinking finds more moves the policy net doesn't.
+    -- Left at 0 by default rather than guessing a correction.
+    maia_accuracy_offset REAL NOT NULL DEFAULT 0.0,
     -- Moves played in less than this are dropped from the Elo fit: a move
     -- made in half a second is a premove or an instant recapture, not
     -- evidence of how well you play. Ignored when the games carry no clocks,
@@ -135,6 +141,11 @@ CREATE TABLE IF NOT EXISTS run_games (
     grid_json TEXT,                 -- swept Elo grid (full mode only)
     results_json TEXT,              -- per-side Elo estimate + confidence
     engine_note TEXT,
+    -- Which Maia binary actually swept this game. Needed to score the match
+    -- rate against that model's published accuracy curve, which differs enough
+    -- between sizes at master level to matter. NULL when it can't be known --
+    -- a generic maia3-uci, or a fallback to a binary of unstated size.
+    maia_model_size TEXT,
     analyzed_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(run_id, game_id, mode)
 );
@@ -263,6 +274,31 @@ def _split_asset_set(conn):
     conn.execute("UPDATE users SET board_set = asset_set, piece_set = asset_set")
 
 
+def _backfill_model_size(conn):
+    """Fill `run_games.maia_model_size` for sweeps that ran before the column
+    existed, by reading the engine note each of them already stored.
+
+    Every sweep recorded which binary it resolved -- `resolve_binary`'s note
+    names it -- so the model behind an old analysis is recoverable without
+    re-running anything. Rows whose note genuinely can't say (a generic
+    `maia3-uci`, or a fallback to a binary of unstated size) are left NULL and
+    simply go unanchored; guessing from the user's *current* model-size setting
+    would be wrong, since that setting may have changed since the sweep ran.
+    """
+    if _applied(conn, "backfill_maia_model_size"):
+        return
+    from .maia_accuracy import model_size_from_note
+
+    rows = conn.execute(
+        "SELECT id, engine_note FROM run_games WHERE maia_model_size IS NULL "
+        "AND engine_note IS NOT NULL"
+    ).fetchall()
+    updates = [(size, row["id"]) for row in rows
+               if (size := model_size_from_note(row["engine_note"]))]
+    if updates:
+        conn.executemany("UPDATE run_games SET maia_model_size = ? WHERE id = ?", updates)
+
+
 def init_db():
     conn = get_conn()
     try:
@@ -283,7 +319,10 @@ def init_db():
         _ensure_column(conn, "engine_settings", "min_think_ms", "INTEGER NOT NULL DEFAULT 2000")
         _ensure_column(conn, "games", "clocks_json", "TEXT")
         _ensure_column(conn, "sweep_positions", "think_ms", "INTEGER")
+        _ensure_column(conn, "run_games", "maia_model_size", "TEXT")
+        _ensure_column(conn, "engine_settings", "maia_accuracy_offset", "REAL NOT NULL DEFAULT 0.0")
         _widen_default_elo_grid(conn)
+        _backfill_model_size(conn)
         conn.commit()
     finally:
         conn.close()

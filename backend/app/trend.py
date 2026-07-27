@@ -28,7 +28,7 @@ from datetime import date
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
-from . import elo_sweep, strength
+from . import elo_sweep, maia_accuracy, strength
 from .auth import require_user
 
 router = APIRouter(prefix="/api/trend", tags=["trend"])
@@ -220,10 +220,12 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
     # Same collection the pooled estimate uses, so a bucket and the overall
     # number are always built from exactly the same rows.
     entries, skipped = strength.collect(user_id, run_id)
+    settings = strength.get_effective_settings(user_id)
     # Same think-time rule as the pooled estimate, so a bucket and the overall
     # number are never built from different sets of moves.
     strength.apply_think_filter(entries, "you", min_think_ms if min_think_ms is not None
-                                else strength.get_effective_settings(user_id).get("min_think_ms", 0) or 0)
+                                else settings.get("min_think_ms", 0) or 0)
+    accuracy_offset = float(settings.get("maia_accuracy_offset", 0.0) or 0.0)
     skipped.setdefault("undated", 0)
     dated = []
     for entry in entries:
@@ -255,7 +257,12 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
         grid, usable, excluded = strength.common_grid(bucket["entries"])
         ranks, groups = strength.matrix(usable, grid)
         matrix = elo_sweep.hits(ranks, top_n)
-        result = (elo_sweep.estimate(grid, matrix, groups=groups)
+        # Anchored per bucket, from the models that swept that bucket's games:
+        # someone who switched model size mid-library would otherwise see the
+        # switch show up as a change in their consistency.
+        accuracy = maia_accuracy.blend(strength.model_counts(usable, "you"), accuracy_offset)
+        result = (elo_sweep.estimate(grid, matrix, groups=groups,
+                                     accuracy=accuracy, top_n=top_n)
                   if matrix.shape[0] and len(grid) >= 2
                   else {"estimate": None, "confidence": "low",
                         "reasons": ["not enough comparable sweep data in this bucket"],

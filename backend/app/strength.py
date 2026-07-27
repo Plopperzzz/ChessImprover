@@ -29,7 +29,7 @@ import json
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
-from . import elo_sweep
+from . import elo_sweep, maia_accuracy
 from .auth import require_user
 from .db import db_cursor
 from .engine_settings import get_effective_settings
@@ -78,6 +78,7 @@ def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
 
         rows = conn.execute(
             f"""SELECT rg.id AS run_game_id, rg.grid_json, rg.analyzed_at,
+                       rg.maia_model_size, rg.engine_note,
                        g.id AS game_id, g.your_color, g.white, g.black,
                        g.utc_date_header, g.date_header, g.headers_json
                 FROM run_games rg
@@ -121,6 +122,11 @@ def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
             entries.append({
                 "game_id": row["game_id"],
                 "grid": [int(v) for v in grid],
+                # Backfilled at startup, but fall back to the note here too so
+                # a row written between a schema upgrade and the backfill still
+                # gets anchored.
+                "model_size": (row["maia_model_size"]
+                               or maia_accuracy.model_size_from_note(row["engine_note"])),
                 "you": scores[yours],
                 "opponent": scores[theirs],
                 "your_elo": your_elo,
@@ -227,16 +233,40 @@ def matrix(entries: list[dict], grid: list[int], key: str = "you"):
     return np.asarray(rows, dtype=float), np.asarray(groups, dtype=int)
 
 
-def _side_estimate(entries: list[dict], key: str, top_n: int = 1) -> dict:
+def model_counts(entries: list[dict], key: str) -> dict:
+    """{model_size: positions} over the games that made it into the fit.
+
+    Weighted by positions rather than games because that is what the pooled
+    curve is an average over -- a 40-move game swept with 79m should pull the
+    anchor further than a 20-move one swept with 5m.
+    """
+    counts: dict = {}
+    for entry in entries:
+        n = len(entry.get(key, []))
+        if n:
+            counts[entry.get("model_size")] = counts.get(entry.get("model_size"), 0) + n
+    return counts
+
+
+def _side_estimate(entries: list[dict], key: str, top_n: int = 1,
+                   accuracy_offset: float = 0.0) -> dict:
     grid, usable, excluded = common_grid(entries, key)
     if not grid or len(grid) < 2:
         return {"estimate": None, "confidence": "low", "games": 0,
                 "reasons": ["no comparable sweep data"], "grid": grid,
                 "games_excluded_grid_mismatch": excluded}
     ranks, groups = matrix(usable, grid, key)
-    result = elo_sweep.estimate(grid, elo_sweep.hits(ranks, top_n), groups=groups)
+    # One curve for the pool. The sizes differ by two or three points of match
+    # rate at master level and barely at all at 800, so a library swept with a
+    # mixture is anchored against the mixture rather than against whichever
+    # model happened to sweep the most games.
+    counts = model_counts(usable, key)
+    accuracy = maia_accuracy.blend(counts, accuracy_offset)
+    result = elo_sweep.estimate(grid, elo_sweep.hits(ranks, top_n), groups=groups,
+                                accuracy=accuracy, top_n=top_n)
     result["games"] = len({int(g) for g in groups})
     result["top_n"] = top_n
+    result["model_sizes"] = {(size or "unknown"): n for size, n in counts.items()}
     # How much of the extra ordering information there is to use. Sweeps run
     # before MultiPV was recorded, or against a build without it, only ever
     # stored rank 1, and a top-N objective on those is just top-1 again.
@@ -295,6 +325,64 @@ def _calibrate(you: dict, field: dict, opponent_ratings: list) -> dict:
     }
 
 
+def _predictability(you: dict, think: dict, top_n: int) -> dict:
+    """How predictable this player is, against the model's published curve.
+
+    Two numbers come out of the same fit and mean different things. The
+    estimate is read off *where* the match rate peaks; this is read off *how
+    high* it peaked. A player whose moves are all of a piece hits the curve for
+    their rating; one who alternates brilliance and blunders averages out to
+    the same estimate but never gets near it, because no single Elo setting
+    predicts both halves of their play.
+
+    So the gap between the two is the interesting quantity, and it is not an
+    error bar -- it is the part of someone's play that strength alone doesn't
+    describe.
+    """
+    ceiling = (you or {}).get("ceiling")
+    if not ceiling:
+        return {
+            "available": False,
+            "reason": ("the top-N objective has no published accuracy to compare against "
+                       "-- switch to top-1" if top_n > 1 else
+                       "none of these sweeps recorded which Maia model produced them"),
+        }
+    implied = ceiling.get("implied_rating")
+    implied_se = ceiling.get("implied_rating_se")
+    gap = (round(implied - you["estimate"])
+           if implied is not None and you.get("estimate") is not None else None)
+    # The curve is shallow enough that a point of match rate is worth about 140
+    # Elo, so an implied rating carries a huge interval and most gaps are not
+    # distinguishable from zero. Say which it is rather than letting a
+    # three-figure number imply it means something.
+    gap_significant = bool(gap is not None and implied_se and abs(gap) > 1.96 * implied_se)
+    return {
+        "available": True,
+        "model": ceiling["model"],
+        "observed": ceiling["observed"],
+        "expected": ceiling["expected"],
+        "ratio": ceiling["ratio"],
+        "implied_rating": implied,
+        "implied_rating_se": implied_se,
+        # Positive means you are more predictable than your estimate suggests,
+        # negative that your moves are spread wider than one strength explains.
+        "gap": gap,
+        "gap_significant": gap_significant,
+        "share_known": ceiling["share_known"],
+        "bound": ceiling.get("bound"),
+        # The filter drops the *least* predictable moves, so a filtered library
+        # scores above an unfiltered one on exactly the same games. Worth
+        # saying, because the two are not comparable.
+        "think_filtered": bool(think.get("applied")),
+        "note": (
+            "Maia's accuracy is measured on Lichess blitz. Slower games sit a little under "
+            "the curve as a matter of course -- longer thinking finds more moves the policy "
+            "net doesn't expect -- so read this against your own history rather than as an "
+            "absolute score, or set an accuracy offset in Settings."
+        ),
+    }
+
+
 def build(user_id: int, run_id: int | None = None, top_n: int = 1,
           min_think_ms: int | None = None) -> dict:
     entries, skipped = collect(user_id, run_id)
@@ -305,8 +393,9 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1,
     # The opposition is filtered on the same rule, so the calibration compares
     # like with like rather than your considered moves against their premoves.
     apply_think_filter(entries, "opponent", min_think_ms)
-    you = _side_estimate(entries, "you", top_n)
-    field = _side_estimate(entries, "opponent", top_n)
+    offset = float(get_effective_settings(user_id).get("maia_accuracy_offset", 0.0) or 0.0)
+    you = _side_estimate(entries, "you", top_n, offset)
+    field = _side_estimate(entries, "opponent", top_n, offset)
 
     # The field's real average rating, from the headers of the same games that
     # produced the field estimate.
@@ -319,6 +408,7 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1,
         "you": you,
         "field": field,
         "calibration": calibration,
+        "predictability": _predictability(you, think, top_n),
         "your_rating_mean": round(float(np.mean(your_ratings)), 1) if your_ratings else None,
         "your_rating_n": len(your_ratings),
         "games": len(entries),

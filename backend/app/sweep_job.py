@@ -30,6 +30,7 @@ from .engine_manager import EngineProcess, pick_option, read_uci_options
 from .engine_settings import get_effective_settings
 from .jobqueue import pool, slots_for
 from .maia import resolve_binary as resolve_maia_binary
+from .maia_accuracy import for_model as accuracy_for_model, model_size_from_note
 from .runs import save_analysis
 from .play import ELO_OPTION_CANDIDATES, LIMIT_STRENGTH_CANDIDATES, MAIA_GO_COMMAND
 
@@ -166,7 +167,11 @@ async def open_maia(settings: dict):
             await engine.send_line(f"setoption name {real} value {value}")
     await engine.send_line("isready")
     await engine.wait_for("readyok")
-    return {"engine": engine, "elo_option": elo_option, "note": note, "multipv": multipv}
+    # Read back out of the note rather than taken from the setting: the note
+    # records the binary that actually resolved, and a fallback to a different
+    # one is exactly the case where the setting would lie.
+    return {"engine": engine, "elo_option": elo_option, "note": note,
+            "multipv": multipv, "model_size": model_size_from_note(note)}
 
 
 async def _sweep_core(job, pgn_text: str, settings: dict,
@@ -224,7 +229,7 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
             await engine.wait_closed()
 
     return {"grid": grid, "by_player": by_player, "matrices": matrices,
-            "note": note, "multipv": multipv}
+            "note": note, "multipv": multipv, "model_size": maia.get("model_size")}
 
 
 async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color: str):
@@ -233,12 +238,15 @@ async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color:
         async with pool.lease(job=job, slots=slots_for(settings, "sweep"), label="sweep"):
             sweep = await _sweep_core(job, pgn_text, settings)
             grid, by_player, matrices = sweep["grid"], sweep["by_player"], sweep["matrices"]
+            accuracy = accuracy_for_model(sweep["model_size"],
+                                          settings.get("maia_accuracy_offset", 0.0) or 0.0)
 
             results = {}
             for side, matrix in matrices.items():
                 if matrix.shape[0] == 0:
                     continue
-                results[side] = elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1))
+                results[side] = elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1),
+                                                   accuracy=accuracy)
 
             _store_matrices(job, grid, by_player, matrices)
         await job.emit({
@@ -333,12 +341,15 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
             grid = sweep["grid"]
             by_player = sweep["by_player"]
             matrices = sweep["matrices"]
+            accuracy = accuracy_for_model(sweep["model_size"],
+                                          settings.get("maia_accuracy_offset", 0.0) or 0.0)
 
             results = {}
             for side, matrix in matrices.items():
                 if matrix.shape[0] == 0:
                     continue
-                results[side] = elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1))
+                results[side] = elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1),
+                                                   accuracy=accuracy)
 
             # Each side is judged against its *own* estimated strength, per
             # section 8 -- a move is Great because players of that player's
@@ -365,7 +376,8 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
             _store_matrices(job, grid, by_player, matrices)
             save_analysis(job.user_id, job.game_id, "full", {
                 "moves": moves, "grid": grid, "results": results,
-                "model_note": sweep["note"], "sweep_cache": job.sweep_cache,
+                "model_note": sweep["note"], "maia_model_size": sweep["model_size"],
+                "sweep_cache": job.sweep_cache,
             }, run_id=job.run_id)
         await job.emit({
             "type": "done",

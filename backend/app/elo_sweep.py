@@ -28,9 +28,24 @@ The statistics here matter more than they look:
   opening and a sitting. So the bootstrap resamples whichever unit it was
   given, rebuilding the curve from the cached score matrix each time. No
   engine work is repeated.
+* **The peak's height is checked against Maia's published accuracy.** Every
+  other test here is relative -- interval width against the swept span, peak
+  position against the grid edges -- so none of them can answer "did this sweep
+  find the player at all?". `maia_accuracy` supplies the absolute scale: the
+  share of a player's moves the model is known to match at each rating. The
+  fitted bump's height should land on that curve at the fitted bump's position,
+  and when it falls short there are exactly two explanations, told apart by
+  where the peak sits. At a grid edge it means the grid never reached the
+  player, and the estimate is a bound rather than a measurement -- a case the
+  edge check alone cannot see, because a genuine 2600 and a 3000 both pin the
+  peak to the same edge. Away from the edge it means the player is less
+  predictable than the population at that rating, which is a fact about them
+  and not a defect in the fit.
 """
 
 import numpy as np
+
+from . import maia_accuracy
 
 try:  # scipy is in requirements; the fallbacks keep this importable without it
     from scipy.optimize import curve_fit
@@ -57,6 +72,21 @@ BOOTSTRAP_SAMPLES = 400
 MAX_TOP_N = 9
 WIDE_INTERVAL_FRACTION = 0.55
 TIGHT_INTERVAL_FRACTION = 0.10
+
+# How far the observed peak may fall below the accuracy curve before the fit is
+# treated as not having found the player, as a fraction of the expected rate.
+#
+# Simulated against a known curve, an in-grid player's ratio sits at 1.00 with a
+# 5th percentile of 0.95 even from 25 games, while a player 400 Elo off the end
+# of the grid comes in at 0.79 -- so the two populations do not overlap and the
+# threshold has a wide corridor to sit in. It is set low in that corridor
+# because the curve itself carries error the simulation did not: it is digitised
+# from a published figure, and it is measured on blitz, so a library of slower
+# games sits below it through no fault of the player.
+CEILING_SHORTFALL = 0.90
+# Above this the sweep is taken to have reached the curve, which is what makes
+# an edge-pinned peak trustworthy as a floor rather than an artefact.
+CEILING_REACHED = 0.95
 
 
 def hits(rank_matrix: np.ndarray, top_n: int = 1) -> np.ndarray:
@@ -169,7 +199,9 @@ def _peak_from(elos: np.ndarray, rates: np.ndarray, se: np.ndarray) -> float:
 
 
 def estimate(elos: list[int], score_matrix: np.ndarray, rng_seed: int = 0,
-             groups: np.ndarray | None = None) -> dict:
+             groups: np.ndarray | None = None,
+             accuracy: "maia_accuracy.AccuracyCurve | None" = None,
+             top_n: int = 1) -> dict:
     """Full estimate for one player.
 
     score_matrix: (n_positions, n_elos) of 1/0 match indicators.
@@ -178,6 +210,12 @@ def estimate(elos: list[int], score_matrix: np.ndarray, rng_seed: int = 0,
         one sitting -- so the bootstrap resamples *games* rather than moves.
         Resampling moves there would report an interval far tighter than the
         data supports.
+    accuracy: the model's published match-rate curve, when the model that swept
+        these positions is known. Adds the absolute check described above;
+        leaving it None reproduces the older behaviour exactly.
+    top_n: which objective built score_matrix. The published curves are top-1
+        rates, so a wider objective silently clears them -- the accuracy check
+        is dropped rather than compared against the wrong number.
     """
     elos_arr = np.asarray(elos, dtype=float)
     if score_matrix.size == 0 or len(elos_arr) < 2:
@@ -249,14 +287,26 @@ def estimate(elos: list[int], score_matrix: np.ndarray, rng_seed: int = 0,
     else:
         ci_low, ci_high = None, None
 
+    # The accuracy check runs on *every* position, not just the discriminative
+    # ones: the published rate is a share of all a player's moves, and the
+    # uninformative rows are part of that denominator. No extra data is needed
+    # -- an all-1 row contributes 1 at every Elo and an all-0 row contributes 0,
+    # so the full-set curve is just the mean over every row.
+    full_rates = score_matrix.mean(axis=0)
+    ceiling = _ceiling(full_rates, peak, elos_arr, accuracy, top_n, n_total)
+
     confidence, reasons = _confidence(
         n_fit=n_fit, n_total=n_total, rates=rates, params=params, se=se,
         ci_low=ci_low, ci_high=ci_high, elos=elos_arr, peak=peak,
         n_units=n_games, clustered=rows_by_group is not None, single_game=fell_back,
+        ceiling=ceiling,
     )
 
     return {
         "estimate": round(peak),
+        "ceiling": ceiling,
+        "bound": ceiling.get("bound") if ceiling else None,
+        "full_match_rates": [float(r) for r in full_rates],
         "ci_low": round(ci_low) if ci_low is not None else None,
         "ci_high": round(ci_high) if ci_high is not None else None,
         "confidence": confidence,
@@ -275,8 +325,73 @@ def estimate(elos: list[int], score_matrix: np.ndarray, rng_seed: int = 0,
     }
 
 
+def at_edge(peak: float, elos: np.ndarray) -> tuple[bool, bool]:
+    """(pinned to the bottom, pinned to the top) of the swept range."""
+    edge = 0.02 * float(elos.max() - elos.min())
+    return peak <= elos.min() + edge, peak >= elos.max() - edge
+
+
+def _ceiling(full_rates: np.ndarray, peak: float, elos: np.ndarray,
+             accuracy, top_n: int, n_total: int) -> dict | None:
+    """The peak's height against the model's published accuracy at that rating.
+
+    `observed` is the best match rate anywhere on the grid over *all* the
+    player's positions, and `expected` is what the model is known to manage
+    against players at the rating the fit landed on. The ratio of the two is
+    the whole point: it is the first check here that has an absolute scale
+    behind it rather than the sweep's own spread.
+
+    `implied` inverts the curve on the observed rate instead, which is a second
+    and entirely independent read of strength -- it uses only how often Maia
+    agreed with the player, never which Elo setting agreed most. It is far
+    blunter (a point of match rate is worth about 140 Elo) but it is wrong in
+    different ways, so a wide gap between the two is informative even though
+    neither is precise.
+    """
+    if accuracy is None or top_n != 1 or full_rates.size == 0:
+        return None
+    observed = float(full_rates.max())
+    expected = float(accuracy.at(peak))
+    if expected <= 0:
+        return None
+    ratio = observed / expected
+    low, high = at_edge(peak, elos)
+    short = ratio < CEILING_SHORTFALL
+    implied = accuracy.implied(observed)
+
+    # How precise that inversion is. The curve climbs about 0.7 of a percentage
+    # point per 100 Elo, so the standard error of the match rate has to be
+    # divided by a very small slope to become an Elo -- which is why a rate
+    # that looks bang on the curve can still imply a rating hundreds of points
+    # away. Reporting the number without this would be indefensible.
+    #
+    # It is a *floor*: the binomial term treats positions as independent when
+    # moves within a game are not, so the real interval is wider still.
+    implied_se = None
+    if implied is not None and n_total > 0:
+        slope = (accuracy.at(implied + 50) - accuracy.at(implied - 50)) / 100.0
+        if slope > 1e-6:
+            rate_se = float(np.sqrt(max(observed * (1.0 - observed), 1e-6) / n_total))
+            implied_se = rate_se / slope
+
+    return {
+        "observed": round(observed, 4),
+        "expected": round(expected, 4),
+        "ratio": round(ratio, 3),
+        "implied_rating": round(implied) if implied is not None else None,
+        "implied_rating_se": round(implied_se) if implied_se is not None else None,
+        "model": accuracy.label,
+        "share_known": round(accuracy.share_known, 3),
+        # A shortfall at the top of the grid means the player is somewhere past
+        # it and the estimate is a floor; at the bottom, a ceiling. Away from
+        # both edges it is not a bound at all -- it is inconsistency.
+        "bound": "lower" if (short and high) else "upper" if (short and low) else None,
+        "reached": ratio >= CEILING_REACHED,
+    }
+
+
 def _confidence(*, n_fit, n_total, rates, params, se, ci_low, ci_high, elos, peak,
-                n_units=None, clustered=False, single_game=False):
+                n_units=None, clustered=False, single_game=False, ceiling=None):
     """High/Medium/Low with the reasons spelled out, since the number alone
     invites more trust than it deserves (section 9)."""
     reasons = []
@@ -340,14 +455,52 @@ def _confidence(*, n_fit, n_total, rates, params, se, ci_low, ci_high, elos, pea
     # caps the label regardless of how clean the rest of the fit looks --
     # a tight interval around a boundary peak is confidently pointing at the
     # edge of the grid, not at the player's strength.
-    edge = 0.02 * span
-    at_edge = peak <= elos.min() + edge or peak >= elos.max() - edge
-    if at_edge:
+    edged = any(at_edge(peak, elos))
+
+    # With the accuracy curve in hand this is no longer guesswork. A peak that
+    # reached the curve *is* the player, even sitting on the boundary; one that
+    # fell short of it is the grid running out. Nothing but the height can tell
+    # those apart, since both pin the fit to the same Elo.
+    if ceiling and edged:
+        if ceiling["bound"]:
+            score -= 1
+            side = "above" if ceiling["bound"] == "lower" else "below"
+            reasons.append(
+                f"the best match rate anywhere on the grid was {ceiling['observed']:.1%}, "
+                f"against the {ceiling['expected']:.1%} {ceiling['model']} manages on players "
+                f"at {round(peak)} -- the sweep never reached this player, who is {side} the "
+                f"swept range. Treat the number as a bound and widen the Elo range")
+        elif ceiling["reached"]:
+            reasons.append(
+                f"peak sits at the edge of the swept range, but the match rate got to "
+                f"{ceiling['observed']:.1%} against the {ceiling['expected']:.1%} expected there "
+                f"-- the player really is around the edge, so this is a sound floor. Widen the "
+                f"range to pin it down")
+        else:
+            score -= 1
+            reasons.append("peak sits at the edge of the swept range -- widen the Elo range")
+    elif edged:
         score -= 1
         reasons.append("peak sits at the edge of the swept range -- widen the Elo range")
 
+    # Away from the edges a shortfall is not about the grid at all. The player
+    # is simply harder to predict than the population Maia was measured on --
+    # which is worth saying plainly, because it is a fact about how they play
+    # rather than a failure of the estimate.
+    if ceiling and not edged and not ceiling["reached"]:
+        gap = f", the rate of a {ceiling['implied_rating']}" if ceiling["implied_rating"] else ""
+        reasons.append(
+            f"your moves match {ceiling['model']} {ceiling['observed']:.1%} of the time at best{gap}, "
+            f"against the {ceiling['expected']:.1%} it manages on players at {round(peak)} -- "
+            f"you play less predictably than the field at your level, so the estimate describes "
+            f"a wider spread of moves than usual")
+    elif ceiling and ceiling["reached"] and not edged:
+        reasons.append(
+            f"match rate peaked at {ceiling['observed']:.1%}, on the {ceiling['expected']:.1%} "
+            f"{ceiling['model']} is known to manage at {round(peak)}")
+
     confidence = "high" if score >= 2 else "medium" if score >= 0 else "low"
-    if at_edge and confidence == "high":
+    if edged and confidence == "high" and not (ceiling and ceiling["reached"]):
         confidence = "medium"
     # An interval covering most of the grid is disqualifying on its own: a
     # large sample that still can't locate the peak is not a better estimate,

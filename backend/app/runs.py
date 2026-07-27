@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from . import elo_sweep
 from .auth import require_user
+from .maia_accuracy import model_size_from_note
 from .db import db_cursor
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -52,14 +53,19 @@ def save_analysis(user_id: int, game_id: int, mode: str, payload: dict, run_id: 
             "DELETE FROM run_games WHERE run_id = ? AND game_id = ? AND mode = ?",
             (target_run, game_id, mode),
         )
+        # The model size is recorded explicitly rather than left to be parsed
+        # back out of the note later: the note is prose, and which model swept
+        # a game decides which accuracy curve its match rate is scored against.
+        model_size = payload.get("maia_model_size") or model_size_from_note(payload.get("model_note"))
         cur = conn.execute(
-            """INSERT INTO run_games (run_id, user_id, game_id, mode, grid_json, results_json, engine_note)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO run_games (run_id, user_id, game_id, mode, grid_json, results_json,
+                                      engine_note, maia_model_size)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 target_run, user_id, game_id, mode,
                 json.dumps(payload.get("grid")) if payload.get("grid") else None,
                 json.dumps(payload.get("results")) if payload.get("results") else None,
-                payload.get("model_note"),
+                payload.get("model_note"), model_size,
             ),
         )
         run_game_id = cur.lastrowid
@@ -137,6 +143,7 @@ def load_for_game(user_id: int, game_id: int) -> dict | None:
         "grid": json.loads(row["grid_json"]) if row["grid_json"] else None,
         "results": json.loads(row["results_json"]) if row["results_json"] else None,
         "model_note": row["engine_note"],
+        "maia_model_size": row["maia_model_size"],
         "moves": [dict(m) for m in moves],
     }
 
@@ -266,6 +273,9 @@ def append_to_run(run_id: int, body: AppendIn, user: dict = Depends(require_user
         "grid": saved["grid"],
         "results": saved["results"],
         "model_note": saved["model_note"],
+        # Carried across rather than re-derived: a copy must not lose the model
+        # a backfill already worked out from a note this parser can't read.
+        "maia_model_size": saved["maia_model_size"],
     }
     if source and saved["grid"]:
         payload["sweep_cache"] = {

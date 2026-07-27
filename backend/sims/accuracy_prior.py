@@ -1,8 +1,10 @@
 """What Maia3's published move-matching accuracy is worth to the Elo estimate.
 
-Maia3 predicts human moves correctly 62.5% of the time at 79m, 61% at 23m and
-57.5% at 5m, measured against players at the rating the model is set to. That
-is one number per model, and this script works out what it can and cannot buy.
+Accuracy is not one number per model. It climbs steeply with the rating of the
+player being predicted -- 79M matches barely 48% of a 600-rated player's moves
+and 62% of a 2600's -- and the headline figures (62.5% / 61% / ~59%) are the
+peaks of those curves, reached only near master level. `app.maia_accuracy`
+holds the digitised curves; this script works out what they can and cannot buy.
 
 Run it with `python backend/sims/accuracy_prior.py`. It needs numpy and scipy
 and nothing else -- no engine, no database.
@@ -19,43 +21,54 @@ every Elo finds) and all-0 rows (the move no Elo plays).
                                       your own level
                   r_i ~ HalfNormal(w) how wide a band of Elos plays it
 
-The per-position offsets d_i are what make a finite sample's curve asymmetric,
-so the peak of the observed curve is a genuinely noisy estimate of theta --
-which is the thing being measured. A = rate(theta) is computed from the model
-rather than assumed, so "well-specified anchor" really is well specified.
+`p_always` is a property of the position mix, so it is held fixed; `p_never` is
+set per rating to make the ceiling land exactly on the published curve. The
+per-position offsets d_i are what make a finite sample's curve asymmetric, so
+the peak of the observed curve is a genuinely noisy estimate of theta -- which
+is the thing being measured.
 
 Findings, in the order the experiments run:
 
-  A/B  Pinning the bump's height to A does NOT improve the point estimate.
-       The free 4-parameter fit is already unbiased to a few Elo wherever the
-       peak is inside or near the grid, and hard-pinning roughly doubles its
-       spread. It only helps when the player is off the grid entirely.
-  C    Recovering the model size behind an old sweep matters: a 5-point error
-       in the assumed accuracy is harmless mid-grid and catastrophic at the
-       edge (+195 Elo bias) under a hard anchor.
-  H    A weaker model costs less than its accuracy gap suggests. Only the
-       amplitude above the common baseline discriminates, so 5m needs ~1.23x
-       the positions of 79m, not 1/0.92x anything larger.
-  I    The peak-height shortfall is an excellent off-grid detector: 100% hit
-       rate at 400+ Elo off the grid, 0% false alarms anywhere inside it.
+  A/B  Pinning the bump's height to the curve does NOT improve the point
+       estimate. The free 4-parameter fit is already unbiased to a few Elo
+       wherever the peak is inside or near the grid, and hard-pinning inflates
+       its spread. It only helps when the player is off the grid entirely.
+  C    A 5-point error in the assumed accuracy is harmless mid-grid and
+       catastrophic at the edge under a hard pin -- which is why the model
+       behind an old sweep has to be recovered rather than guessed.
+  H    Two effects at once. A weaker *model* costs less than its accuracy gap
+       suggests, because only the amplitude above the common baseline
+       discriminates. But a weaker *player* costs a great deal: Maia predicts
+       everyone worse down there, so the bump is shorter and the peak much
+       harder to find. This is the finding a flat accuracy hid completely.
+  I    The peak-height shortfall is an excellent off-grid detector, and it must
+       be measured against the curve at the fitted rating -- against a flat
+       62.5% every player under about 2400 reads as a false positive.
   J    The same statistic separates "the grid does not reach you" from "you
-       play less consistently than the population Maia was calibrated on",
-       by whether the fitted peak sits at an edge or in the middle.
+       play less consistently than the population at your rating", by whether
+       the fitted peak sits at an edge or mid-grid.
 """
 
+import os
+import sys
+
 import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 try:
     from scipy.optimize import curve_fit
 except ImportError:  # pragma: no cover
     raise SystemExit("this simulation needs scipy: pip install scipy")
 
+from app import maia_accuracy  # noqa: E402
+
 WIDE = np.arange(600, 2601, 100, dtype=float)     # the app's default grid
 BATCH = np.arange(600, 2601, 200, dtype=float)    # the coarser batch grid
 NARROW = np.arange(1100, 1901, 100, dtype=float)  # the pre-migration default
 TIGHT = np.arange(1200, 1801, 100, dtype=float)
 
-MODELS = [("maia3-5m", 0.575), ("maia3-23m", 0.610), ("maia3-79m", 0.625)]
+MODELS = ["3m", "5m", "23m", "79m"]
 
 
 # --------------------------------------------------------------------- shared
@@ -136,25 +149,42 @@ def split(m):
 
 
 class World:
-    """A population of positions with a known matched-Elo accuracy."""
+    """Positions whose ceiling at theta reproduces a real published curve.
 
-    def __init__(self, target_A=0.625, p_always=0.34, s=260.0, w=330.0, seed=7):
+    `p_always` -- the share of moves every Elo finds -- is a property of the
+    position mix rather than of the model, so it is held fixed across models
+    and ratings. Everything else follows from the curve: the share of moves no
+    Elo ever plays is whatever makes the match rate at theta come out at
+    accuracy_at(model, theta).
+    """
+
+    def __init__(self, model="79m", p_always=0.34, s=260.0, w=330.0, seed=7):
         rng = np.random.default_rng(seed)
         n = 400_000
         d, r = rng.normal(0, s, n), np.abs(rng.normal(0, w, n))
-        at_peak = float(np.mean(np.abs(d) <= r))
-        far = float(np.mean(np.abs(1000.0 - d) <= r))
-        p_mid = (target_A - p_always) / at_peak
-        self.p_always, self.p_never = p_always, 1.0 - p_always - p_mid
-        self.s, self.w = s, w
-        self.A = target_A
-        self.baseline = p_always + p_mid * far   # rate 1000 Elo off the peak
+        self.model = model
+        self.p_always, self.s, self.w = p_always, s, w
+        self._at_peak = float(np.mean(np.abs(d) <= r))
+        self._far = float(np.mean(np.abs(1000.0 - d) <= r))
+        self.curve = maia_accuracy.for_model(model)
+
+    def A(self, theta: float) -> float:
+        return float(self.curve.at(theta))
+
+    def _p_mid(self, theta: float) -> float:
+        return (self.A(theta) - self.p_always) / self._at_peak
+
+    def amplitude(self, theta: float) -> float:
+        """Height of the bump above the flat baseline -- the part that actually
+        tells one Elo setting from another."""
+        return self.A(theta) - (self.p_always + self._p_mid(theta) * self._far)
 
     def sample(self, theta, n_positions, grid, rng):
+        p_mid = self._p_mid(theta)
         u = rng.random(n_positions)
         m = np.zeros((n_positions, len(grid)))
         m[u < self.p_always] = 1.0
-        mid = u >= self.p_always + self.p_never
+        mid = (u >= self.p_always) & (u < self.p_always + p_mid)
         k = int(mid.sum())
         d = rng.normal(0, self.s, k)
         r = np.abs(rng.normal(0, self.w, k))
@@ -184,7 +214,7 @@ def curve_of(m, grid):
 
 def compare(label, world, theta, n_positions, grid=WIDE, A_assumed=None,
             reps=400, seed=0, soft_pp=0.02):
-    A_assumed = world.A if A_assumed is None else A_assumed
+    A_assumed = world.A(theta) if A_assumed is None else A_assumed
     rng = np.random.default_rng(seed)
     lo, hi = grid.min() - 400, grid.max() + 400
     out, nfits = [], []
@@ -213,7 +243,7 @@ def compare(label, world, theta, n_positions, grid=WIDE, A_assumed=None,
               f"{np.mean(np.abs(err) < 100):>6.0%} {np.mean(np.abs(err) < 200):>6.0%}")
 
 
-# -------------------------------------------- H: information per model size
+# -------------------------------------------- H: information per model and rating
 
 def spread(world, theta, n_positions, grid=WIDE, reps=600, seed=0):
     rng = np.random.default_rng(seed)
@@ -223,13 +253,14 @@ def spread(world, theta, n_positions, grid=WIDE, reps=600, seed=0):
         if rates is None:
             continue
         est.append(fit_free(grid, rates, binomial_se(rates, n_fit)))
-    return float((np.asarray(est) - theta).std())
+    e = np.asarray(est) - theta
+    return float(e.std()), float(np.sqrt((e ** 2).mean()))
 
 
 # ------------------------------------ I/J: the peak-height shortfall statistic
 
-def shortfall(world, sampler, A, grid=WIDE, reps=400, seed=3):
-    """(peak match rate / A, fitted centre) per replicate."""
+def shortfall(world, sampler, grid=WIDE, reps=400, seed=3):
+    """(peak match rate / the curve at the fitted rating, fitted centre)."""
     rng = np.random.default_rng(seed)
     ratios, centres = [], []
     for _ in range(reps):
@@ -237,9 +268,10 @@ def shortfall(world, sampler, A, grid=WIDE, reps=400, seed=3):
         rates, n_fit, full = curve_of(m, grid)
         if rates is None:
             continue
-        ratios.append(float(full.max()) / A)
-        centres.append(float(np.clip(
-            fit_free(grid, rates, binomial_se(rates, n_fit)), grid.min(), grid.max())))
+        centre = float(np.clip(fit_free(grid, rates, binomial_se(rates, n_fit)),
+                               grid.min(), grid.max()))
+        ratios.append(float(full.max()) / world.A(centre))
+        centres.append(centre)
     return np.asarray(ratios), np.asarray(centres)
 
 
@@ -253,9 +285,9 @@ def mixed(world, thetas, weights, n_positions, grid, rng):
 # ------------------------------------------------------------------------ main
 
 def main():
-    w79 = World(0.625)
-    print(f"world: rate(theta) = {w79.A:.3f}, baseline = {w79.baseline:.3f} "
-          f"(amplitude {w79.A - w79.baseline:.3f})")
+    w79 = World("79m")
+    print("maia3-79m: " + "  ".join(
+        f"{r}:{w79.A(r):.1%}" for r in (600, 1000, 1500, 2000, 2600)))
 
     print("\n" + "=" * 78)
     print("A) pinning the peak height, peak inside the grid")
@@ -272,47 +304,73 @@ def main():
 
     print("\n" + "=" * 78)
     print("B2) peak outside the grid -- the one case pinning does help")
-    for th in (2700, 2900, 3100):
+    for th in (2700, 2900):
         compare("100 games", w79, th, 2500)
 
     print("\n" + "=" * 78)
     print("C) a 5-point error in the assumed accuracy (wrong model size")
     print("   recovered for an old sweep)")
-    compare("25 games, assume 0.675", w79, 1500, 620, A_assumed=0.675)
-    compare("25 games, assume 0.575", w79, 1500, 620, A_assumed=0.575)
-    compare("25 games at the edge, assume 0.675", w79, 2400, 620, A_assumed=0.675)
+    compare("25 games, +5pts", w79, 1500, 620, A_assumed=w79.A(1500) + 0.05)
+    compare("25 games at the edge, +5pts", w79, 2400, 620, A_assumed=w79.A(2400) + 0.05)
 
     print("\n" + "=" * 78)
-    print("H) how much signal each model size carries")
-    print(f"\n  {'model':<11} {'A':>6} {'baseline':>9} {'amp':>7} "
-          f"{'sd 25g':>8} {'sd 100g':>9}")
-    rows = []
-    for name, A in MODELS:
-        w = World(A)
-        sd25, sd100 = spread(w, 1500, 620), spread(w, 1500, 2500)
-        rows.append((name, A, w.baseline, A - w.baseline, sd25, sd100))
-        print(f"  {name:<11} {A:>6.3f} {w.baseline:>9.3f} {A - w.baseline:>7.3f} "
-              f"{sd25:>6.0f} E {sd100:>7.0f} E")
-    ref = rows[-1]
-    print(f"\n  positions needed for the same interval, relative to {ref[0]}:")
-    for name, A, b, amp, sd25, sd100 in rows:
-        print(f"    {name:<11} amplitude x{amp / ref[3]:.2f}  ->  "
-              f"x{(sd25 / ref[4]) ** 2:.2f} (25g) / x{(sd100 / ref[5]) ** 2:.2f} (100g)")
+    print("H) signal by model size AND by player rating")
+    print("\n  bump amplitude above the baseline (what locates the peak):")
+    print(f"    {'rating':>7} " + "".join(f"{'maia3-' + m:>12}" for m in MODELS))
+    worlds = {m: World(m) for m in MODELS}
+    for r in (800, 1200, 1600, 2000, 2400):
+        print(f"    {r:>7} " + "".join(f"{worlds[m].amplitude(r):>11.1%} " for m in MODELS))
+
+    print("\n  sd of the estimate, 25 games (620 positions):")
+    print(f"    {'rating':>7} " + "".join(f"{'maia3-' + m:>12}" for m in MODELS))
+    sds = {}
+    for r in (800, 1200, 1600, 2000, 2400):
+        row = {}
+        for m in MODELS:
+            row[m] = spread(worlds[m], r, 620)[0]
+        sds[r] = row
+        print(f"    {r:>7} " + "".join(f"{row[m]:>9.0f} E " for m in MODELS))
+
+    # Referenced to the best case rather than to an endpoint: 800 and 2400 are
+    # both degraded, and for different reasons -- one by a short bump, the
+    # other by crowding the top of the grid -- so neither is a fair baseline.
+    best = min(sds, key=lambda r: sds[r]["79m"])
+    print(f"\n  positions needed for the same interval, against the best case"
+          f" ({best} on 79m):")
+    for r in (800, 1200, 1600, 2000, 2400):
+        rel_model = (sds[r]["3m"] / sds[r]["79m"]) ** 2
+        rel_rating = (sds[r]["79m"] / sds[best]["79m"]) ** 2
+        print(f"    at {r:>4}: x{rel_rating:.2f} for the rating; "
+              f"x{rel_model:.2f} for using 3m instead of 79m")
+    print("\n  Model size barely registers. Rating dominates -- and not")
+    print("  monotonically: 800 suffers a short bump (15% amplitude against")
+    print("  26% at 2400) and 2400 suffers from crowding the grid's top end.")
 
     print("\n" + "=" * 78)
-    print("I) peak-height shortfall as an off-grid detector")
-    print("   statistic: best full-set match rate over the grid, / A\n")
+    print("I) peak-height shortfall as an off-grid detector, scored against")
+    print("   the curve at the fitted rating\n")
     print(f"  {'true theta':>11}   {'25 games':^24}   {'100 games':^24}")
     print(f"  {'':>11}   {'median   5th   flagged<0.90':^24}"
           f"   {'median   5th   flagged<0.90':^24}")
-    for theta in (1000, 1500, 2000, 2400, 2600, 2800, 3000, 3200):
+    for theta in (800, 1200, 1600, 2000, 2400, 2600, 2800, 3000):
         line = f"  {theta:>11}"
         for n in (620, 2500):
-            v, _ = shortfall(w79, lambda r, t=theta, k=n: w79.sample(t, k, WIDE, r), 0.625)
+            v, _ = shortfall(w79, lambda r, t=theta, k=n: w79.sample(t, k, WIDE, r))
             line += (f"   {np.median(v):>6.2f} {np.percentile(v, 5):>6.2f} "
                      f"{np.mean(v < 0.90):>10.0%}")
         print(line)
     print("\n  theta <= 2600 is inside the grid; 2800+ is off the top.")
+
+    print("\n" + "=" * 78)
+    print("I2) the same statistic scored against a FLAT 62.5% -- what a single")
+    print("    headline accuracy would have done\n")
+    print(f"  {'true theta':>11}  {'median ratio':>13}  {'flagged<0.90':>13}")
+    for theta in (800, 1200, 1600, 2000, 2400, 2600):
+        v, _ = shortfall(w79, lambda r, t=theta: w79.sample(t, 2500, WIDE, r))
+        flat = v * np.array([w79.A(theta)]) / 0.625
+        print(f"  {theta:>11}  {np.median(flat):>13.2f}  {np.mean(flat < 0.90):>12.0%}")
+    print("\n  Every rating below master level would have been called a")
+    print("  failed sweep. This is why the curve is not a constant.")
 
     print("\n" + "=" * 78)
     print("J) telling the two causes of a shortfall apart (100 games, 79m)\n")
@@ -336,7 +394,7 @@ def main():
     ]
     edge = 0.02 * (WIDE.max() - WIDE.min())
     for label, sampler in cases:
-        ratios, centres = shortfall(w79, sampler, 0.625, seed=11)
+        ratios, centres = shortfall(w79, sampler, seed=11)
         at_edge = (centres <= WIDE.min() + edge) | (centres >= WIDE.max() - edge)
         print(f"  {label:<45} {np.median(ratios):>7.2f} "
               f"{np.median(centres):>7.0f} {np.mean(at_edge):>7.0%}")

@@ -344,6 +344,10 @@
         <label>Ignore moves played faster than (ms; 0 = off)
           <input type="number" id="s-min-think-ms" min="0" max="120000" step="500" />
         </label>
+        <label>Accuracy offset (Maia's published curves are measured on blitz;
+               a rapid or classical library sits a little under them)
+          <input type="number" id="s-maia-accuracy-offset" step="0.005" min="-0.15" max="0.15" />
+        </label>
         <label>Great: max win-prob given up vs best (0.02 = near-lossless)
           <input type="number" id="s-great-drop" step="0.01" min="0" max="0.5" />
         </label>

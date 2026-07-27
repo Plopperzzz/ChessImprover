@@ -34,6 +34,7 @@ from .db import db_cursor
 from .engine_manager import register_job_engine, unregister_job_engine
 from .engine_settings import get_effective_settings
 from .jobqueue import pool, slots_for
+from .maia_accuracy import for_model as accuracy_for_model
 from .runs import save_analysis
 from .sweep_job import _rows_by_ply, _store_matrices, _sweep_core, build_grid, open_maia
 
@@ -126,8 +127,11 @@ async def run_batch(job: AnalysisJob, games: list[dict], mode: str, settings: di
                             maia=maia, grid=batch_grid,
                         )
                         grid, by_player, matrices = sweep["grid"], sweep["by_player"], sweep["matrices"]
+                        accuracy = accuracy_for_model(
+                            sweep["model_size"], settings.get("maia_accuracy_offset", 0.0) or 0.0)
                         results = {
-                            side: elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1))
+                            side: elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1),
+                                                     accuracy=accuracy)
                             for side, matrix in matrices.items() if matrix.shape[0]
                         }
                         fens = {r["ply"]: r["fen"] for rows in by_player.values() for r in rows}
@@ -149,7 +153,8 @@ async def run_batch(job: AnalysisJob, games: list[dict], mode: str, settings: di
                         _store_matrices(job, grid, by_player, matrices)
                         payload.update({
                             "grid": grid, "results": results,
-                            "model_note": sweep["note"], "sweep_cache": job.sweep_cache,
+                            "model_note": sweep["note"], "maia_model_size": sweep["model_size"],
+                            "sweep_cache": job.sweep_cache,
                         })
 
                     # Saved per game, so cancelling keeps everything done so far.

@@ -29,6 +29,10 @@ class EngineSettings(BaseModel):
     maia_elo_step_batch: int = 200
     maia_multipv: int = Field(default=3, ge=1, le=9)
     min_think_ms: int = Field(default=2000, ge=0, le=120000)
+    # Maia's published accuracy curves are measured on Lichess blitz. Slower
+    # games sit a little below them, so a rapid or classical library can shift
+    # the whole curve down rather than every player in it reading as erratic.
+    maia_accuracy_offset: float = Field(default=0.0, ge=-0.15, le=0.15)
     great_max_drop: float = Field(default=0.02, ge=0.0, le=0.5)
     great_max_match_rate: float = Field(default=0.20, ge=0.0, le=1.0)
     brilliant_enabled: bool = True
@@ -102,6 +106,7 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
                 maia_path=?, maia_model_size=?, maia_elo_min=?, maia_elo_max=?, maia_elo_step=?, maia_elo_step_batch=?, maia_multipv=?, min_think_ms=?,
                 maia_options_json=?, stockfish_options_json=?,
                 great_max_drop=?, great_max_match_rate=?, brilliant_enabled=?,
+                maia_accuracy_offset=?,
                 updated_at=datetime('now')
                WHERE user_id=?""",
             (
@@ -110,6 +115,7 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
                 body.maia_path, body.maia_model_size, body.maia_elo_min, body.maia_elo_max, body.maia_elo_step, body.maia_elo_step_batch, body.maia_multipv, body.min_think_ms,
                 json.dumps(body.maia_options or {}), json.dumps(body.stockfish_options or {}),
                 body.great_max_drop, body.great_max_match_rate, int(body.brilliant_enabled),
+                body.maia_accuracy_offset,
                 user["id"],
             ),
         )
