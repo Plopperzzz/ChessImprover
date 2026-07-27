@@ -20,6 +20,7 @@ class Board {
     this.selected = null;
     this.legalTargets = [];
     this.lastMove = null;   // {from, to} of the move that produced this position
+    this.premove = null;    // {from, to} queued to play when it's your turn
     // Bumped on every position change. A slide finishes ~235ms after it
     // starts, and whatever the board was asked to show in the meantime must
     // win -- see animateMove.
@@ -37,9 +38,11 @@ class Board {
     if (board) this.boardSet = board;
     if (pieces) this.pieceSet = pieces;
     const last = this.lastMove;
+    const pre = this.premove;
     this._build();
     this.renderFEN(this.currentFEN);
     if (last) this.setLastMove(last.from, last.to);
+    if (pre) this.setPremove(pre.from, pre.to);
   }
 
   /** Whether clicking a piece shows dots on its legal destinations. The
@@ -68,6 +71,13 @@ class Board {
     this.lastMoveLayer.className = 'last-move-layer';
     this.el.appendChild(this.lastMoveLayer);
 
+    // Its own layer, and deliberately not cleared by renderFEN: a pre-move
+    // has to stay visible across the opponent's move arriving, which is the
+    // whole moment it exists for.
+    this.premoveLayer = document.createElement('div');
+    this.premoveLayer.className = 'premove-layer';
+    this.el.appendChild(this.premoveLayer);
+
     this.pieceLayer = document.createElement('div');
     this.pieceLayer.className = 'piece-layer';
     this.el.appendChild(this.pieceLayer);
@@ -77,6 +87,23 @@ class Board {
     this.el.appendChild(this.highlightLayer);
 
     this._clearSelection();
+  }
+
+  /** Marks the two squares of a move queued to play the moment it's your
+      turn. Call with no arguments to clear it. */
+  setPremove(from, to) {
+    this.premove = from && to ? { from, to } : null;
+    if (!this.premoveLayer) return;
+    this.premoveLayer.innerHTML = '';
+    if (!this.premove) return;
+    for (const square of [from, to]) {
+      const mark = document.createElement('div');
+      mark.className = 'sq-premove';
+      const { x, y } = this._squareToXY(square);
+      mark.style.left = (x * 12.5) + '%';
+      mark.style.top = (y * 12.5) + '%';
+      this.premoveLayer.appendChild(mark);
+    }
   }
 
   /** Marks the two squares of the move that led to the position on the board.
@@ -120,6 +147,10 @@ class Board {
     const col = Math.min(7, Math.max(0, Math.floor(xFrac * 8)));
     const row = Math.min(7, Math.max(0, Math.floor(yFrac * 8)));
     const square = this._xyToSquare(col, row);
+
+    // Touching the board at all withdraws a queued pre-move -- including the
+    // first click of the one that replaces it.
+    if (this.premove && this.handlers.onPremoveCancel) this.handlers.onPremoveCancel();
 
     if (this.selected) {
       const target = this.legalTargets.find((t) => t.to === square);
@@ -167,8 +198,11 @@ class Board {
 
   _showHighlights(square, targets) {
     this.highlightLayer.innerHTML = '';
+    // A pre-move selection is a different promise from a move -- it might
+    // never happen -- so it doesn't get to look identical.
+    const pre = !!(this.handlers.isPremove && this.handlers.isPremove());
     const sel = document.createElement('div');
-    sel.className = 'sq-select';
+    sel.className = 'sq-select' + (pre ? ' premove' : '');
     const { x, y } = this._squareToXY(square);
     sel.style.left = (x * 12.5) + '%';
     sel.style.top = (y * 12.5) + '%';
@@ -176,7 +210,7 @@ class Board {
     if (!this.showLegalMoves) return;
     for (const t of targets) {
       const dot = document.createElement('div');
-      dot.className = 'sq-dot';
+      dot.className = 'sq-dot' + (pre ? ' premove' : '');
       const p = this._squareToXY(t.to);
       dot.style.left = (p.x * 12.5) + '%';
       dot.style.top = (p.y * 12.5) + '%';
@@ -200,8 +234,10 @@ class Board {
     // The marks are positioned in board coordinates, so flipping has to
     // redraw them -- and re-render is what would otherwise drop them.
     const last = this.lastMove;
+    const pre = this.premove;
     this.renderFEN(this.currentFEN);
     if (last) this.setLastMove(last.from, last.to);
+    if (pre) this.setPremove(pre.from, pre.to);
   }
 
   _squareToXY(square) {

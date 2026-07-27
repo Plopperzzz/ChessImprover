@@ -172,6 +172,7 @@ class ProfileUpdate(BaseModel):
     board_set: str | None = None
     piece_set: str | None = None
     show_legal_moves: bool | None = None
+    allow_premoves: bool | None = None
 
 
 @router.put("/profile")
@@ -203,6 +204,8 @@ def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
         updates["piece_set"] = check(body.piece_set)
     if body.show_legal_moves is not None:
         updates["show_legal_moves"] = int(body.show_legal_moves)
+    if body.allow_premoves is not None:
+        updates["allow_premoves"] = int(body.allow_premoves)
 
     if not updates:
         raise HTTPException(400, "nothing to update")

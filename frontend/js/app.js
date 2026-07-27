@@ -110,8 +110,12 @@ async function initApp() {
   // dispatch on the current mode rather than being rebound on every switch.
   state.board.setInteractive(true, {
     getLegalTargets: (sq) => (state.playMode ? playLegalTargets(sq) : state.explorer.getLegalTargets(sq)),
-    getMoverColor: () => (state.playMode ? state.play.chess.turn() : state.explorer.moverColor),
+    getMoverColor: () => (state.playMode ? state.play.humanColor : state.explorer.moverColor),
     onMove: (from, to, promo) => (state.playMode ? onPlayMove(from, to, promo) : onBoardMove(from, to, promo)),
+    // Pre-move affordances: only the play side has them, and only while it's
+    // the opponent's turn.
+    isPremove: () => state.playMode && premovesOffered(),
+    onPremoveCancel: () => clearPremove(),
   });
 
   wireSound();
@@ -393,6 +397,7 @@ function wireBoardDialog() {
   const boardSel = document.getElementById('b-board-set');
   const pieceSel = document.getElementById('b-piece-set');
   const legal = document.getElementById('b-legal-moves');
+  const premoves = document.getElementById('b-premoves');
 
   document.getElementById('board-settings-btn').addEventListener('click', async () => {
     await fillBoardForm();
@@ -408,6 +413,9 @@ function wireBoardDialog() {
   boardSel.addEventListener('change', preview);
   pieceSel.addEventListener('change', preview);
   legal.addEventListener('change', () => state.board.setShowLegalMoves(legal.checked));
+  // Turning pre-moves off mid-game withdraws whatever is queued, rather than
+  // leaving one that can still fire.
+  premoves.addEventListener('change', () => { if (!premoves.checked) clearPremove(); });
 
   document.getElementById('board-cancel').addEventListener('click', () => {
     dialog.classList.add('hidden');
@@ -423,6 +431,7 @@ function wireBoardDialog() {
           board_set: boardSel.value,
           piece_set: pieceSel.value,
           show_legal_moves: legal.checked,
+          allow_premoves: premoves.checked,
         }),
       });
       dialog.classList.add('hidden');
@@ -441,6 +450,7 @@ function applySavedBoardPrefs() {
     pieces: state.user.piece_set || 'default',
   });
   state.board.setShowLegalMoves(state.user.show_legal_moves !== 0);
+  if (state.user.allow_premoves === 0) clearPremove();
 }
 
 async function fillBoardForm() {
@@ -461,6 +471,7 @@ async function fillBoardForm() {
     if (sets.some((s) => s.name === current && s[key])) sel.value = current;
   }
   document.getElementById('b-legal-moves').checked = state.user.show_legal_moves !== 0;
+  document.getElementById('b-premoves').checked = state.user.allow_premoves !== 0;
   renderBoardPreview(document.getElementById('b-board-set').value,
                      document.getElementById('b-piece-set').value);
 }
@@ -819,10 +830,12 @@ function renderEvalPlot() {
 
   // The starting position is level by definition; including it stops the
   // curve from beginning mid-air at move 1.
-  const points = [[sx(0), 0.5]];
-  moves.forEach((m, i) => points.push([sx(i + 1), whiteWinProb(m.cp_after, m.ply)]));
+  const points = [[sx(0), sy(0.5)]];
+  moves.forEach((m, i) => points.push([sx(i + 1), sy(whiteWinProb(m.cp_after, m.ply))]));
 
-  const line = points.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
+  // Smoothed, but by a spline that cannot overshoot -- a cliff stays a cliff
+  // and no swing appears that the evaluation didn't make (see smoothPath).
+  const line = smoothPath(points);
   // White's share is the filled part, which is how a chess site reads.
   svg.appendChild(svgEl('path', {
     d: `${line} L${W},${H} L0,${H} Z`, fill: '#d6d9e0', stroke: 'none', opacity: '0.88',
@@ -1727,6 +1740,64 @@ function renderStrength(d, status, body) {
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 
+/** A path through every point, with monotone cubic (Fritsch–Carlson)
+    tangents.
+
+    Monotone rather than the usual Catmull-Rom, and that is the whole point:
+    Catmull-Rom overshoots between points, so on a win-probability curve it
+    would draw probabilities above 1 or below 0, and on either side of a
+    blunder it would invent a dip or a bump that never happened. This variant
+    provably cannot overshoot -- between two points the curve stays within
+    their two values -- and it passes through every data point exactly. So it
+    rounds the corners and changes nothing you could read off the chart.
+
+    Points must be in screen coordinates and sorted by x. */
+function smoothPath(points) {
+  const n = points.length;
+  if (n === 0) return '';
+  const at = (p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`;
+  if (n < 3) return points.map((p, i) => `${i ? 'L' : 'M'}${at(p)}`).join(' ');
+
+  const dx = [], slope = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx.push(points[i + 1][0] - points[i][0]);
+    slope.push(dx[i] === 0 ? 0 : (points[i + 1][1] - points[i][1]) / dx[i]);
+  }
+  const tangent = new Array(n);
+  tangent[0] = slope[0];
+  tangent[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    // A sign change is a local extremum: a flat tangent there is what stops
+    // the curve sailing past the point it's supposed to turn at.
+    if (slope[i - 1] * slope[i] <= 0) { tangent[i] = 0; continue; }
+    const w1 = 2 * dx[i] + dx[i - 1];
+    const w2 = dx[i] + 2 * dx[i - 1];
+    tangent[i] = (w1 + w2) / (w1 / slope[i - 1] + w2 / slope[i]);
+  }
+
+  let d = `M${at(points[0])}`;
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3;
+    d += ` C${(points[i][0] + h).toFixed(1)},${(points[i][1] + tangent[i] * h).toFixed(1)}`
+       + ` ${(points[i + 1][0] - h).toFixed(1)},${(points[i + 1][1] - tangent[i + 1] * h).toFixed(1)}`
+       + ` ${at(points[i + 1])}`;
+  }
+  return d;
+}
+
+/** Round gridline values inside [min, max]. An axis labelled 1168 / 1400 /
+    1632 is three numbers nobody asked for; 1200 / 1400 / 1600 is a scale. */
+function niceTicks(min, max, target = 3) {
+  const span = max - min;
+  if (!(span > 0)) return [Math.round(min)];
+  const steps = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000];
+  const step = steps.find((s) => span / s <= target) || steps[steps.length - 1];
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max; v += step) ticks.push(v);
+  // A range too narrow to contain a round number still needs an axis.
+  return ticks.length ? ticks : [Math.round(min), Math.round(max)];
+}
+
 function svgEl(name, attrs) {
   const el = document.createElementNS(SVGNS, name);
   for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
@@ -1775,7 +1846,9 @@ function renderTrend(data) {
   legend.className = 'trend-legend';
   legend.innerHTML =
     '<span><i class="swatch-est"></i>Estimated Elo (Maia sweep), shaded 95% interval</span>'
-    + '<span><i class="swatch-actual"></i>Rating from your PGN headers</span>';
+    + '<span><i class="swatch-actual"></i>Rating from your PGN headers</span>'
+    + '<span class="legend-note">Separate scales — the two are different scales, '
+    + 'so compare the shapes, not the heights.</span>';
   chart.appendChild(legend);
 
   for (const key of ['trend', 'actual_trend']) {
@@ -1839,80 +1912,118 @@ function renderTrendSkipped(host, data) {
   host.appendChild(p);
 }
 
-/** Estimated Elo with its 95% band, and the header rating over it. The band
-    is the point of the chart: two bucket estimates whose bands overlap have
-    not been shown to differ, however far apart the dots look. */
-function trendChart(buckets) {
-  const W = 320, H = 170, padL = 34, padR = 8, padT = 10, padB = 26;
-  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'trend-chart' });
+/** Estimated Elo with its 95% band, and the header rating, in two stacked
+    panels sharing one x-axis.
 
-  const ys = [];
-  for (const b of buckets) {
-    if (b.ci_low != null) ys.push(b.ci_low, b.ci_high);
-    if (b.estimate != null) ys.push(b.estimate);
-    if (b.actual_elo != null) ys.push(b.actual_elo);
-  }
-  let yMin = Math.min(...ys), yMax = Math.max(...ys);
-  if (yMax - yMin < 100) { const mid = (yMax + yMin) / 2; yMin = mid - 50; yMax = mid + 50; }
-  const pad = (yMax - yMin) * 0.08;
-  yMin -= pad; yMax += pad;
+    They were one chart on one y-axis, and the interval ruined it: a 95% band
+    600 Elo wide forces a y-range that flattens a header rating moving over 80
+    into a straight line, so the series you can actually read week to week
+    became unreadable. A second y-axis on the same frame would fix the scale
+    and introduce a worse problem -- two axes invite reading a crossing as an
+    event, when the gap between the two is an arbitrary constant (they are
+    different scales; the README says watch the shape). Stacked panels give
+    each series its own scale, keep the x-positions aligned so the shapes can
+    still be compared vertically, and never draw the two in a relationship
+    they don't have.
+
+    The band is still the point of the upper panel: two bucket estimates whose
+    bands overlap have not been shown to differ, however far apart the dots
+    look. */
+function trendChart(buckets) {
+  const W = 320, padL = 34, padR = 8, padT = 14, padB = 24, gap = 12;
+  const panels = [];
+  if (buckets.some((b) => b.estimate != null)) panels.push('estimate');
+  if (buckets.some((b) => b.actual_elo != null)) panels.push('actual');
+  const panelH = panels.length > 1 ? 106 : 150;
+  const H = panels.length * panelH + Math.max(0, panels.length - 1) * gap + padB;
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'trend-chart' });
 
   const xs = buckets.map((b) => b.x);
   const xMin = Math.min(...xs), xMax = Math.max(...xs);
   const sx = (x) => padL + ((x - xMin) / (xMax - xMin || 1)) * (W - padL - padR);
-  const sy = (y) => H - padB - ((y - yMin) / (yMax - yMin || 1)) * (H - padT - padB);
 
-  for (const frac of [0, 0.5, 1]) {
-    const value = yMin + frac * (yMax - yMin);
-    svg.appendChild(svgEl('line', {
-      x1: padL, x2: W - padR, y1: sy(value), y2: sy(value),
-      stroke: '#39405166', 'stroke-width': 1,
-    }));
-    const label = svgEl('text', { x: padL - 4, y: sy(value) + 3, class: 'trend-axis', 'text-anchor': 'end' });
-    label.textContent = Math.round(value);
-    svg.appendChild(label);
-  }
+  panels.forEach((kind, index) => {
+    const top = index * (panelH + gap);
+    const estimated = kind === 'estimate';
 
-  const band = buckets.filter((b) => b.ci_low != null);
-  if (band.length > 1) {
-    const top = band.map((b) => `${sx(b.x).toFixed(1)},${sy(b.ci_high).toFixed(1)}`);
-    const bottom = band.slice().reverse().map((b) => `${sx(b.x).toFixed(1)},${sy(b.ci_low).toFixed(1)}`);
-    svg.appendChild(svgEl('polygon', {
-      points: top.concat(bottom).join(' '), fill: '#5b8dee33', stroke: 'none',
-    }));
-  } else if (band.length === 1) {
-    const b = band[0];
-    svg.appendChild(svgEl('line', {
-      x1: sx(b.x), x2: sx(b.x), y1: sy(b.ci_high), y2: sy(b.ci_low),
-      stroke: '#5b8dee88', 'stroke-width': 4,
-    }));
-  }
+    const ys = [];
+    for (const b of buckets) {
+      if (estimated) {
+        if (b.estimate != null) ys.push(b.estimate);
+        if (b.ci_low != null) ys.push(b.ci_low, b.ci_high);
+      } else if (b.actual_elo != null) {
+        ys.push(b.actual_elo);
+      }
+    }
+    let yMin = Math.min(...ys), yMax = Math.max(...ys);
+    // A rating that barely moved would otherwise be drawn as dramatic noise
+    // across the full height of its panel.
+    if (yMax - yMin < 100) { const mid = (yMax + yMin) / 2; yMin = mid - 50; yMax = mid + 50; }
+    const pad = (yMax - yMin) * 0.08;
+    yMin -= pad; yMax += pad;
+    const sy = (y) => top + panelH - ((y - yMin) / (yMax - yMin || 1)) * (panelH - padT);
 
-  const line = (points, colour, dash) => {
-    if (points.length < 2) return;
-    svg.appendChild(svgEl('path', {
-      d: points.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' '),
-      fill: 'none', stroke: colour, 'stroke-width': 2,
-      ...(dash ? { 'stroke-dasharray': dash } : {}),
-    }));
-  };
-  line(buckets.filter((b) => b.estimate != null).map((b) => [b.x, b.estimate]), '#5b8dee');
-  line(buckets.filter((b) => b.actual_elo != null).map((b) => [b.x, b.actual_elo]), '#7db37d', '4,3');
+    for (const value of niceTicks(yMin, yMax)) {
+      svg.appendChild(svgEl('line', {
+        x1: padL, x2: W - padR, y1: sy(value), y2: sy(value),
+        stroke: '#39405166', 'stroke-width': 1,
+      }));
+      const label = svgEl('text', { x: padL - 4, y: sy(value) + 3, class: 'trend-axis', 'text-anchor': 'end' });
+      label.textContent = value;
+      svg.appendChild(label);
+    }
 
-  for (const b of buckets) {
-    if (b.estimate != null) {
-      svg.appendChild(svgEl('circle', {
-        cx: sx(b.x), cy: sy(b.estimate), r: b.sparse ? 2 : 3.2,
-        fill: b.sparse ? '#1b1f2a' : '#5b8dee', stroke: '#5b8dee', 'stroke-width': 1.5,
+    const caption = svgEl('text', { x: padL, y: top + 9, class: 'trend-panel-title' });
+    caption.textContent = estimated ? 'Estimated Elo (Maia sweep)' : 'Rating from your PGN headers';
+    svg.appendChild(caption);
+
+    const colour = estimated ? '#5b8dee' : '#7db37d';
+    const points = buckets
+      .filter((b) => (estimated ? b.estimate : b.actual_elo) != null)
+      .map((b) => [sx(b.x), sy(estimated ? b.estimate : b.actual_elo)]);
+
+    if (estimated) {
+      const band = buckets.filter((b) => b.ci_low != null);
+      if (band.length > 1) {
+        // The band's edges follow the same spline as the line through the
+        // middle of it, so the two can't disagree about the shape.
+        const upper = band.map((b) => [sx(b.x), sy(b.ci_high)]);
+        const lower = band.slice().reverse().map((b) => [sx(b.x), sy(b.ci_low)]);
+        svg.appendChild(svgEl('path', {
+          d: `${smoothPath(upper)} L${lower[0][0].toFixed(1)},${lower[0][1].toFixed(1)} `
+             + `${smoothPath(lower).replace(/^M/, 'L')} Z`,
+          fill: '#5b8dee33', stroke: 'none',
+        }));
+      } else if (band.length === 1) {
+        const b = band[0];
+        svg.appendChild(svgEl('line', {
+          x1: sx(b.x), x2: sx(b.x), y1: sy(b.ci_high), y2: sy(b.ci_low),
+          stroke: '#5b8dee88', 'stroke-width': 4,
+        }));
+      }
+    }
+
+    if (points.length > 1) {
+      svg.appendChild(svgEl('path', {
+        d: smoothPath(points), fill: 'none', stroke: colour, 'stroke-width': 2,
+        ...(estimated ? {} : { 'stroke-dasharray': '4,3' }),
       }));
     }
-    if (b.actual_elo != null) {
-      svg.appendChild(svgEl('circle', { cx: sx(b.x), cy: sy(b.actual_elo), r: 2.2, fill: '#7db37d' }));
+
+    for (const b of buckets) {
+      const value = estimated ? b.estimate : b.actual_elo;
+      if (value == null) continue;
+      svg.appendChild(svgEl('circle', {
+        cx: sx(b.x), cy: sy(value),
+        r: estimated ? (b.sparse ? 2 : 3.2) : 2.2,
+        fill: estimated && b.sparse ? '#1b1f2a' : colour,
+        stroke: colour, 'stroke-width': estimated ? 1.5 : 0,
+      }));
     }
-  }
+  });
 
   // Only the ends get a label: a week-bucketed year would otherwise be a
-  // solid smear of text.
+  // solid smear of text. One row for both panels -- they share the axis.
   for (const [b, anchor] of [[buckets[0], 'start'], [buckets[buckets.length - 1], 'end']]) {
     const t = svgEl('text', { x: sx(b.x), y: H - 8, class: 'trend-axis', 'text-anchor': anchor });
     t.textContent = b.label;
@@ -1994,6 +2105,9 @@ async function goToPlayPly(ply, animate = false) {
   const target = Math.max(0, Math.min(ply, p.moves.length));
   const from = playViewPly();
   p.viewPly = target === p.moves.length ? null : target;
+  // A pre-move belongs to the live position; stepping away withdraws it
+  // rather than leaving marks on a board it doesn't apply to.
+  if (p.viewPly !== null) clearPremove();
 
   const fen = playFenAt(target);
   if (animate && Math.abs(target - from) === 1) {
@@ -2033,7 +2147,10 @@ function playLegalTargets(square) {
   // Moving from a position that isn't the live one would be a move in a game
   // that has moved on. Return to the game first.
   if (!playIsLive()) return [];
-  if (!p || p.result || p.chess.turn() !== p.humanColor) return [];
+  if (!p || p.result) return [];
+  if (p.chess.turn() !== p.humanColor) {
+    return premovesOffered() ? premoveTargets(p.chess, square, p.humanColor) : [];
+  }
   const byTo = new Map();
   for (const m of p.chess.moves({ square, verbose: true })) {
     if (!byTo.has(m.to)) byTo.set(m.to, { to: m.to, promotion: !!m.promotion });
@@ -2041,10 +2158,104 @@ function playLegalTargets(square) {
   return Array.from(byTo.values());
 }
 
+/* ---- Pre-moves --------------------------------------------------------
+   Queue your reply while Maia is still thinking and it plays the instant its
+   move lands. The point is the obvious reply -- a recapture, a check you'd
+   already decided on -- where waiting for the board costs you seconds you
+   didn't need to spend. A pre-move is a *hope*, not a move: it is validated
+   against the position it actually arrives in and dropped if it doesn't fit. */
+
+function premovesOffered() {
+  const p = state.play;
+  return !!(p && p.chess && !p.result && playIsLive()
+            && state.user.allow_premoves !== 0
+            && p.chess.turn() !== p.humanColor);
+}
+
+const PREMOVE_RAYS = {
+  b: [[1, 1], [1, -1], [-1, -1], [-1, 1]],
+  r: [[1, 0], [-1, 0], [0, 1], [0, -1]],
+  q: [[1, 1], [1, -1], [-1, -1], [-1, 1], [1, 0], [-1, 0], [0, 1], [0, -1]],
+};
+const PREMOVE_KNIGHT = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]];
+
+/** Where a piece could go *ignoring everything else on the board*.
+
+    Deliberately not "legal moves": at pre-move time the opponent hasn't moved
+    yet, so what's legal isn't knowable — a rook can be pre-moved through a
+    square the blocker is about to vacate, and a capture can be aimed at a
+    square nothing is on yet. Generating from the piece's movement pattern is
+    both what a pre-move means and what every chess site does. Legality is
+    settled when it's played. */
+function premoveTargets(chess, square, colour) {
+  const piece = chess.get(square);
+  if (!piece || piece.color !== colour) return [];
+  const file = square.charCodeAt(0) - 97;
+  const rank = Number(square[1]) - 1;
+  const name = (f, r) => (f < 0 || f > 7 || r < 0 || r > 7 ? null : String.fromCharCode(97 + f) + (r + 1));
+  const out = new Map();
+  const add = (f, r, promotion = false) => {
+    const to = name(f, r);
+    if (to && to !== square) out.set(to, { to, promotion });
+  };
+
+  if (piece.type === 'p') {
+    const dir = colour === 'w' ? 1 : -1;
+    const start = colour === 'w' ? 1 : 6;
+    const last = colour === 'w' ? 7 : 0;
+    add(file, rank + dir, rank + dir === last);
+    if (rank === start) add(file, rank + 2 * dir);
+    // Both captures are always offered: the square may be empty now and
+    // occupied by the time the pre-move is played, which is the usual case.
+    for (const df of [-1, 1]) add(file + df, rank + dir, rank + dir === last);
+  } else if (piece.type === 'n') {
+    for (const [df, dr] of PREMOVE_KNIGHT) add(file + df, rank + dr);
+  } else if (piece.type === 'k') {
+    for (const [df, dr] of PREMOVE_RAYS.q) add(file + df, rank + dr);
+    // Castling as the king's two-square move. Offered from the home square
+    // without checking rights -- the move itself is checked when it's played.
+    const home = colour === 'w' ? 0 : 7;
+    if (file === 4 && rank === home) { add(6, home); add(2, home); }
+  } else {
+    for (const [df, dr] of PREMOVE_RAYS[piece.type] || []) {
+      for (let step = 1; step < 8; step++) add(file + df * step, rank + dr * step);
+    }
+  }
+  return Array.from(out.values());
+}
+
+function setPremove(from, to, promotion) {
+  if (!state.play) return;
+  state.play.premove = { from, to, promotion: promotion || null };
+  state.board.setPremove(from, to);
+}
+
+function clearPremove() {
+  if (state.play) state.play.premove = null;
+  state.board.setPremove(null, null);
+}
+
+/** Plays the queued pre-move if the position that arrived allows it, and
+    drops it if not -- silently, the same as every site that has these: the
+    marks disappearing is the answer. */
+async function tryPremove() {
+  const p = state.play;
+  const pending = p && p.premove;
+  if (!pending) return;
+  clearPremove();
+  if (p.result || !playIsLive() || p.chess.turn() !== p.humanColor) return;
+  await onPlayMove(pending.from, pending.to, pending.promotion);
+}
+
 async function onPlayMove(from, to, promotion) {
   const p = state.play;
+  // Not your turn: this is a pre-move, queued rather than played.
+  if (premovesOffered()) {
+    setPremove(from, to, promotion);
+    return false;
+  }
   const res = p.chess.move({ from, to, promotion: promotion || 'q' });
-  if (!res) return;
+  if (!res) return false;
   playMoveSound(res.san, true);
   await state.board.animateMove(from, to, p.chess.fen());
   (p.sanHistory = p.sanHistory || []).push(res.san); // optimistic; the next state message is authoritative
@@ -2052,6 +2263,7 @@ async function onPlayMove(from, to, promotion) {
   refreshLastMove();
   renderPlayMoveTable();
   sendPlay({ type: 'move', uci: from + to + (promotion || (res.promotion ? 'q' : '')) });
+  return true;
 }
 
 async function startPlayGame() {
@@ -2096,6 +2308,7 @@ function enterPlayMode() {
   state.play.humanColor = 'w';
   state.play.sanHistory = [];
   state.play.viewPly = null;    // null = the board is showing the live position
+  clearPremove();               // nothing carries over from the last game
   state.play.greeted = false;
   state.play.lowTimeWarned = false;
   rebuildPlayMoves();
@@ -2127,6 +2340,7 @@ function exitPlayMode() {
   document.getElementById('p-status').textContent = '';
   document.getElementById('p-notes').textContent = '';
   if (state.play) state.play.viewPly = null;
+  clearPremove();
   renderPlayReviewNote();
   document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
   state.flipOverride = false;
@@ -2165,6 +2379,9 @@ async function handlePlayMessage(msg) {
     }
     renderPlayMoveTable();
     renderPlayReviewNote();
+    // The moment the pre-move exists for: the reply has landed and it's your
+    // turn again. After the slide, so it reads as your answer to that move.
+    await tryPremove();
     return;
   }
   if (msg.type === 'state') {
@@ -2216,6 +2433,12 @@ async function handlePlayMessage(msg) {
       startClockTicker();
     }
     renderPlayerPlates();
+    // A game that has ended can't take the pre-move you'd queued for it.
+    if (msg.result) clearPremove();
+    // Normally the engine_move handler plays it; this covers a state message
+    // that hands you the turn without one (a resync, or the server rejecting
+    // a move of yours).
+    else if (msg.turn === msg.human_color) await tryPremove();
   }
 }
 

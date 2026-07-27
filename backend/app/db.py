@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
     -- Board-view preferences live with the user rather than in the browser, so
     -- they follow you from the desktop to the phone.
     show_legal_moves INTEGER NOT NULL DEFAULT 1,
+    allow_premoves INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -237,6 +238,7 @@ def init_db():
         _ensure_column(conn, "users", "board_set", "TEXT NOT NULL DEFAULT 'default'")
         _ensure_column(conn, "users", "piece_set", "TEXT NOT NULL DEFAULT 'default'")
         _ensure_column(conn, "users", "show_legal_moves", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "users", "allow_premoves", "INTEGER NOT NULL DEFAULT 1")
         _split_asset_set(conn)
         _ensure_column(conn, "engine_settings", "maia_options_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "engine_settings", "great_max_drop", "REAL NOT NULL DEFAULT 0.02")

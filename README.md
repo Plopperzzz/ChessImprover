@@ -82,12 +82,12 @@ Settings: which board, which pieces, and whether picking a piece up shows dots
 on its legal destinations. Board and pieces are chosen **separately** -- they
 are independent art, and the pairing you want is rarely both halves of one set
 -- and each dropdown offers only the sets that actually contain that half, so
-a set holding just a `board.png` can't leave you with invisible pieces. Every
-control previews on the real board while the dialog is open; Cancel puts back
-what was saved. The choices live on your account, not in the browser, so they
-follow you to the phone. With the dots turned off the square you picked up
-from is still marked -- otherwise clicking a piece looks like nothing
-happened.
+a set holding just a `board.png` can't leave you with invisible pieces. It
+also holds the pre-move toggle. Every control previews on the real board while
+the dialog is open; Cancel puts back what was saved. The choices live on your
+account, not in the browser, so they follow you to the phone. With the dots
+turned off the square you picked up from is still marked -- otherwise clicking
+a piece looks like nothing happened.
 
 On a wide screen the layout is three columns -- board, move table, then
 everything else -- putting the move table beside the board as section 5 asks.
@@ -103,6 +103,15 @@ columns are labelled with the two players' names.
 Under the board, once a game has been analysed: the whole game's evaluation,
 with the mistakes and blunders marked on the curve, hover for the move and
 its win probability, click anywhere to jump the board there.
+
+The curve is smoothed with a **monotone cubic** spline (Fritsch–Carlson), and
+that choice is the whole of it. The usual Catmull-Rom overshoots between
+points: on a win-probability curve it would draw probabilities above 100% or
+below 0, and on either side of a blunder it would round the cliff into a dip
+that never happened. The monotone variant provably cannot overshoot — between
+two points the curve stays within their two values — and it passes through
+every point exactly. So it rounds the corners and changes nothing you could
+read off the chart. Same spline on the trend lines, for the same reason.
 
 Two choices worth stating. It plots **win probability, not centipawns** --
 +3 and +9 are both simply "winning", and on a centipawn axis the second
@@ -128,8 +137,18 @@ run. Switching granularity **re-fits the cached per-position sweep scores and
 never touches an engine** -- that is the whole reason section 13 stores the
 score matrices rather than just the final numbers.
 
-Two things about it are deliberate:
+Three things about it are deliberate:
 
+- **The two series are stacked panels, not one chart.** They shared a y-axis
+  and the interval ruined it: a 95% band 400 Elo wide forces a range that
+  flattens a header rating moving over 80 into a straight line, so the series
+  you can actually read week to week became the unreadable one. A second axis
+  on the same frame would fix the scale and introduce a worse problem — two
+  axes invite reading a crossing as an event, when the gap between them is an
+  arbitrary constant (they are different scales; see below). Stacked panels
+  give each series its own scale, keep the x-positions aligned so the shapes
+  can still be compared vertically, and never draw the two in a relationship
+  they don't have.
 - **A bucket is one fit over every position played in it**, not the average
   of the per-game estimates. A month with four games gets an honestly wide
   interval instead of the falsely tidy mean of four noisy numbers.
@@ -443,6 +462,19 @@ policy net reproduce human move choice instead of searching. Its reply is
 held back by a randomised ~0.5-2s pause so it doesn't answer instantly, and
 that pause is charged to Maia's own clock (capped so it can never be the
 thing that flags it).
+
+**Pre-moves.** Queue your reply while Maia is still thinking and it plays the
+instant its move lands — the point being the obvious reply, a recapture or a
+check you'd already decided on, where waiting for the board costs you seconds
+you didn't need to spend. The squares offered are the piece's *movement
+pattern*, not its legal moves: at pre-move time the opponent hasn't moved, so
+what's legal isn't knowable yet — a rook can be pre-moved through a square its
+blocker is about to leave, and a capture aimed at a square nothing is on yet is
+the usual case. Legality is settled when it's played, and a pre-move that
+doesn't fit the position that arrives is dropped rather than forced. Touching
+the board withdraws it, the marks are a different colour from the last move
+(it might never happen), and the whole thing can be turned off in the board
+settings.
 
 **You can look back through the game while you're playing it.** The nav
 buttons, the arrow keys and the move list all work mid-game: they walk the
