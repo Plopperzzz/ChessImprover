@@ -59,7 +59,7 @@ class Board {
     const pre = this.premove;
     this._build();
     this.renderFEN(this.currentFEN);
-    if (last) this.setLastMove(last.from, last.to);
+    if (last) this.setLastMove(last.from, last.to, last.classification);
     if (pre) this.setPremove(pre.from, pre.to);
   }
 
@@ -104,13 +104,22 @@ class Board {
     this.premoveLayer.className = 'premove-layer';
     this.el.appendChild(this.premoveLayer);
 
+    // Highlights below the pieces: a selected square and its dots describe
+    // where a piece can go, and covering the piece with them is backwards.
+    this.highlightLayer = document.createElement('div');
+    this.highlightLayer.className = 'highlight-layer';
+    this.el.appendChild(this.highlightLayer);
+
     this.pieceLayer = document.createElement('div');
     this.pieceLayer.className = 'piece-layer';
     this.el.appendChild(this.pieceLayer);
 
-    this.highlightLayer = document.createElement('div');
-    this.highlightLayer.className = 'highlight-layer';
-    this.el.appendChild(this.highlightLayer);
+    // Above everything, pieces included: a move's classification badge sits
+    // on the corner of the square and is the one thing that should never be
+    // behind anything.
+    this.markLayer = document.createElement('div');
+    this.markLayer.className = 'mark-layer';
+    this.el.appendChild(this.markLayer);
 
     // The square the held piece would land on. Its own layer because
     // _showHighlights owns (and empties) the one below it.
@@ -139,10 +148,12 @@ class Board {
     }
   }
 
-  /** Marks the two squares of the move that led to the position on the board.
-      Call with no arguments to clear it. */
-  setLastMove(from, to) {
-    this.lastMove = from && to ? { from, to } : null;
+  /** Marks the two squares of the move that led to the position on the board,
+      and badges the square it landed on with how that move was judged (if it
+      has been). Call with no arguments to clear both. */
+  setLastMove(from, to, classification) {
+    this.lastMove = from && to ? { from, to, classification } : null;
+    this._setClassification(this.lastMove ? to : null, classification);
     if (!this.lastMoveLayer) return;
     this.lastMoveLayer.innerHTML = '';
     if (!this.lastMove) return;
@@ -154,6 +165,30 @@ class Board {
       mark.style.top = (y * 12.5) + '%';
       this.lastMoveLayer.appendChild(mark);
     }
+  }
+
+  /** The badge on the corner of the square a move landed on. Its own layer
+      above the pieces, and its own call rather than part of the last-move
+      marks, because a position can be reached before anything has judged the
+      move that reached it -- the analysis arrives later, over the same
+      board. */
+  _setClassification(square, classification) {
+    if (!this.markLayer) return;
+    this.markLayer.innerHTML = '';
+    if (!square || !classification) return;
+    const mark = document.createElement('img');
+    mark.className = 'sq-mark';
+    mark.src = `/assets/icons/classification/${classification}.svg`;
+    mark.alt = classification;
+    mark.title = classification;
+    mark.draggable = false;
+    // An unknown classification would otherwise leave a broken-image glyph
+    // sitting on the board.
+    mark.onerror = () => mark.remove();
+    const { x, y } = this._squareToXY(square);
+    mark.style.left = ((x + 1) * 12.5) + '%';
+    mark.style.top = (y * 12.5) + '%';
+    this.markLayer.appendChild(mark);
   }
 
   /** enabled: bool. handlers: { getLegalTargets(square) -> [{to, promotion}],
@@ -391,7 +426,7 @@ class Board {
     const last = this.lastMove;
     const pre = this.premove;
     this.renderFEN(this.currentFEN);
-    if (last) this.setLastMove(last.from, last.to);
+    if (last) this.setLastMove(last.from, last.to, last.classification);
     if (pre) this.setPremove(pre.from, pre.to);
   }
 

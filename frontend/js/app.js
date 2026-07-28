@@ -450,7 +450,10 @@ function refreshLastMove() {
     return;
   }
   const node = state.explorer.nodes[state.explorer.currentNodeId];
-  state.board.setLastMove(node && node.from, node && node.to);
+  // The badge rides with the last-move marks: both describe the move that
+  // produced what's on the board, and both have to be redrawn together.
+  const cls = node && state.classifications[node.ply];
+  state.board.setLastMove(node && node.from, node && node.to, cls && cls.classification);
 }
 
 /** Everything the analysis board does to the position -- a move played on it,
@@ -471,6 +474,7 @@ async function onBoardMove(from, to, promotion) {
   refreshFenBox();
   renderMoveTable(); // a new variation node may have just been created
   refreshMoveTableHighlight();
+  announceClassification();
   requestEval();
 }
 
@@ -627,7 +631,7 @@ function soundEnabled() {
   return localStorage.getItem('sound') !== 'off';
 }
 
-function playSound(name) {
+function playSound(name, fallbackFile) {
   if (!soundEnabled()) return;
   const file = SOUND_FILES[name];
   if (!file) return;
@@ -636,6 +640,14 @@ function playSound(name) {
     if (!audio) {
       audio = new Audio(`/assets/audio/${file}`);
       audio.volume = 0.55;
+      // A sound that isn't there falls back to one that is, once. This is how
+      // the classification sounds are named after the classification without
+      // needing every file to exist first.
+      if (fallbackFile) {
+        audio.addEventListener('error', () => {
+          audio.src = `/assets/audio/${fallbackFile}`;
+        }, { once: true });
+      }
       soundCache[name] = audio;
     }
     audio.currentTime = 0;
@@ -656,6 +668,68 @@ function playMoveSound(san, mine) {
   else if (san.startsWith('O-O')) playSound('castle');
   else if (san.includes('x')) playSound('capture');
   else playSound(mine ? 'move' : 'opponent');
+}
+
+/* ---------------- Move classifications ----------------
+   The badge a move earns: on the square it landed on, and beside it in the
+   move table. Names are the classifier's own, so the icon file, the sound
+   file and the CSS class are all reached by the same string and adding a
+   classification means adding files rather than editing a lookup.
+
+   Only six of these are produced today -- good, inaccuracy, mistake, blunder
+   from Stockfish alone, plus great and brilliant once the Maia sweep has run.
+   `best`, `excellent`, `book` and `miss` are here with their art ready for
+   whatever comes to award them; nothing renders a badge it has no move for. */
+
+const CLASSIFICATIONS = [
+  'brilliant', 'great', 'best', 'excellent', 'good', 'book',
+  'inaccuracy', 'mistake', 'miss', 'blunder',
+];
+
+/** Stand-ins from the stock sound set, used until a file named after the
+    classification is dropped into assets/audio/classification/. */
+const CLASSIFICATION_SOUND_FALLBACK = {
+  brilliant: 'brilliant-86fb4d6.mp3',
+  great: 'reward-points-coin-8a84fdd.mp3',
+  best: 'correct-c1411f4.mp3',
+  excellent: 'training-result-good-1437d1d.mp3',
+  good: 'training-result-ok-72ffaa5.mp3',
+  book: 'go-372eb70.mp3',
+  inaccuracy: 'opp-incorrect-39db01f.mp3',
+  mistake: 'training-result-bad-f0b2ec2.mp3',
+  miss: 'opp-fail-4fa5424.mp3',
+  blunder: 'fail-blip-hi-2b78df0.mp3',
+};
+
+function classificationIcon(classification, size) {
+  if (!classification || !CLASSIFICATIONS.includes(classification)) return null;
+  const img = document.createElement('img');
+  img.className = 'cls-icon';
+  img.src = `/assets/icons/classification/${classification}.svg`;
+  img.width = size;
+  img.height = size;
+  img.alt = classification;
+  img.title = classification;
+  img.draggable = false;
+  return img;
+}
+
+function playClassificationSound(classification) {
+  if (!classification || !CLASSIFICATIONS.includes(classification)) return;
+  const key = 'cls:' + classification;
+  if (!SOUND_FILES[key]) SOUND_FILES[key] = `classification/${classification}.mp3`;
+  playSound(key, CLASSIFICATION_SOUND_FALLBACK[classification]);
+}
+
+/** Says how the move that produced the position now on the board was judged.
+    Called from the places a *person* moves the board -- stepping, clicking a
+    move, playing one -- and not from the analysis animation, which walks a
+    hundred positions and would be unbearable. */
+function announceClassification() {
+  if (state.playMode || state.puzzleMode) return;
+  const node = state.explorer.nodes[state.explorer.currentNodeId];
+  const cls = node && state.classifications[node.ply];
+  if (cls) playClassificationSound(cls.classification);
 }
 
 function wireSound() {
@@ -793,6 +867,7 @@ function wireNav() {
     refreshLastMove();
     refreshFenBox();
     refreshMoveTableHighlight();
+    announceClassification();
     requestEval();
   });
   document.getElementById('nav-next').addEventListener('click', async () => {
@@ -804,6 +879,7 @@ function wireNav() {
     refreshLastMove();
     refreshFenBox();
     refreshMoveTableHighlight();
+    announceClassification();
     requestEval();
   });
   document.getElementById('nav-end').addEventListener('click', () => {
@@ -1162,6 +1238,7 @@ async function loadSavedAnalysis(gameId) {
   for (const m of saved.moves) state.classifications[m.ply] = m;
   renderMoveTable();
   refreshMoveTableHighlight();
+  refreshLastMove();   // the badge for whatever is on the board is known now
   renderAnalysisSummary(saved.moves);
   renderEvalPlot();
 
@@ -1216,12 +1293,16 @@ function renderMoveTable() {
       if (id !== undefined) {
         const node = state.explorer.nodes[id];
         const cls = state.classifications[node.ply];
-        td.textContent = node.san + (cls ? CLASSIFICATION_SUFFIX[cls.classification] : '');
+        const icon = cls && classificationIcon(cls.classification, 35);
+        // The icon says what the suffix said, so it doesn't say it twice.
+        td.textContent = node.san + (cls && !icon ? CLASSIFICATION_SUFFIX[cls.classification] : '');
         if (cls) td.classList.add('cls-' + cls.classification);
+        if (icon) td.appendChild(icon);
         td.dataset.nodeId = id;
         td.addEventListener('click', () => {
           state.explorer.goToNode(id);
           syncBoardFull();
+          announceClassification();
         });
       }
       tr.appendChild(td);
@@ -1649,6 +1730,7 @@ async function handleAnalysisMessage(msg) {
     for (const m of msg.moves) state.classifications[m.ply] = m;
     renderMoveTable();
     refreshMoveTableHighlight();
+    refreshLastMove();   // the badge for whatever is on the board is known now
     renderAnalysisSummary(msg.moves);
     renderEvalPlot();
     if (msg.mode === 'full') {

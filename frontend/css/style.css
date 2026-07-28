@@ -7,8 +7,15 @@
   --muted: #8b93a7;
   --accent: #5b8dee;
   /* One board width, shared by everything stacked with the board so the
-     column lines up instead of each element picking its own max. */
-  --board-w: min(92vw, 78vh, 620px);
+     column lines up instead of each element picking its own max.
+
+     Sized from the window rather than pinned: as tall as the screen leaves
+     room for once the plates and the nav buttons under it are counted, and
+     it follows the window down as well as up -- these are live units, so a
+     board that fits at full screen still fits half-way through a drag of the
+     window edge. The FEN boxes below can fall past the fold on a short
+     screen; the board is what you came to look at. */
+  --board-w: clamp(260px, min(94vw, calc(100vh - 260px)), 1200px);
 }
 
 * { box-sizing: border-box; }
@@ -243,10 +250,20 @@ input[type="text"], input[type="number"], textarea, select {
   touch-action: none;
 }
 .board-bg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.piece-layer, .highlight-layer, .last-move-layer, .premove-layer, .drag-layer {
+.piece-layer, .highlight-layer, .last-move-layer, .premove-layer,
+.drag-layer, .mark-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
+}
+/* How the move that landed here was judged, straddling the square's top-right
+   corner the way a badge does -- `left` is set to the corner and the transform
+   centres it there. */
+.sq-mark {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  transform: translate(-55%, -45%);
 }
 /* A queued pre-move: a different colour from the last move, because it is a
    different kind of thing -- it might never happen. */
@@ -306,7 +323,7 @@ input[type="text"], input[type="number"], textarea, select {
   border-radius: 50%;
   background: rgba(91, 141, 238, 0.45);
 }
-.sq-select.animate::after { animation: sq-grow 190ms cubic-bezier(0.2, 0.85, 0.35, 1); }
+.sq-select.animate::after { animation: sq-grow 500ms cubic-bezier(0.2, 0.85, 0.35, 1); }
 .sq-select.premove::after { background: rgba(126, 110, 224, 0.5); }
 .sq-dot {
   position: absolute;
@@ -322,7 +339,7 @@ input[type="text"], input[type="number"], textarea, select {
   height: 32%;
   border-radius: 50%;
   background: rgba(91, 141, 238, 0.65);
-  animation: sq-grow 170ms cubic-bezier(0.2, 0.85, 0.35, 1);
+  animation: sq-grow 500ms cubic-bezier(0.2, 0.85, 0.35, 1);
 }
 .sq-dot.premove::after { background: rgba(150, 136, 235, 0.6); }
 /* A capture: the square tints around a hole cut for the piece being taken --
@@ -340,7 +357,7 @@ input[type="text"], input[type="number"], textarea, select {
      is a plain fraction of the square rather than of its diagonal. */
   background: radial-gradient(circle closest-side at 50% 50%,
     rgba(0, 0, 0, 0) 0 65%, rgba(91, 141, 238, 0.55) 67% 100%);
-  animation: sq-grow 170ms cubic-bezier(0.2, 0.85, 0.35, 1);
+  animation: sq-grow 500ms cubic-bezier(0.2, 0.85, 0.35, 1);
 }
 .sq-capture.premove::after {
   background: radial-gradient(circle closest-side at 50% 50%,
@@ -621,6 +638,14 @@ input[type="text"], input[type="number"], textarea, select {
 #move-table td.cls-inaccuracy { color: #e0c040; }
 #move-table td.cls-mistake { color: #e08040; }
 #move-table td.cls-blunder { color: #e05050; font-weight: bold; }
+/* The badge beside the move it belongs to. The cell keeps the SAN on the
+   baseline and lets the icon sit beside it rather than pushing it around. */
+#move-table td .cls-icon {
+  vertical-align: middle;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+#move-table td:has(.cls-icon) { white-space: nowrap; }
 
 #game-picker { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .game-row {

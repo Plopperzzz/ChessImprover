@@ -143,8 +143,25 @@ over is outlined as the one it would land on, so letting go there plays the
 move and letting go anywhere else puts it back. Picking a piece up sweeps a
 circle out over its square, and its destinations arrive by growing rather than
 appearing all at once -- a dot on an empty square, and for a piece you could
-take, the square tinted around a hole cut for the piece itself, because a dot
-would simply hide behind it.
+take, the square tinted around a hole cut for the piece itself. All of it is
+drawn *under* the pieces: a marker is about a piece, and covering the piece
+with it is backwards.
+
+The board takes as much height as the window leaves it, down to the plates and
+the nav buttons under it, and it resizes with the window rather than at fixed
+breakpoints -- drag the edge and it follows. The FEN boxes at the bottom of the
+column are the first thing to fall past the fold on a short screen.
+
+Once a game has been analysed, the move that produced the position on the board
+carries its **classification badge** on the corner of the square it landed on,
+and the same badge sits beside the move in the move table. Stepping through the
+game plays the sound for whatever the move was judged to be. The badges are
+`assets/icons/classification/<name>.svg` and the sounds
+`assets/audio/classification/<name>.mp3`, both reached by the classifier's own
+name for the move -- so a sound is swapped by dropping a file in, and until one
+is there the nearest stock sound stands in. Four of the ten (`best`,
+`excellent`, `book`, `miss`) have their art ready but nothing awarding them
+yet; the classifier produces the other six.
 
 On a wide screen the layout is three columns -- board, move table, then
 everything else -- putting the move table beside the board as section 5 asks.
