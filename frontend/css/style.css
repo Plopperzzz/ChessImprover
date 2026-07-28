@@ -219,10 +219,30 @@ input[type="text"], input[type="number"], textarea, select {
    share of the bar that is White's arrives as one number either way --
    `--eval-white`, set by the live-eval handler -- and it is this stylesheet
    that decides whether that is a width or a height. */
-#board-row { display: flex; gap: 8px; }
-#board-col.eval-top #board-row { flex-direction: column; }
-#board-col.eval-left #board-row { flex-direction: row; }
-#board-col.eval-right #board-row { flex-direction: row-reverse; }
+/* Along the top, the column is the plain stack it always was and the bar is
+   simply its first row. Beside the board it becomes a two-column grid: only
+   the bar and the board share the middle row, so the names still sit hard
+   against the board rather than being pushed off it by a bar that is taller
+   than both of them put together. */
+#board-col.eval-left, #board-col.eval-right {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: center;
+  align-items: center;
+  column-gap: 8px;
+}
+#board-col.eval-left {
+  grid-template-areas: ". top" "bar board" ". bottom" ". note";
+}
+#board-col.eval-right {
+  grid-template-columns: auto auto;
+  grid-template-areas: "top ." "board bar" "bottom ." "note .";
+}
+#board-col.eval-left #eval-bar, #board-col.eval-right #eval-bar { grid-area: bar; }
+#board-col.eval-left #board, #board-col.eval-right #board { grid-area: board; }
+#board-col.eval-left #plate-top, #board-col.eval-right #plate-top { grid-area: top; }
+#board-col.eval-left #plate-bottom, #board-col.eval-right #plate-bottom { grid-area: bottom; }
+#board-col.eval-left #board-note, #board-col.eval-right #board-note { grid-area: note; }
 
 #eval-bar {
   --eval-white: 50%;
@@ -272,15 +292,7 @@ input[type="text"], input[type="number"], textarea, select {
   font-size: 10px;
   line-height: 12px;
 }
-/* A standing bar makes the board row wider than everything stacked with it,
-   which would leave the plates half a bar off-centre from the board they
-   name. Nudge them back over it. */
-#board-col.eval-left .player-plate,
-#board-col.eval-left .fen-row,
-#board-col.eval-left #board-note { margin-left: 34px; }
-#board-col.eval-right .player-plate,
-#board-col.eval-right .fen-row,
-#board-col.eval-right #board-note { margin-right: 34px; }
+
 
 #board {
   position: relative;
@@ -435,7 +447,7 @@ input[type="text"], input[type="number"], textarea, select {
    than the board's. */
 #eval-plot-wrap { width: 100%; }
 #eval-plot {
-  height: 90px;
+  height: 68px;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -450,18 +462,10 @@ input[type="text"], input[type="number"], textarea, select {
 }
 
 #nav-buttons { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
-/* Top right of the board: aligned to the board's right edge, above it. */
-#board-controls {
-  display: flex;
-  gap: 6px;
-  width: var(--board-w);
-  justify-content: flex-end;
-}
-#board-controls button { padding: 3px 9px; font-size: 13px; line-height: 1.5; }
-/* A standing eval bar makes the board row wider than the board; the controls
-   line up with the board, not the row. */
-#board-col.eval-left #board-controls { padding-left: 34px; }
-#board-col.eval-right #board-controls { padding-right: 34px; }
+/* At the right-hand end of the line the top player's name is on, so the name
+   still sits hard against the board. */
+#board-controls { display: flex; gap: 6px; flex: none; margin-left: 8px; }
+#board-controls button { padding: 2px 8px; font-size: 12px; line-height: 1.6; font-weight: 400; }
 /* Only visible when the board is showing an earlier position of a game still
    in progress, so it reads as a state you're in, not as decoration. */
 #board-note {
@@ -948,17 +952,15 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
    What the eval bar's engine is actually looking at, in the panel that starts
    the analyses rather than beside the board -- it is a lot of text, and the
    board column is the one place with no room for any. */
-.live-row { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; }
+.live-row { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
 .live-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-.live-row select { width: auto; }
+.live-row select { width: auto; padding: 2px 6px; font-size: 12px; }
+.live-title { font-size: 12px; font-weight: 600; color: var(--muted); flex: 1; }
 #live-lines-btn.on { border-color: var(--accent); color: var(--accent); }
-#live-lines {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-bottom: 8px;
-  font-size: 12px;
-}
+/* Between the game's curve and its move list, which is where the position it
+   describes is being pointed at from. */
+#live-lines { flex: none; font-size: 12px; }
+#live-lines-body { display: flex; flex-direction: column; gap: 3px; }
 .live-line {
   display: flex;
   align-items: baseline;

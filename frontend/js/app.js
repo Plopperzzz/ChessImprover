@@ -389,7 +389,7 @@ function applyBoardChrome() {
     .toggle('hidden', !analysing || evalPlotMoves().length < 2);
   // The live-analysis controls belong to the analysis tab: during a game or a
   // puzzle, an engine line beside the board is the answer.
-  for (const id of ['live-lines-btn', 'live-lines-count-row', 'live-lines']) {
+  for (const id of ['live-lines-btn', 'live-lines']) {
     document.getElementById(id).classList.toggle('tab-hidden', !analysing);
   }
   if (!analysing && state.liveLines.count) setLiveLines(0);
@@ -1107,7 +1107,6 @@ function setLiveLines(n) {
   state.liveLines.byRank = {};
   document.getElementById('live-lines-btn').textContent = n ? 'Stop live analysis' : 'Analyse live';
   document.getElementById('live-lines-btn').classList.toggle('on', !!n);
-  document.getElementById('live-lines-count-row').classList.toggle('hidden', !n);
   document.getElementById('live-lines').classList.toggle('hidden', !n);
   renderLiveLines();
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
@@ -1164,7 +1163,7 @@ function pvToSan(uciMoves, fen, limit = 8) {
 }
 
 function renderLiveLines() {
-  const box = document.getElementById('live-lines');
+  const box = document.getElementById('live-lines-body');
   if (!state.liveLines.count) { box.innerHTML = ''; return; }
   const ranks = Object.keys(state.liveLines.byRank).map(Number).sort((a, b) => a - b);
   if (!ranks.length) { box.innerHTML = '<p class="hint">Thinking...</p>'; return; }

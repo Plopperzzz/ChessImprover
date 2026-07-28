@@ -51,6 +51,10 @@
     <!-- data-tabs lists the tabs an element belongs to; Progress is all
          aggregates and has no use for a board. -->
     <section id="board-col" data-tabs="analysis play puzzles">
+      <!-- The bar goes above the names or beside the board; the column is
+           laid out for whichever, so the names stay hard against the board
+           either way. -->
+      <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
       <!-- The plates sit with the board and follow its orientation, so the
            name below the board is always the player at the bottom. -->
       <div class="player-plate" id="plate-top">
@@ -61,18 +65,16 @@
         <span class="spacer"></span>
         <span class="plate-result"></span>
         <span class="plate-clock"></span>
+        <!-- Top right of the board, sharing the line the name is on: the
+             names belong hard against the board, so the buttons come to
+             them rather than pushing them away from it. -->
+        <span id="board-controls">
+          <button id="live-lines-btn" title="Show what the engine is looking at">Analyse live</button>
+          <button id="nav-flip" title="Flip the board">⇅</button>
+          <button id="board-settings-btn" title="Board settings — board, pieces, eval bar, FEN">⚙</button>
+        </span>
       </div>
-      <!-- Top right of the board, out of the way of the position. -->
-      <div id="board-controls">
-        <button id="nav-flip" title="Flip the board">⇅</button>
-        <button id="board-settings-btn" title="Board settings — board, pieces, eval bar, FEN">⚙</button>
-      </div>
-      <!-- The bar and the board it describes. One flex-direction apart: a
-           column puts the bar along the top, a row stands it beside. -->
-      <div id="board-row">
-        <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
-        <div id="board"></div>
-      </div>
+      <div id="board"></div>
       <div class="player-plate" id="plate-bottom">
         <span class="plate-dot"></span>
         <span class="plate-name">—</span>
@@ -93,6 +95,21 @@
       <div id="eval-plot-wrap" class="hidden">
         <div id="eval-plot"></div>
         <div id="eval-plot-hint"></div>
+      </div>
+      <!-- Between the curve and the moves: the engine's answer for the
+           position the move list is pointing at. -->
+      <div id="live-lines" class="hidden">
+        <div class="live-row">
+          <span class="live-title">Engine</span>
+          <label>Lines
+            <select id="live-lines-count">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </label>
+        </div>
+        <div id="live-lines-body"></div>
       </div>
       <div class="panel" id="moves-panel">
         <h3>Moves</h3>
@@ -178,17 +195,6 @@
             <button id="full-analysis-btn" disabled title="Quick + Maia Elo sweep + Great/Brilliant">Full</button>
             <button id="analysis-cancel" class="hidden">Cancel</button>
           </div>
-          <div class="live-row">
-            <button type="button" id="live-lines-btn">Analyse live</button>
-            <label id="live-lines-count-row" class="hidden">Lines
-              <select id="live-lines-count">
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-              </select>
-            </label>
-          </div>
-          <div id="live-lines" class="hidden"></div>
           <div id="analysis-progress"><div id="analysis-progress-fill"></div></div>
           <div id="analysis-status"></div>
           <div id="analysis-summary"></div>
