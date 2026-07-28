@@ -418,8 +418,23 @@ class Board {
   renderFEN(fen) {
     this._renderSeq++;
     this.currentFEN = fen;
-    // Whatever was being dragged is about to be thrown away with the rest of
-    // the piece elements.
+    // Every piece element is about to be replaced, which would drop a piece
+    // the user is in the middle of dragging and swallow the move they are
+    // about to make -- and a re-render lands mid-gesture routinely, because
+    // the previous move's slide finishes a fifth of a second after it was
+    // played. What survives the rebuild is remembered here and put back on
+    // the new elements below.
+    const held = this.drag && {
+      square: this.drag.from,
+      piece: this.position[this.drag.from],
+      pointerId: this.drag.pointerId,
+      hover: this.drag.hover,
+      left: this.drag.el.style.left,
+      top: this.drag.el.style.top,
+    };
+    const selected = this.selected
+      ? { square: this.selected, piece: this.position[this.selected] }
+      : null;
     this._cancelDrag();
     this.pieceLayer.innerHTML = '';
     this.pieceEls = {};
@@ -438,6 +453,40 @@ class Board {
         file++;
       }
     }
+    this._restoreSelection(held || selected);
+    if (held) this._resumeDrag(held);
+  }
+
+  /** Re-selects a square across a re-render, but only if the same piece is
+      still standing on it and still has somewhere to go: anything else and
+      the selection belonged to a position this one isn't. */
+  _restoreSelection(prev) {
+    if (!prev || !prev.piece || this.position[prev.square] !== prev.piece) return;
+    const targets = (this.handlers.getLegalTargets && this.handlers.getLegalTargets(prev.square)) || [];
+    if (!targets.length) return;
+    this.selected = prev.square;
+    this.legalTargets = targets;
+    // Not animated: the square was already selected, it is not becoming so.
+    this._showHighlights(prev.square, targets, false);
+  }
+
+  /** Puts a drag that outlived a re-render back on the new piece element, at
+      the point the pointer had already dragged it to. */
+  _resumeDrag(held) {
+    const piece = this.pieceEls[held.square];
+    if (!piece || this.selected !== held.square) return;
+    this.drag = {
+      from: held.square,
+      el: piece,
+      pointerId: held.pointerId,
+      origin: { left: piece.style.left, top: piece.style.top },
+      hover: null,
+    };
+    piece.classList.add('dragging');
+    piece.style.left = held.left;
+    piece.style.top = held.top;
+    try { this.el.setPointerCapture(held.pointerId); } catch (e) { /* pointer gone */ }
+    this._setDragHover(held.hover);
   }
 
   _placePiece(square, ch) {

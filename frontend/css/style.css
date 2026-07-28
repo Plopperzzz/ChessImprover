@@ -336,13 +336,15 @@ input[type="text"], input[type="number"], textarea, select {
   content: "";
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 50% 50%,
-    rgba(0, 0, 0, 0) 0 37%, rgba(91, 141, 238, 0.55) 38% 100%);
+  /* closest-side puts the gradient's 100% on the square's edge, so the hole
+     is a plain fraction of the square rather than of its diagonal. */
+  background: radial-gradient(circle closest-side at 50% 50%,
+    rgba(0, 0, 0, 0) 0 65%, rgba(91, 141, 238, 0.55) 67% 100%);
   animation: sq-grow 170ms cubic-bezier(0.2, 0.85, 0.35, 1);
 }
 .sq-capture.premove::after {
-  background: radial-gradient(circle at 50% 50%,
-    rgba(0, 0, 0, 0) 0 37%, rgba(150, 136, 235, 0.5) 38% 100%);
+  background: radial-gradient(circle closest-side at 50% 50%,
+    rgba(0, 0, 0, 0) 0 65%, rgba(150, 136, 235, 0.5) 67% 100%);
 }
 @keyframes sq-grow {
   from { transform: scale(0); }
