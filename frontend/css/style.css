@@ -229,6 +229,13 @@ input[type="text"], input[type="number"], textarea, select {
   grid-template-columns: auto auto;
   justify-content: center;
   align-items: center;
+  /* The column is a flex item of #layout and stretches to whichever column is
+     tallest -- with a game loaded, the panels beside it. A grid's rows take
+     that spare height and share it out, which walks the board away from the
+     name above it; the stack has to sit at the top and leave the slack
+     underneath. */
+  align-content: start;
+  row-gap: 6px;
   column-gap: 8px;
 }
 #board-col.eval-left {
