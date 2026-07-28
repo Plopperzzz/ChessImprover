@@ -526,7 +526,13 @@ async function loadOpeningStats() {
     res = await api('/api/openings/stats?fen=' + encodeURIComponent(state.explorer.fen));
   } catch (err) { /* rendered as "no database" below */ }
   if (seq !== opening.seq) return;   // a later position has already answered
+  // A database that has just finished building appears under a page that has
+  // been open the whole time. The stats endpoint notices by itself; the size
+  // in the panel header comes from the status call, so go and get it rather
+  // than leaving the header blank until a reload.
+  const appeared = res && res.available && !(opening.status && opening.status.available);
   renderOpeningStats(res);
+  if (appeared) refreshOpeningStatus();
 }
 
 function renderOpeningStats(res) {
@@ -537,12 +543,12 @@ function renderOpeningStats(res) {
   if (!res || !res.available) {
     summary.textContent = 'not built';
     totalEl.innerHTML = '';
-    body.innerHTML = `<p class="hint">No opening database yet. Build one from a PGN library
-      — LumbrasGigaBase, or any other — by running this in <code>backend/</code>:</p>
-      <pre class="hint-cmd">python -m app.opening_import /path/to/LumbrasGigaBase.pgn</pre>
-      <p class="hint">It indexes the first 12 moves of each game by default
-      (<code>--max-plies</code>), and takes a while on a giga-base. The server
-      picks it up with no restart.</p>`;
+    body.innerHTML = `<p class="hint">Nothing indexed yet. Building the database is a one-off
+      job you run yourself, on the machine holding the PGN — from <code>backend/</code>:</p>
+      <pre class="hint-cmd">.venv/bin/python -m app.opening_import /path/to/LumbrasGigaBase.pgn</pre>
+      <p class="hint">It indexes the first 12 moves of each game (<code>--max-plies</code>),
+      at roughly an hour per three million. When it finishes, play a move and this
+      panel fills in — no restart, no reload.</p>`;
     return;
   }
 
