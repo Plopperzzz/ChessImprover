@@ -99,6 +99,13 @@
   square around a circular hole cut for the piece instead of a dot.
 - Board sized responsively from available viewport space, clamped to a
   sensible min/max — must work acceptably on a phone screen.
+- Move classification (beyond the four bands of section 8): Best, Excellent
+  and Good split the top band by whether the engine picked the move and how
+  much it gave up; Book comes from the opening database; Miss is a
+  mistake/blunder that threw away a won position. Great and Brilliant now
+  require the move to have been the *only* move — the second-best line at
+  least 0.15 win probability worse, and more than one legal move to choose
+  from — which is why the analysis pass searches MultiPV 2.
 - Opening database (beyond the spec): a panel beside the analysis board
   listing every move a reference PGN library played from the current
   position, with game counts, the white/draw/black split and average

@@ -157,6 +157,28 @@ def moves_from(fen: str) -> dict:
     return {"available": True, "moves": moves, "total": total}
 
 
+def book_lookup(fen: str) -> dict[str, int]:
+    """{uci: games} for a position, or {} when there is no database or the
+    position isn't in it. This is the classifier's view of the library --
+    'has anyone played this, and how many' -- and it stays quiet rather than
+    raising, because a missing opening database is not an analysis failure."""
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return {}
+    with opening_db() as conn:
+        if conn is None:
+            return {}
+        try:
+            rows = conn.execute(
+                "SELECT uci, white + draws + black AS games FROM positions WHERE pos = ?",
+                (position_key(board),),
+            ).fetchall()
+        except sqlite3.DatabaseError:
+            return {}
+    return {r["uci"]: r["games"] for r in rows}
+
+
 router = APIRouter(prefix="/api/openings", tags=["openings"])
 
 

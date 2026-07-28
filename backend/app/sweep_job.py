@@ -380,6 +380,8 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
                     ucis=ucis,
                     max_drop=settings.get("great_max_drop", classify.DEFAULT_GREAT_MAX_DROP),
                     max_match_rate=settings.get("great_max_match_rate", classify.DEFAULT_GREAT_MAX_MATCH_RATE),
+                    min_only_move_gap=settings.get("great_min_only_move_gap",
+                                                   classify.DEFAULT_ONLY_MOVE_GAP),
                     brilliant_enabled=bool(settings.get("brilliant_enabled", 1)),
                 )
                 classify.blunder_elo_correlation(moves, sweep_rows=rows, grid=grid)

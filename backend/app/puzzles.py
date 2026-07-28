@@ -41,9 +41,11 @@ from .jobqueue import pool, slots_for
 
 router = APIRouter(prefix="/api/puzzles", tags=["puzzles"])
 
-# Moves worth practising. 'mistake' and 'blunder' are the classifier's own
-# labels (>=10% and >=20% win probability given up).
-PUZZLE_CLASSIFICATIONS = ("mistake", "blunder")
+# Moves worth practising. These are the classifier's own labels: mistake and
+# blunder gave up >=10% and >=20% win probability, and a miss is one of those
+# two that threw away a won position -- the most instructive of the three, so
+# splitting it out of the pair must not drop it out of the puzzle set.
+PUZZLE_CLASSIFICATIONS = ("mistake", "blunder", "miss")
 
 # Below this win probability the game was already gone, and "find the best
 # move in a lost position" is a different exercise from the one this is for.

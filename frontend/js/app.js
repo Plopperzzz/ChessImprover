@@ -453,7 +453,7 @@ function refreshLastMove() {
   // The badge rides with the last-move marks: both describe the move that
   // produced what's on the board, and both have to be redrawn together.
   const cls = node && state.classifications[node.ply];
-  state.board.setLastMove(node && node.from, node && node.to, cls && cls.classification);
+  state.board.setLastMove(node && node.from, node && node.to, badgeFor(cls));
 }
 
 /** Everything the analysis board does to the position -- a move played on it,
@@ -679,8 +679,24 @@ const CLASSIFICATIONS = [
   'inaccuracy', 'mistake', 'miss', 'blunder',
 ];
 
+/** Which of them earn a badge. Excellent, good and book are the moves you
+    were always going to play, and a badge on almost every move is a badge on
+    none of them -- they keep their colour in the move table and say nothing
+    else. Everything here is either rare or worth stopping at. */
+const BADGED_CLASSIFICATIONS = [
+  'brilliant', 'great', 'best', 'inaccuracy', 'mistake', 'miss', 'blunder',
+];
+
+/** The badge name for a classification record, or null when that
+    classification doesn't get one. The single gate both the board and the
+    move table go through. */
+function badgeFor(cls) {
+  const name = cls && cls.classification;
+  return name && BADGED_CLASSIFICATIONS.includes(name) ? name : null;
+}
+
 function classificationIcon(classification, size) {
-  if (!classification || !CLASSIFICATIONS.includes(classification)) return null;
+  if (!classification || !BADGED_CLASSIFICATIONS.includes(classification)) return null;
   const img = document.createElement('img');
   img.className = 'cls-icon';
   img.src = `/assets/icons/classification/${classification}.svg`;
@@ -1270,7 +1286,7 @@ function renderMoveTable() {
         const cls = state.classifications[node.ply];
         const icon = cls && classificationIcon(cls.classification, 24);
         // The icon says what the suffix said, so it doesn't say it twice.
-        td.textContent = node.san + (cls && !icon ? CLASSIFICATION_SUFFIX[cls.classification] : '');
+        td.textContent = node.san + (cls && !icon ? classificationSuffix(cls.classification) : '');
         if (cls) td.classList.add('cls-' + cls.classification);
         if (icon) td.appendChild(icon);
         td.dataset.nodeId = id;
@@ -1387,9 +1403,11 @@ function whiteWinProb(cp, ply) {
   return 1 / (1 + Math.exp(-0.00368208 * white));
 }
 
+// Matched to the badge art, so a mark on the curve and a badge on the board
+// are recognisably the same judgement.
 const PLOT_MARK_COLOURS = {
-  blunder: '#e05050', mistake: '#e08040', inaccuracy: '#e0c040',
-  great: '#5fc9e8', brilliant: '#21c2a4',
+  blunder: '#fa412d', miss: '#ff7769', mistake: '#ffa459', inaccuracy: '#f7c631',
+  great: '#749bbf', brilliant: '#26c2a3',
 };
 
 function evalPlotMoves() {
@@ -1492,7 +1510,18 @@ function markEvalPlotPosition() {
 
 /* ---------------- Quick analysis (Stockfish-only move classification) ---------------- */
 
-const CLASSIFICATION_SUFFIX = { good: '', inaccuracy: '?!', mistake: '?', blunder: '??', great: '!', brilliant: '!!' };
+/** The old text annotation, still used for the classifications that don't get
+    a badge -- which today means it renders nothing at all, since those are the
+    unremarkable ones. Kept so that unbadging a label doesn't silently drop
+    what it was saying. */
+const CLASSIFICATION_SUFFIX = {
+  brilliant: '!!', great: '!', best: '', excellent: '', good: '', book: '',
+  inaccuracy: '?!', mistake: '?', miss: '??', blunder: '??',
+};
+
+function classificationSuffix(classification) {
+  return CLASSIFICATION_SUFFIX[classification] || '';
+}
 
 function resetAnalysisState() {
   state.classifications = {};
@@ -1759,14 +1788,19 @@ async function animateToMainlinePly(ply) {
 }
 
 function renderAnalysisSummary(moves) {
-  const counts = { brilliant: 0, great: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
-  for (const m of moves) counts[m.classification]++;
+  const counts = {};
+  for (const key of CLASSIFICATIONS) counts[key] = 0;
+  for (const m of moves) if (m.classification in counts) counts[m.classification]++;
   const el = document.getElementById('analysis-summary');
   el.innerHTML = '';
-  const labels = { brilliant: 'Brilliant', great: 'Great', good: 'Good',
-                   inaccuracy: 'Inaccuracies', mistake: 'Mistakes', blunder: 'Blunders' };
-  for (const key of ['brilliant', 'great', 'good', 'inaccuracy', 'mistake', 'blunder']) {
-    if (counts[key] === 0 && (key === 'brilliant' || key === 'great')) continue;
+  const labels = { brilliant: 'Brilliant', great: 'Great', best: 'Best', excellent: 'Excellent',
+                   good: 'Good', book: 'Book', inaccuracy: 'Inaccuracies', mistake: 'Mistakes',
+                   miss: 'Misses', blunder: 'Blunders' };
+  // The rare awards are worth a line only when they happened; the everyday
+  // counts are the shape of the game and read better with the zeroes in.
+  const onlyWhenEarned = ['brilliant', 'great', 'best', 'book', 'miss'];
+  for (const key of CLASSIFICATIONS) {
+    if (counts[key] === 0 && onlyWhenEarned.includes(key)) continue;
     const span = document.createElement('span');
     span.className = 'cnt-' + key;
     span.textContent = `${labels[key]}: ${counts[key]}`;

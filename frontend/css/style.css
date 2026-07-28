@@ -623,21 +623,31 @@ input[type="text"], input[type="number"], textarea, select {
 #analysis-status { font-size: 13px; color: var(--muted); }
 #analysis-summary { font-size: 13px; margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; }
 #analysis-summary span.cnt-good { color: #6fc46f; }
-#analysis-summary span.cnt-inaccuracy { color: #e0c040; }
-#analysis-summary span.cnt-mistake { color: #e08040; }
-#analysis-summary span.cnt-blunder { color: #e05050; }
+#analysis-summary span.cnt-inaccuracy { color: #f7c631; }
+#analysis-summary span.cnt-mistake { color: #ffa459; }
+#analysis-summary span.cnt-blunder { color: #fa412d; }
 
-#move-table td.cls-great { color: #5fc9e8; font-weight: bold; }
-#move-table td.cls-brilliant { color: #21c2a4; font-weight: bold; }
-#analysis-summary span.cnt-great { color: #5fc9e8; }
-#analysis-summary span.cnt-brilliant { color: #21c2a4; }
+#move-table td.cls-great { color: #749bbf; font-weight: bold; }
+#move-table td.cls-brilliant { color: #26c2a3; font-weight: bold; }
+#analysis-summary span.cnt-great { color: #749bbf; }
+#analysis-summary span.cnt-brilliant { color: #26c2a3; }
 .blunder-elo { font-size: 11px; color: var(--muted); margin-top: 8px; }
 .blunder-elo b { color: var(--text); font-weight: 600; }
 .blunder-elo div { margin: 2px 0; }
 
-#move-table td.cls-inaccuracy { color: #e0c040; }
-#move-table td.cls-mistake { color: #e08040; }
-#move-table td.cls-blunder { color: #e05050; font-weight: bold; }
+#move-table td.cls-inaccuracy { color: #f7c631; }
+#move-table td.cls-mistake { color: #ffa459; }
+#move-table td.cls-miss { color: #ff7769; font-weight: bold; }
+#move-table td.cls-blunder { color: #fa412d; font-weight: bold; }
+/* The everyday moves. Book and Excellent carry no badge, so the colour is
+   all they get to say -- kept quiet, because most of a game is these. */
+#move-table td.cls-best { color: #81b64c; }
+#move-table td.cls-excellent { color: #95b776; }
+#move-table td.cls-book { color: #d5a47d; }
+#analysis-summary span.cnt-best { color: #81b64c; }
+#analysis-summary span.cnt-excellent { color: #95b776; }
+#analysis-summary span.cnt-book { color: #d5a47d; }
+#analysis-summary span.cnt-miss { color: #ff7769; }
 /* The badge beside the move it belongs to. The cell keeps the SAN on the
    baseline and lets the icon sit beside it rather than pushing it around. */
 #move-table td .cls-icon {

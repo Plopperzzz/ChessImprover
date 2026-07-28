@@ -156,8 +156,13 @@ Once a game has been analysed, the move that produced the position on the board
 carries its **classification badge** on the corner of the square it landed on,
 and the same badge sits beside the move in the move table. They live in
 `assets/icons/classification/<name>.svg`, reached by the classifier's own name
-for the move. Four of the ten (`best`, `excellent`, `book`, `miss`) have their
-art ready but nothing awarding them yet; the classifier produces the other six.
+for the move.
+
+Only the ones worth stopping at are badged: Brilliant, Great, Best,
+Inaccuracy, Mistake, Miss and Blunder. Excellent, Good and Book are the moves
+you were always going to play, and a badge on nearly every move is a badge on
+none of them -- those three keep their colour in the move table and say nothing
+else. `BADGED_CLASSIFICATIONS` in `app.js` is the whole list.
 
 Only **brilliant** gets a sound of its own. Every move already says what it did
 -- a capture, a check, a castle -- and a second noise stacked on every one of
@@ -441,27 +446,55 @@ gone.
 
 ### Analysis modes
 
-**Quick** is the Stockfish-only pass. **Full** adds the Maia sweep, and with
-it two things that need Maia:
+**Quick** is the Stockfish-only pass, which labels every move from what it gave
+up against the engine's own best play:
 
-- **Great / Brilliant.** A move qualifies when it gave up essentially nothing
-  against the engine's own best play *and* players around your estimated
-  strength mostly wouldn't have found it. Brilliant is Great plus a material
-  sacrifice, detected with a static exchange evaluation (both a capture into
-  a losing exchange and a quiet move that leaves something hanging count).
+| Label | What it means |
+|---|---|
+| **Best** | the move the engine picked |
+| **Excellent** | under 2% win probability given up |
+| **Good** | under 5% |
+| **Book** | theory: the opening database has this move played from this position at least five times. Only ever replaces Best/Excellent/Good — a move being popular is not a defence, so if the engine says it dropped the game, the label that says so wins |
+| **Inaccuracy** | 5% or more given up |
+| **Mistake** | 10% or more |
+| **Miss** | a mistake or blunder of a particular shape: the position was winning (80%) and after the move it isn't (55% or less). Losing a won game is a different mistake from drifting from equal to slightly worse, and it's the one worth practising -- so Misses become puzzles alongside mistakes and blunders |
+| **Blunder** | 20% or more |
+
+**Full** adds the Maia sweep, and with it two things that need Maia:
+
+- **Great / Brilliant.** A **Great** is the *only* move: it gave up essentially
+  nothing, the second-best move the engine could find was far worse, the
+  position had more than one legal move to choose between, and players around
+  your estimated strength mostly wouldn't have played it. **Brilliant** is a
+  Great that also gives up material.
 - **Blunder to Elo correlation.** For each mistake or blunder, the weakest
   swept Elo whose Maia choice was the move you actually played -- "a player
   even this weak would have been expected to avoid it". If no swept Elo plays
   it, that's reported as no correlation rather than as a number.
 
-The spec asked for the two Great/Brilliant criteria to be pinned down rather
-than improvised. They're settings, defaulting to:
+The only-move test is the load-bearing one, and it is why the analysis pass
+searches two lines per position rather than one. Without it, "gave up nothing"
+is true of most moves in a quiet position, and a sacrifice detector on its own
+awards a Brilliant every time something happens to be hanging -- a king
+stepping out of a knight fork read as sacrificing the forked rook, which the
+fork had already won. The sacrifice test now also compares what the opponent
+can take *after* the move against what they could have taken anyway, so
+material that was already lost isn't credited to the move that didn't save it.
+
+The spec asked for the Great/Brilliant criteria to be pinned down rather than
+improvised. They're settings, defaulting to:
 
 | Setting | Default | Meaning |
 |---|---|---|
 | Max win-prob given up vs best | `0.02` | near-lossless; allows for the engine having several equal best moves |
+| Min win-prob gap to the second-best move | `0.15` | "there was nothing else". +7.0 falling to +2.0 is a gap of `0.25`; a rook for nothing from level material is about `0.4` |
 | Max share of players who'd find it | `0.20` | roughly a 1-in-5 move |
 | Brilliant | on | Great + a material sacrifice |
+
+A raw centipawn gap would be the obvious way to say "the alternative was much
+worse" and is the wrong one: +20 against +15 is 500 centipawns between two
+moves that both win trivially. Win probability is what the rest of the
+classifier already speaks, and it says the two are the same move.
 
 Note the "share who'd find it" is read off the cached sweep matrix as Maia's
 match rate in a band around your estimated Elo, not from a single grid point,

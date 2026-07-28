@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS puzzles (
     played_uci TEXT NOT NULL,
     played_san TEXT,
     your_color TEXT NOT NULL,
-    classification TEXT NOT NULL,     -- 'mistake' | 'blunder'
+    classification TEXT NOT NULL,     -- 'mistake' | 'blunder' | 'miss'
     wp_drop REAL,                     -- win probability you gave up with it
     cp_before REAL,
     solution_uci TEXT,
