@@ -354,14 +354,17 @@ class PlaySession:
                 """INSERT INTO games (
                     user_id, upload_id, batch_index, source_name, game_index_in_source,
                     white, black, result, event, date_header, utc_date_header,
-                    year, month, your_color, pgn_text, headers_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    year, month, your_color, your_color_locked, pgn_text, headers_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     self.user_id, upload_id, 0, "play-vs-maia", 0,
                     headers.get("White"), headers.get("Black"), headers.get("Result"),
                     headers.get("Event"), headers.get("Date"), headers.get("UTCDate"),
                     now.tm_year, now.tm_mon,
-                    "w" if self.human_color == chess.WHITE else "b",
+                    # Locked: you played it, so which side was yours is not a
+                    # guess, and a later account rename must not un-assign it
+                    # (the header carries the display name you had at the time).
+                    "w" if self.human_color == chess.WHITE else "b", 1,
                     pgn_text, json.dumps(headers),
                 ),
             )

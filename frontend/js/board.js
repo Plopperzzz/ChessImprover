@@ -56,13 +56,21 @@ class Board {
   _build() {
     this.el.innerHTML = '';
     const bg = document.createElement('img');
-    bg.src = `/assets/sets/${this.boardSet}/board.png`;
     bg.className = 'board-bg';
     bg.draggable = false;
     bg.alt = '';
     bg.onerror = () => {
-      this.el.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 25% 25%';
+      // First fallback: try the old /assets/sets/{name}/board.png path
+      if (bg.src.includes('/assets/boards/')) {
+        bg.src = `/assets/sets/${this.boardSet}/board.png`;
+        bg.onerror = () => {
+          this.el.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 25% 25%';
+        };
+      } else {
+        this.el.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 25% 25%';
+      }
     };
+    bg.src = `/assets/boards/${this.boardSet}.png`;
     this.el.appendChild(bg);
 
     // Under the pieces: the last-move squares tint the board, they don't sit

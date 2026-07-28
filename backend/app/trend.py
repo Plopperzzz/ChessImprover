@@ -23,7 +23,8 @@ Two things get more care than the plot itself:
 
 import calendar
 import json
-from datetime import date
+import re
+from datetime import date, timedelta
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,6 +35,49 @@ from .auth import require_user
 router = APIRouter(prefix="/api/trend", tags=["trend"])
 
 GRANULARITIES = ("year", "month", "week")
+
+# A window is "<count><unit>": 8w, 6m, 2y. 'all' (or an empty value) is the
+# whole library. Free-form rather than a fixed list of presets, so the UI can
+# offer a number and a unit without the two having to agree on a menu.
+WINDOW_RE = re.compile(r"^\s*(\d{1,4})\s*([dwmy])\s*$", re.IGNORECASE)
+WINDOW_UNITS = {"d": "day", "w": "week", "m": "month", "y": "year"}
+
+
+def _parse_window(raw: str | None) -> tuple[int, str] | None:
+    """(count, unit) for a window string, or None for the whole library.
+    Raises for anything that isn't either, rather than silently showing
+    everything when a typo means the filter didn't apply."""
+    if raw is None or not str(raw).strip() or str(raw).strip().lower() == "all":
+        return None
+    m = WINDOW_RE.match(str(raw))
+    if not m:
+        raise HTTPException(400, "window must be 'all' or like '8w', '6m', '2y'")
+    count = int(m.group(1))
+    if count < 1:
+        raise HTTPException(400, "a window has to be at least 1 unit long")
+    return count, m.group(2).lower()
+
+
+def _window_start(anchor: date, count: int, unit: str) -> date:
+    """The first day inside the window ending at `anchor`.
+
+    Months and years step the calendar rather than multiplying by an average
+    day count: "the last 6 months" means back to the same day six months ago,
+    not 182.6 days, and the two disagree by enough to move a game between
+    buckets.
+    """
+    if unit == "d":
+        return anchor - timedelta(days=count - 1)
+    if unit == "w":
+        return anchor - timedelta(weeks=count) + timedelta(days=1)
+    months = count * 12 if unit == "y" else count
+    year, month = anchor.year, anchor.month - months
+    year += (month - 1) // 12
+    month = (month - 1) % 12 + 1
+    # Clamped, so "6 months back" from the 31st lands on the last day of a
+    # shorter month instead of overflowing into the next one.
+    day = min(anchor.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day) + timedelta(days=1)
 
 
 def _parse_date(raw) -> date | None:
@@ -215,8 +259,36 @@ def _slope(points: list[tuple[float, float, float]], label: str) -> dict:
     }
 
 
+def _apply_window(entries: list[dict], window: tuple[int, str] | None) -> dict:
+    """Trims the entry list to the last N weeks/months/years of play, in place,
+    and describes what it did.
+
+    The window ends at the **most recent analysed game**, not at today. The
+    view is about how your play has moved, and a stretch where you didn't play
+    isn't a decline -- anchoring to today would empty the chart for anyone who
+    took a couple of months off, which is the moment they're most likely to
+    come looking. The range that was actually used is returned so the UI can
+    name it rather than leaving the reader to assume it meant 'until now'.
+    """
+    if not entries:
+        return {"requested": None, "applied": False, "excluded": 0,
+                "start": None, "end": None}
+    anchor = max(e["day"] for e in entries)
+    label = f"{window[0]} {WINDOW_UNITS[window[1]]}{'s' if window[0] != 1 else ''}" if window else None
+    if window is None:
+        return {"requested": None, "applied": False, "excluded": 0,
+                "start": min(e["day"] for e in entries).isoformat(), "end": anchor.isoformat()}
+    start = _window_start(anchor, *window)
+    kept = [e for e in entries if e["day"] >= start]
+    excluded = len(entries) - len(kept)
+    entries[:] = kept
+    return {"requested": label, "applied": True, "excluded": excluded,
+            "start": start.isoformat(), "end": anchor.isoformat()}
+
+
 def build(user_id: int, granularity: str, run_id: int | None = None,
-          top_n: int = 1, min_think_ms: int | None = None) -> dict:
+          top_n: int = 1, min_think_ms: int | None = None,
+          window: tuple[int, str] | None = None) -> dict:
     # Same collection the pooled estimate uses, so a bucket and the overall
     # number are always built from exactly the same rows.
     entries, skipped = strength.collect(user_id, run_id)
@@ -244,6 +316,12 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
         if dropped:
             skipped["undated"] += len(dropped)
             entries = [e for e in entries if e["day_known"]]
+
+    # After the undated games are gone, so the window anchors to the newest
+    # game that could actually be plotted.
+    window_info = _apply_window(entries, window)
+    if window_info["excluded"]:
+        skipped["outside_window"] = window_info["excluded"]
 
     grouped: dict[str, dict] = {}
     for entry in entries:
@@ -305,6 +383,7 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
 
     return {
         "granularity": granularity,
+        "window": window_info,
         "buckets": buckets,
         "trend": _slope(estimated_points, granularity),
         "actual_trend": _slope(actual_points, granularity),
@@ -319,11 +398,18 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
 
 @router.get("")
 def get_trend(granularity: str = "month", run_id: int | None = None, top_n: int = 1,
-              min_think_ms: int | None = None, user: dict = Depends(require_user)):
+              min_think_ms: int | None = None, window: str = "all",
+              user: dict = Depends(require_user)):
     """Re-bucketing is a pure re-fit of cached per-position scores, so changing
-    granularity never re-runs an engine (section 15). Defined `def` rather
-    than `async def` on purpose: the bootstrap is CPU work and belongs on the
-    threadpool, not on the event loop that the live engines run on."""
+    granularity or the window never re-runs an engine (section 15). Defined
+    `def` rather than `async def` on purpose: the bootstrap is CPU work and
+    belongs on the threadpool, not on the event loop that the live engines run
+    on.
+
+    `window` restricts the view to the last stretch of play -- 'all', or a
+    count and a unit like '8w', '6m', '2y'.
+    """
     if granularity not in GRANULARITIES:
         raise HTTPException(400, f"granularity must be one of {', '.join(GRANULARITIES)}")
-    return build(user["id"], granularity, run_id, top_n, min_think_ms)
+    return build(user["id"], granularity, run_id, top_n, min_think_ms,
+                 _parse_window(window))

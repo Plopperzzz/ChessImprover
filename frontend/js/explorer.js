@@ -14,16 +14,20 @@
    changes, so the original loaded game is never mutated or lost -- only
    nodes with isMainline === false can be deleted. */
 
-/** Matches the logged-in user's display name against White/Black headers
-    (case-insensitive, trimmed). Returns 'unassigned' rather than guessing if
-    neither matches -- callers must surface that to the user, not drop the
-    game or silently pick a side. */
-function matchYourColor(headers, yourName) {
-  const name = (yourName || '').trim().toLowerCase();
+/** Matches any of the logged-in user's names -- display name or username --
+    against White/Black headers (case-insensitive, trimmed). Both are tried
+    because which of the two someone typed as their site handle is not
+    something they should have to get right. Returns 'unassigned' rather than
+    guessing if neither matches -- callers must surface that to the user, not
+    drop the game or silently pick a side. */
+function matchYourColor(headers, yourNames) {
+  const names = (Array.isArray(yourNames) ? yourNames : [yourNames])
+    .map((n) => (n || '').trim().toLowerCase())
+    .filter(Boolean);
   const white = (headers.White || '').trim().toLowerCase();
   const black = (headers.Black || '').trim().toLowerCase();
-  if (name && name === white) return 'w';
-  if (name && name === black) return 'b';
+  if (names.includes(white)) return 'w';
+  if (names.includes(black)) return 'b';
   return 'unassigned';
 }
 
@@ -69,7 +73,11 @@ class Explorer {
       a chain of tree nodes. Only the first game in the text is used --
       multi-game PGNs should go through "Run analysis" for the full sweep;
       this is just the explore-mode preview. */
-  loadPGN(pgnText, yourName) {
+  /** `yourColor`, when given, is the side the server already has stored for
+      this game -- including a side a human assigned by hand, which no amount
+      of header matching would reproduce. Header matching is only the fallback
+      for PGN text that isn't in the library yet. */
+  loadPGN(pgnText, yourNames, yourColor) {
     const tmp = new Chess();
     // Strict first: chess.js's "sloppy" parser is case-insensitive about the
     // piece letter, so it reads a b-pawn capture like "bxa4" as a *bishop*
@@ -91,7 +99,7 @@ class Explorer {
     this.chess = new Chess();
     this.chess.load(this.nodes[0].fenAfter);
     this.loaded = true;
-    this.yourColor = matchYourColor(this.headers, yourName);
+    this.yourColor = yourColor || matchYourColor(this.headers, yourNames);
     return true;
   }
 

@@ -17,7 +17,7 @@ from .engine_settings import router as settings_router
 from .games import router as games_router
 from .jobqueue import pool
 from .live_eval_ws import router as ws_router
-from .paths import ASSETS_DIR, FRONTEND_DIR, asset_set_details
+from .paths import ASSETS_DIR, FRONTEND_DIR, asset_set_details, list_board_images
 from .play import router as play_router
 from .play import status as play_status
 from .puzzles import router as puzzles_router
@@ -68,6 +68,9 @@ def get_asset_sets(user: dict = Depends(require_user)):
     each offer only the sets that have something for them."""
     return asset_set_details()
 
+@app.get("/api/board-images")
+def get_board_images(user: dict = Depends(require_user)):
+    return list_board_images()
 
 @app.get("/api/engines/status")
 def engines_status(user: dict = Depends(require_user)):

@@ -67,12 +67,19 @@ def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
         run_clause = " AND rg.run_id = ?"
         params.append(run_id)
 
+    # A standalone Elo sweep produces the same swept grid and the same
+    # per-position rows a full run does -- it just skips the Stockfish pass --
+    # so the fit has no reason to ignore one. Full first when a game has both,
+    # since it is the more recent shape of the same data.
+    swept_modes = ("full", "sweep")
+
     with db_cursor() as conn:
         skipped["no_full_analysis"] = conn.execute(
             """SELECT COUNT(*) AS n FROM games g
                WHERE g.user_id = ? AND NOT EXISTS (
                  SELECT 1 FROM run_games rg
-                 WHERE rg.game_id = g.id AND rg.user_id = g.user_id AND rg.mode = 'full')""",
+                 WHERE rg.game_id = g.id AND rg.user_id = g.user_id
+                   AND rg.mode IN ('full', 'sweep'))""",
             (user_id,),
         ).fetchone()["n"]
 
@@ -83,9 +90,9 @@ def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
                        g.utc_date_header, g.date_header, g.headers_json
                 FROM run_games rg
                 JOIN games g ON g.id = rg.game_id
-                WHERE rg.user_id = ? AND rg.mode = 'full'{run_clause}
-                ORDER BY g.id, rg.analyzed_at DESC""",
-            params,
+                WHERE rg.user_id = ? AND rg.mode IN (?, ?){run_clause}
+                ORDER BY g.id, (rg.mode = 'full') DESC, rg.analyzed_at DESC""",
+            [user_id, *swept_modes] + params[1:],
         ).fetchall()
 
         seen: set[int] = set()

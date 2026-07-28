@@ -61,9 +61,21 @@ async function boot() {
   }
 }
 
-async function showLogin() {
+function loginMessage(text, isError) {
+  const el = document.getElementById('login-message');
+  el.textContent = text || '';
+  el.classList.toggle('hidden', !text);
+  el.classList.toggle('error', !!isError);
+}
+
+/** Which account row, if any, is open for editing. Kept outside showLogin so
+    a re-render (after a failed save, say) doesn't close the form. */
+let editingAccountId = null;
+
+async function showLogin(message) {
   document.getElementById('app').classList.add('hidden');
   document.getElementById('login-screen').classList.remove('hidden');
+  loginMessage(message);
   const accounts = await api('/api/auth/accounts');
   const list = document.getElementById('account-list');
   list.innerHTML = '';
@@ -73,13 +85,143 @@ async function showLogin() {
     list.appendChild(p);
   }
   for (const acc of accounts) {
-    const btn = document.createElement('button');
-    btn.textContent = acc.display_name;
-    btn.addEventListener('click', async () => {
-      await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: acc.username }) });
-      await boot();
-    });
-    list.appendChild(btn);
+    list.appendChild(acc.id === editingAccountId ? accountEditor(acc) : accountRow(acc));
+  }
+}
+
+function accountRow(acc) {
+  const row = document.createElement('div');
+  row.className = 'account-row';
+
+  const login = document.createElement('button');
+  const name = document.createElement('span');
+  name.className = 'account-name';
+  name.textContent = acc.display_name;
+  const sub = document.createElement('span');
+  sub.className = 'account-sub';
+  sub.textContent = `${acc.username} — ${acc.game_count} game${acc.game_count === 1 ? '' : 's'}`;
+  login.append(name, sub);
+  login.addEventListener('click', async () => {
+    await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: acc.username }) });
+    await boot();
+  });
+  row.appendChild(login);
+
+  const edit = document.createElement('button');
+  edit.className = 'account-action';
+  edit.textContent = '✎';
+  edit.title = 'Rename this account';
+  edit.addEventListener('click', async () => {
+    editingAccountId = acc.id;
+    await showLogin();
+  });
+  row.appendChild(edit);
+
+  const del = document.createElement('button');
+  del.className = 'account-action danger';
+  del.textContent = '✕';
+  del.title = 'Delete this account';
+  del.addEventListener('click', () => deleteAccount(acc));
+  row.appendChild(del);
+  return row;
+}
+
+/** Renaming is the fix for the commonest setup mistake: a display name that
+    doesn't match the PGN headers leaves every uploaded game 'unassigned'.
+    Saving re-matches the whole library, and says how many games moved. */
+function accountEditor(acc) {
+  const row = document.createElement('div');
+  row.className = 'account-row';
+
+  const form = document.createElement('form');
+  form.className = 'account-edit';
+  // Labelled, because the two fields hold near-identical text and an unlabelled
+  // pair gives no clue which one has to match the PGN headers.
+  const field = (text, value) => {
+    const label = document.createElement('label');
+    label.className = 'account-field';
+    const caption = document.createElement('span');
+    caption.textContent = text;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = value;
+    input.required = true;
+    label.append(caption, input);
+    return [label, input];
+  };
+  const [usernameField, username] = field('Account name', acc.username);
+  const [displayField, display] = field('Display name (must match your PGNs)', acc.display_name);
+  const hint = document.createElement('p');
+  hint.className = 'account-hint';
+  hint.textContent = 'The display name is matched against the White/Black headers in your PGNs, '
+    + 'so it should be your chess.com or Lichess handle. The account name is tried too. '
+    + 'Saving re-checks every game you have already uploaded.';
+  const buttons = document.createElement('div');
+  buttons.className = 'row';
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.textContent = 'Save';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', async () => {
+    editingAccountId = null;
+    await showLogin();
+  });
+  buttons.append(save, cancel);
+  form.append(usernameField, displayField, hint, buttons);
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    try {
+      const res = await api(`/api/auth/accounts/${acc.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ username: username.value, display_name: display.value }),
+      });
+      editingAccountId = null;
+      await showLogin(rematchSummary(res.display_name, res.rematched));
+    } catch (e) {
+      loginMessage(e.message, true);
+    }
+  });
+  row.appendChild(form);
+  return row;
+}
+
+/** What a rename did to the library, in one sentence -- the whole point of
+    renaming is usually the games, so silence would hide the result. */
+function rematchSummary(displayName, rematched) {
+  if (!rematched || !rematched.changed) {
+    return `Saved ${displayName}. No games changed side.`;
+  }
+  const bits = [];
+  if (rematched.assigned) bits.push(`${rematched.assigned} now assigned a side`);
+  if (rematched.unassigned) bits.push(`${rematched.unassigned} no longer match and are unassigned`);
+  return `Saved ${displayName}. ${bits.join(', ')}.`;
+}
+
+async function deleteAccount(acc) {
+  const parts = [`${acc.game_count} game${acc.game_count === 1 ? '' : 's'}`];
+  if (acc.analysis_count) parts.push(`${acc.analysis_count} saved analyses`);
+  if (acc.puzzle_count) parts.push(`${acc.puzzle_count} puzzles`);
+  const warning = `Delete the account "${acc.display_name}"?\n\n`
+    + `This also deletes ${parts.join(', ')}. It cannot be undone.`;
+  if (!confirm(warning)) return;
+  // Typing the name is asked for only when there is something to lose: a
+  // blank account is not worth a second dialog.
+  if (acc.game_count > 0) {
+    const typed = prompt(`Type the account name (${acc.username}) to confirm.`);
+    if ((typed || '').trim().toLowerCase() !== acc.username) {
+      loginMessage('Name did not match -- nothing was deleted.', true);
+      return;
+    }
+  }
+  try {
+    const res = await api(`/api/auth/accounts/${acc.id}`, { method: 'DELETE' });
+    editingAccountId = null;
+    await showLogin(`Deleted ${res.display_name}.`);
+  } catch (e) {
+    loginMessage(e.message, true);
   }
 }
 
@@ -87,7 +229,14 @@ document.getElementById('bootstrap-form').addEventListener('submit', async (ev) 
   ev.preventDefault();
   const username = document.getElementById('bootstrap-username').value;
   const display_name = document.getElementById('bootstrap-displayname').value;
-  await api('/api/auth/accounts', { method: 'POST', body: JSON.stringify({ username, display_name }) });
+  try {
+    await api('/api/auth/accounts', { method: 'POST', body: JSON.stringify({ username, display_name }) });
+  } catch (e) {
+    // A duplicate username used to fail as an unhandled rejection: the form
+    // just sat there, having apparently done nothing.
+    loginMessage(e.message, true);
+    return;
+  }
   document.getElementById('bootstrap-form').reset();
   await showLogin();
 });
@@ -99,6 +248,12 @@ document.getElementById('logout-btn').addEventListener('click', async () => {
 });
 
 /* ---------------- App init ---------------- */
+
+/** Every name the logged-in account may appear under in a PGN header. Mirrors
+    the server's `account_names`, so the two agree on which side was yours. */
+function accountNames() {
+  return [state.user.display_name, state.user.username].filter(Boolean);
+}
 
 async function initApp() {
   document.getElementById('whoami').textContent = state.user.display_name;
@@ -608,22 +763,33 @@ function applySavedBoardPrefs() {
 }
 
 async function fillBoardForm() {
-  const sets = await api('/api/asset-sets');
-  // A set with only a board.png belongs in one dropdown and not the other;
-  // offering it in both is how you get an empty board or invisible pieces.
-  for (const [id, key, chosen] of [['b-board-set', 'has_board', state.user.board_set],
-                                   ['b-piece-set', 'has_pieces', state.user.piece_set]]) {
-    const sel = document.getElementById(id);
-    sel.innerHTML = '';
-    for (const set of sets.filter((s) => s[key])) {
-      const opt = document.createElement('option');
-      opt.value = set.name;
-      opt.textContent = set.name;
-      sel.appendChild(opt);
-    }
-    const current = chosen || state.user.asset_set || 'default';
-    if (sets.some((s) => s.name === current && s[key])) sel.value = current;
+  const [boardImages, sets] = await Promise.all([
+    api('/api/board-images'),
+    api('/api/asset-sets'),
+  ]);
+  // Board dropdown: populated from /assets/boards/ (flat .png files)
+  const boardSel = document.getElementById('b-board-set');
+  boardSel.innerHTML = '';
+  for (const img of boardImages.filter((s) => s.has_board)) {
+    const opt = document.createElement('option');
+    opt.value = img.name;
+    opt.textContent = img.name;
+    boardSel.appendChild(opt);
   }
+  const currentBoard = state.user.board_set || state.user.asset_set || 'default';
+  if (boardImages.some((s) => s.name === currentBoard && s.has_board)) boardSel.value = currentBoard;
+
+  // Piece dropdown: populated from asset sets that have all 12 piece images
+  const pieceSel = document.getElementById('b-piece-set');
+  pieceSel.innerHTML = '';
+  for (const set of sets.filter((s) => s.has_pieces)) {
+    const opt = document.createElement('option');
+    opt.value = set.name;
+    opt.textContent = set.name;
+    pieceSel.appendChild(opt);
+  }
+  const currentPieces = state.user.piece_set || state.user.asset_set || 'default';
+  if (sets.some((s) => s.name === currentPieces && s.has_pieces)) pieceSel.value = currentPieces;
   document.getElementById('b-legal-moves').checked = state.user.show_legal_moves !== 0;
   document.getElementById('b-premoves').checked = state.user.allow_premoves !== 0;
   renderBoardPreview(document.getElementById('b-board-set').value,
@@ -639,9 +805,19 @@ function renderBoardPreview(boardSet, pieceSet) {
 
   const bg = document.createElement('img');
   bg.className = 'prev-board';
-  bg.src = `/assets/sets/${boardSet}/board.png`;
   bg.alt = '';
-  bg.onerror = () => { wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%'; };
+  bg.onerror = () => {
+    // First fallback: try the old /assets/sets/{name}/board.png path
+    if (bg.src.includes('/assets/boards/')) {
+      bg.src = `/assets/sets/${boardSet}/board.png`;
+      bg.onerror = () => {
+        wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%';
+      };
+    } else {
+      wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%';
+    }
+  };
+  bg.src = `/assets/boards/${boardSet}.png`;
   wrap.appendChild(bg);
 
   // A representative handful of pieces, laid out on the swatch's 4x4 grid.
@@ -699,6 +875,20 @@ function wirePgnUpload() {
       status.textContent = 'Error: ' + e.message;
     }
   });
+
+  document.getElementById('rematch-colors-btn').addEventListener('click', async () => {
+    const status = document.getElementById('rematch-status');
+    status.textContent = 'Checking...';
+    try {
+      const res = await api('/api/games/rematch-colors', { method: 'POST' });
+      await refreshGameList();
+      status.textContent = res.changed
+        ? `${res.changed} game(s) changed — ${res.assigned} now assigned.`
+        : 'No games changed. Check the display name on your account matches your PGN headers.';
+    } catch (e) {
+      status.textContent = 'Error: ' + e.message;
+    }
+  });
 }
 
 async function refreshGameList() {
@@ -728,16 +918,11 @@ function renderGamePicker() {
     const left = document.createElement('span');
     left.textContent = gameLabel(g);
     row.appendChild(left);
-    if (g.your_color === 'unassigned') {
-      const flag = document.createElement('span');
-      flag.className = 'flag';
-      flag.textContent = '⚠ unassigned';
-      row.appendChild(flag);
-    }
+    row.appendChild(colorControl(g));
     if (g.analyzed) {
       const mark = document.createElement('span');
       mark.className = 'analyzed-mark';
-      mark.textContent = g.analyzed === 'full' ? '\u25CF full' : '\u25CB quick';
+      mark.textContent = { full: '\u25CF full', quick: '\u25CB quick' }[g.analyzed] || '\u25CB sweep';
       mark.title = `has a saved ${g.analyzed} analysis`;
       row.appendChild(mark);
     }
@@ -763,12 +948,59 @@ function renderGamePicker() {
   }
 }
 
+/** The side-you-played chip on a game row, and the way to correct it.
+    Unassigned games are worth shouting about: they're dropped from the
+    strength fit, the trend and the puzzle generator, so a library that's
+    silently all-unassigned looks like an app that just doesn't work. */
+function colorControl(g) {
+  const wrap = document.createElement('span');
+  wrap.className = 'game-color';
+  const unassigned = g.your_color !== 'w' && g.your_color !== 'b';
+
+  const chip = document.createElement('button');
+  chip.className = 'color-chip' + (unassigned ? ' unassigned' : '');
+  chip.textContent = unassigned ? '⚠ set side' : (g.your_color === 'w' ? 'you: White' : 'you: Black');
+  chip.title = unassigned
+    ? "Neither player's name matched this account -- pick which side was yours"
+    : 'Which side was yours (click to change)';
+  chip.addEventListener('click', (ev) => {
+    ev.stopPropagation();       // picking a side shouldn't also load the game
+    wrap.replaceChildren(...picker());
+  });
+  wrap.appendChild(chip);
+
+  function picker() {
+    const choose = async (colour) => {
+      await api(`/api/games/${g.id}/color`, {
+        method: 'PATCH', body: JSON.stringify({ your_color: colour }),
+      });
+      await refreshGameList();
+      // The board faces the side you played, and the move table's left column
+      // is yours, so the open game has to be reloaded to follow the change.
+      if (state.selectedGameId === g.id) await selectGame(g.id);
+    };
+    return [
+      ['w', g.white || 'White'], ['b', g.black || 'Black'], ['unassigned', 'neither'],
+    ].map(([colour, label]) => {
+      const btn = document.createElement('button');
+      btn.className = 'color-choice' + (g.your_color === colour ? ' current' : '');
+      btn.textContent = label;
+      btn.title = colour === 'unassigned' ? 'I played neither side' : `I played as ${label}`;
+      btn.addEventListener('click', (ev) => { ev.stopPropagation(); choose(colour); });
+      return btn;
+    });
+  }
+  return wrap;
+}
+
 async function selectGame(gameId) {
   const game = await api(`/api/games/${gameId}`);
   state.selectedGameId = gameId;
   resetAnalysisState();
   renderGamePicker();
-  state.explorer.loadPGN(game.pgn_text, state.user.display_name);
+  // The stored colour wins: it may have been assigned by hand, which the
+  // header match can't rediscover.
+  state.explorer.loadPGN(game.pgn_text, accountNames(), game.your_color);
   state.flipOverride = false;
   state.explorer.goToStart();
   renderMoveTable();
@@ -1573,7 +1805,7 @@ async function handleBatchMessage(msg) {
   } else if (msg.type === 'game_start') {
     // Section 6: show whichever game is currently being processed.
     try {
-      state.explorer.loadPGN(msg.pgn, state.user.display_name);
+      state.explorer.loadPGN(msg.pgn, accountNames());
       state.explorer.goToStart();
       state.classifications = {};
       renderMoveTable();
@@ -2024,20 +2256,53 @@ function svgEl(name, attrs) {
 }
 
 function wireTrend() {
-  document.getElementById('trend-granularity').addEventListener('change', refreshTrend);
-  document.getElementById('trend-run').addEventListener('change', refreshTrend);
+  for (const id of ['trend-granularity', 'trend-run', 'trend-window',
+                    'trend-window-count', 'trend-window-unit']) {
+    document.getElementById(id).addEventListener('change', refreshTrend);
+  }
+  // `change` on a number input only fires on blur or Enter, so typing a
+  // custom count and waiting would look like nothing happened. Debounced,
+  // because each refit is seconds of work and "12" is typed as "1" then "2".
+  let typing = null;
+  document.getElementById('trend-window-count').addEventListener('input', () => {
+    clearTimeout(typing);
+    typing = setTimeout(refreshTrend, 500);
+  });
   refreshTrend();
 }
+
+/** The `window` query value, and whether the custom count/unit pair applies.
+    Kept in one place so the control and the request can't drift. */
+function trendWindow() {
+  const choice = document.getElementById('trend-window').value;
+  const custom = document.getElementById('trend-window-custom');
+  custom.classList.toggle('hidden', choice !== 'custom');
+  if (choice !== 'custom') return choice;
+  const count = Math.min(Math.max(parseInt(document.getElementById('trend-window-count').value, 10) || 1, 1), 999);
+  return count + document.getElementById('trend-window-unit').value;
+}
+
+// The fit is a bootstrap over every stored position and takes seconds on a
+// large library, so clicking through the controls leaves several requests in
+// flight at once. Only the newest one is allowed to paint: without this, a
+// slow earlier response can land last and show a window the controls no
+// longer say.
+let trendSeq = 0;
 
 async function refreshTrend() {
   const granularity = document.getElementById('trend-granularity').value;
   const runId = document.getElementById('trend-run').value;
   const status = document.getElementById('trend-status');
+  const seq = ++trendSeq;
   status.textContent = 'Loading...';
   try {
-    const data = await api(`/api/trend?granularity=${granularity}` + (runId ? `&run_id=${runId}` : ''));
+    const data = await api(`/api/trend?granularity=${granularity}`
+      + `&window=${encodeURIComponent(trendWindow())}`
+      + (runId ? `&run_id=${runId}` : ''));
+    if (seq !== trendSeq) return;
     renderTrend(data);
   } catch (e) {
+    if (seq !== trendSeq) return;
     status.textContent = 'Error: ' + e.message;
   }
 }
@@ -2051,14 +2316,20 @@ function renderTrend(data) {
 
   const plotted = data.buckets.filter((b) => b.estimate != null || b.actual_elo != null);
   if (!plotted.length) {
-    status.textContent =
-      'Nothing to plot yet — this needs games with a Full analysis (the Maia Elo sweep), '
-      + 'a date in the PGN headers, and your name matching White or Black.';
+    const w = data.window || {};
+    status.textContent = w.applied && w.excluded
+      // Distinguish "you have no data" from "your window hid it all", which
+      // are the same empty chart and completely different problems.
+      ? `Nothing to plot in the last ${w.requested} — ${w.excluded} analysed game(s) `
+        + 'fall outside that window. Widen the timespan to see them.'
+      : 'Nothing to plot yet — this needs games with a Full analysis (the Maia Elo sweep), '
+        + 'a date in the PGN headers, and your name matching White or Black.';
     renderTrendSkipped(verdict, data);
     return;
   }
   status.textContent =
-    `${data.total_games} analysed game(s) across ${data.buckets.length} ${data.granularity} bucket(s).`;
+    `${data.total_games} analysed game(s) across ${data.buckets.length} ${data.granularity} bucket(s)`
+    + `${trendRangeText(data.window)}.`;
 
   chart.appendChild(trendChart(plotted));
   const legend = document.createElement('div');
@@ -2113,13 +2384,24 @@ function renderTrend(data) {
   renderTrendSkipped(table, data);
 }
 
+/** The dates a window actually covered. Always spelled out when one is in
+    force: "the last 6 months" ends at your most recent game, not today, and
+    a reader who assumes otherwise would misread every date on the axis. */
+function trendRangeText(w) {
+  if (!w || !w.start || !w.end) return '';
+  if (!w.applied) return `, ${w.start} to ${w.end}`;
+  const outside = w.excluded ? `, ${w.excluded} older game(s) excluded` : '';
+  return `, covering the last ${w.requested} of play (${w.start} to ${w.end})${outside}`;
+}
+
 function renderTrendSkipped(host, data) {
   const labels = {
-    no_full_analysis: 'no Full analysis (Quick alone has no Elo sweep)',
+    no_full_analysis: 'no Elo sweep yet (Quick alone does not sweep)',
     undated: 'no usable date in the PGN headers',
-    unassigned_color: "your display name didn't match White or Black",
+    unassigned_color: 'no side assigned — set yours on the game in the Games list',
     no_sweep_positions: 'no stored sweep positions',
     no_header_elo: 'no WhiteElo/BlackElo header (still used for the estimate)',
+    outside_window: 'older than the timespan you picked',
   };
   const parts = Object.entries(data.skipped || {})
     .filter(([, n]) => n > 0)

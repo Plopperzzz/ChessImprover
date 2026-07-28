@@ -119,14 +119,35 @@ def save_analysis(user_id: int, game_id: int, mode: str, payload: dict, run_id: 
 
 
 def load_for_game(user_id: int, game_id: int) -> dict | None:
-    """The saved analysis to show when a game is selected. Full mode wins over
-    quick when both exist -- it's a superset -- and otherwise the most recent."""
+    """The saved analysis to show when a game is selected.
+
+    Full mode wins over quick when both exist -- it's a superset -- and
+    otherwise the most recent. The Elo estimate is looked up separately,
+    because the three modes carry different halves of the picture: a quick run
+    has per-move classifications and no estimate, a standalone sweep has an
+    estimate and no moves. Taking simply the newest row would let a sweep run
+    afterwards blank out the move classifications on screen, and a quick run
+    afterwards blank out the estimate.
+    """
     with db_cursor() as conn:
         row = conn.execute(
             """SELECT * FROM run_games WHERE user_id = ? AND game_id = ?
-               ORDER BY (mode = 'full') DESC, analyzed_at DESC LIMIT 1""",
+                 AND mode IN ('full', 'quick')
+               ORDER BY (mode = 'full') DESC, analyzed_at DESC, id DESC LIMIT 1""",
             (user_id, game_id),
         ).fetchone()
+        # `analyzed_at` only has second resolution, so two runs finishing in the
+        # same second would otherwise tie and pick arbitrarily; id breaks it in
+        # the same direction, and a full run outranks a bare sweep regardless.
+        estimate = conn.execute(
+            """SELECT * FROM run_games WHERE user_id = ? AND game_id = ?
+                 AND results_json IS NOT NULL
+               ORDER BY (mode = 'full') DESC, analyzed_at DESC, id DESC LIMIT 1""",
+            (user_id, game_id),
+        ).fetchone()
+        if not row:
+            # A sweep with nothing else analysed still has something to show.
+            row = estimate
         if not row:
             return None
         moves = conn.execute(
@@ -135,29 +156,36 @@ def load_for_game(user_id: int, game_id: int) -> dict | None:
                FROM analysis_moves WHERE run_game_id = ? ORDER BY ply""",
             (row["id"],),
         ).fetchall()
+    source = estimate or row
     return {
         "run_game_id": row["id"],
+        # Which row the grid/results/sweep positions came from -- not always the
+        # row the moves came from, so a copy knows where to read the positions.
+        "estimate_run_game_id": source["id"],
         "run_id": row["run_id"],
         "mode": row["mode"],
         "analyzed_at": row["analyzed_at"],
-        "grid": json.loads(row["grid_json"]) if row["grid_json"] else None,
-        "results": json.loads(row["results_json"]) if row["results_json"] else None,
-        "model_note": row["engine_note"],
-        "maia_model_size": row["maia_model_size"],
+        "grid": json.loads(source["grid_json"]) if source["grid_json"] else None,
+        "results": json.loads(source["results_json"]) if source["results_json"] else None,
+        "model_note": source["engine_note"],
+        "maia_model_size": source["maia_model_size"],
         "moves": [dict(m) for m in moves],
     }
 
 
 def analyzed_game_ids(user_id: int) -> dict[int, str]:
     """{game_id: mode} for games with a saved analysis, so the picker can mark
-    them without a request per row."""
+    them without a request per row. The most complete mode a game has is the
+    one reported: full covers quick, and both say more than a bare sweep."""
     with db_cursor() as conn:
         rows = conn.execute(
-            """SELECT game_id, MAX(mode = 'full') AS has_full
+            """SELECT game_id, MAX(mode = 'full') AS has_full,
+                      MAX(mode = 'quick') AS has_quick
                FROM run_games WHERE user_id = ? GROUP BY game_id""",
             (user_id,),
         ).fetchall()
-    return {r["game_id"]: ("full" if r["has_full"] else "quick") for r in rows}
+    return {r["game_id"]: ("full" if r["has_full"] else "quick" if r["has_quick"] else "sweep")
+            for r in rows}
 
 
 class RunIn(BaseModel):
@@ -266,7 +294,8 @@ def append_to_run(run_id: int, body: AppendIn, user: dict = Depends(require_user
         raise HTTPException(404, "that game has no saved analysis to append")
     with db_cursor() as conn:
         source = conn.execute(
-            "SELECT * FROM sweep_positions WHERE run_game_id = ?", (saved["run_game_id"],)
+            "SELECT * FROM sweep_positions WHERE run_game_id = ?",
+            (saved["estimate_run_game_id"],),
         ).fetchall()
     payload = {
         "moves": saved["moves"],
