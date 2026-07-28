@@ -2235,20 +2235,53 @@ function svgEl(name, attrs) {
 }
 
 function wireTrend() {
-  document.getElementById('trend-granularity').addEventListener('change', refreshTrend);
-  document.getElementById('trend-run').addEventListener('change', refreshTrend);
+  for (const id of ['trend-granularity', 'trend-run', 'trend-window',
+                    'trend-window-count', 'trend-window-unit']) {
+    document.getElementById(id).addEventListener('change', refreshTrend);
+  }
+  // `change` on a number input only fires on blur or Enter, so typing a
+  // custom count and waiting would look like nothing happened. Debounced,
+  // because each refit is seconds of work and "12" is typed as "1" then "2".
+  let typing = null;
+  document.getElementById('trend-window-count').addEventListener('input', () => {
+    clearTimeout(typing);
+    typing = setTimeout(refreshTrend, 500);
+  });
   refreshTrend();
 }
+
+/** The `window` query value, and whether the custom count/unit pair applies.
+    Kept in one place so the control and the request can't drift. */
+function trendWindow() {
+  const choice = document.getElementById('trend-window').value;
+  const custom = document.getElementById('trend-window-custom');
+  custom.classList.toggle('hidden', choice !== 'custom');
+  if (choice !== 'custom') return choice;
+  const count = Math.min(Math.max(parseInt(document.getElementById('trend-window-count').value, 10) || 1, 1), 999);
+  return count + document.getElementById('trend-window-unit').value;
+}
+
+// The fit is a bootstrap over every stored position and takes seconds on a
+// large library, so clicking through the controls leaves several requests in
+// flight at once. Only the newest one is allowed to paint: without this, a
+// slow earlier response can land last and show a window the controls no
+// longer say.
+let trendSeq = 0;
 
 async function refreshTrend() {
   const granularity = document.getElementById('trend-granularity').value;
   const runId = document.getElementById('trend-run').value;
   const status = document.getElementById('trend-status');
+  const seq = ++trendSeq;
   status.textContent = 'Loading...';
   try {
-    const data = await api(`/api/trend?granularity=${granularity}` + (runId ? `&run_id=${runId}` : ''));
+    const data = await api(`/api/trend?granularity=${granularity}`
+      + `&window=${encodeURIComponent(trendWindow())}`
+      + (runId ? `&run_id=${runId}` : ''));
+    if (seq !== trendSeq) return;
     renderTrend(data);
   } catch (e) {
+    if (seq !== trendSeq) return;
     status.textContent = 'Error: ' + e.message;
   }
 }
@@ -2262,14 +2295,20 @@ function renderTrend(data) {
 
   const plotted = data.buckets.filter((b) => b.estimate != null || b.actual_elo != null);
   if (!plotted.length) {
-    status.textContent =
-      'Nothing to plot yet — this needs games with a Full analysis (the Maia Elo sweep), '
-      + 'a date in the PGN headers, and your name matching White or Black.';
+    const w = data.window || {};
+    status.textContent = w.applied && w.excluded
+      // Distinguish "you have no data" from "your window hid it all", which
+      // are the same empty chart and completely different problems.
+      ? `Nothing to plot in the last ${w.requested} — ${w.excluded} analysed game(s) `
+        + 'fall outside that window. Widen the timespan to see them.'
+      : 'Nothing to plot yet — this needs games with a Full analysis (the Maia Elo sweep), '
+        + 'a date in the PGN headers, and your name matching White or Black.';
     renderTrendSkipped(verdict, data);
     return;
   }
   status.textContent =
-    `${data.total_games} analysed game(s) across ${data.buckets.length} ${data.granularity} bucket(s).`;
+    `${data.total_games} analysed game(s) across ${data.buckets.length} ${data.granularity} bucket(s)`
+    + `${trendRangeText(data.window)}.`;
 
   chart.appendChild(trendChart(plotted));
   const legend = document.createElement('div');
@@ -2324,6 +2363,16 @@ function renderTrend(data) {
   renderTrendSkipped(table, data);
 }
 
+/** The dates a window actually covered. Always spelled out when one is in
+    force: "the last 6 months" ends at your most recent game, not today, and
+    a reader who assumes otherwise would misread every date on the axis. */
+function trendRangeText(w) {
+  if (!w || !w.start || !w.end) return '';
+  if (!w.applied) return `, ${w.start} to ${w.end}`;
+  const outside = w.excluded ? `, ${w.excluded} older game(s) excluded` : '';
+  return `, covering the last ${w.requested} of play (${w.start} to ${w.end})${outside}`;
+}
+
 function renderTrendSkipped(host, data) {
   const labels = {
     no_full_analysis: 'no Elo sweep yet (Quick alone does not sweep)',
@@ -2331,6 +2380,7 @@ function renderTrendSkipped(host, data) {
     unassigned_color: 'no side assigned — set yours on the game in the Games list',
     no_sweep_positions: 'no stored sweep positions',
     no_header_elo: 'no WhiteElo/BlackElo header (still used for the estimate)',
+    outside_window: 'older than the timespan you picked',
   };
   const parts = Object.entries(data.skipped || {})
     .filter(([, n]) => n > 0)

@@ -179,10 +179,21 @@ top bar mutes them, and the choice survives a reload.
 ### Trend over time
 
 Estimated Elo per date bucket, plotted against the rating in your PGN
-headers, bucketed by ISO week, month or year and optionally scoped to one
-run. Switching granularity **re-fits the cached per-position sweep scores and
-never touches an engine** -- that is the whole reason section 13 stores the
-score matrices rather than just the final numbers.
+headers, bucketed by ISO week, month or year, optionally scoped to one run,
+and optionally narrowed to a **timespan** -- the last 4 weeks, 6 months,
+year, or any count and unit you type. Switching any of those **re-fits the
+cached per-position sweep scores and never touches an engine** -- that is the
+whole reason section 13 stores the score matrices rather than just the final
+numbers.
+
+The timespan ends at your **most recent analysed game, not at today**. A
+stretch where you didn't play is not a decline, and anchoring to today would
+empty the chart for anyone coming back after a couple of months off -- which
+is exactly when they're most likely to look. Because that reading isn't the
+obvious one, the status line always spells out the dates the window actually
+covered, and how many older games it left out. Narrowing the window also
+narrows the trend fit, so the rate is re-quoted in a unit that suits the
+shorter span (see below) rather than extrapolating six weeks out to a year.
 
 Three things about it are deliberate:
 

@@ -259,6 +259,30 @@
             <label>From
               <select id="trend-run"><option value="">All runs</option></select>
             </label>
+            <!-- The window ends at your most recent analysed game, not today,
+                 so a break from chess doesn't empty the chart. The status
+                 line names the dates it actually covered. -->
+            <label>Timespan
+              <select id="trend-window">
+                <option value="all" selected>All time</option>
+                <option value="4w">Last 4 weeks</option>
+                <option value="12w">Last 12 weeks</option>
+                <option value="6m">Last 6 months</option>
+                <option value="1y">Last year</option>
+                <option value="custom">Custom…</option>
+              </select>
+            </label>
+            <label id="trend-window-custom" class="hidden">Last
+              <span class="window-custom">
+                <input type="number" id="trend-window-count" min="1" max="999" value="3" />
+                <select id="trend-window-unit">
+                  <option value="d">days</option>
+                  <option value="w">weeks</option>
+                  <option value="m" selected>months</option>
+                  <option value="y">years</option>
+                </select>
+              </span>
+            </label>
           </div>
           <!-- Re-bucketing re-fits the cached per-position scores; no engine
                runs, so switching granularity is instant. -->
