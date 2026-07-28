@@ -450,8 +450,18 @@ input[type="text"], input[type="number"], textarea, select {
 }
 
 #nav-buttons { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
-#board-controls { display: flex; gap: 8px; }
-#board-settings-btn { margin-left: auto; }
+/* Top right of the board: aligned to the board's right edge, above it. */
+#board-controls {
+  display: flex;
+  gap: 6px;
+  width: var(--board-w);
+  justify-content: flex-end;
+}
+#board-controls button { padding: 3px 9px; font-size: 13px; line-height: 1.5; }
+/* A standing eval bar makes the board row wider than the board; the controls
+   line up with the board, not the row. */
+#board-col.eval-left #board-controls { padding-left: 34px; }
+#board-col.eval-right #board-controls { padding-right: 34px; }
 /* Only visible when the board is showing an earlier position of a game still
    in progress, so it reads as a state you're in, not as decoration. */
 #board-note {
@@ -468,7 +478,9 @@ input[type="text"], input[type="number"], textarea, select {
 /* The plates hug the board rather than floating in the column's gap. */
 #plate-top { margin-bottom: -4px; }
 #plate-bottom { margin-top: -4px; }
-.fen-row { display: flex; gap: 8px; width: var(--board-w); }
+/* In the board dialog and the Load games panel now, so it takes the width
+   of whatever it is in rather than the board's. */
+.fen-row { display: flex; gap: 8px; width: 100%; margin-top: 6px; }
 .fen-row input { flex: 1; font-family: monospace; }
 
 #side-col {
@@ -493,17 +505,17 @@ input[type="text"], input[type="number"], textarea, select {
 /* Player plates: the board's own width, so they read as part of it. The one
    below the board is always whoever is at the bottom, which is you unless
    the board has been flipped. */
+/* Names, not cards. The plate is a line of text above and below the board --
+   a bordered panel around each one boxed in the board it belongs to. */
 .player-plate {
   display: flex;
   align-items: center;
   gap: 7px;
   width: var(--board-w);
-  padding: 5px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
+  padding: 1px 2px;
   font-size: 14px;
   line-height: 1.3;
+  font-weight: 600;
 }
 .player-plate .spacer { flex: 1; }
 .plate-dot {
@@ -758,10 +770,17 @@ input[type="text"], input[type="number"], textarea, select {
 .run-controls button { padding: 6px 10px; }
 #run-delete:hover { color: #e05050; border-color: #e05050; }
 
-#move-table-wrap { max-height: 300px; overflow-y: auto; }
-/* Beside the board, the moves scroll within roughly the board's height --
-   less what the plot above and the buttons below now take out of the column. */
-@media (min-width: 1150px) { #move-table-wrap { max-height: calc(var(--board-w) - 90px); } }
+#move-table-wrap { overflow-y: auto; min-height: 60px; }
+/* Beside the board, the column ends where the board does: the plot and the
+   step buttons take what they need and the move list gets the rest, scrolling
+   inside itself rather than growing past the board. Below 1150px the columns
+   have stacked and there is no board beside it to match. */
+@media (min-width: 1150px) {
+  #moves-col { max-height: calc(var(--board-w) + 60px); }
+  #moves-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  #move-table-wrap { flex: 1; min-height: 0; }
+}
+@media (max-width: 1149px) { #move-table-wrap { max-height: 300px; } }
 #move-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 #move-table thead th {
   position: sticky; top: 0; z-index: 1;      /* stays put while the list scrolls */
@@ -924,3 +943,39 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
      wrap, so it just needs to not eat the whole screen. */
   #move-table-wrap { max-height: 40vh; }
 }
+
+/* ---------------- Live engine lines ----------------
+   What the eval bar's engine is actually looking at, in the panel that starts
+   the analyses rather than beside the board -- it is a lot of text, and the
+   board column is the one place with no room for any. */
+.live-row { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; }
+.live-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.live-row select { width: auto; }
+#live-lines-btn.on { border-color: var(--accent); color: var(--accent); }
+#live-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.live-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.live-score { font-weight: 700; font-variant-numeric: tabular-nums; flex: none; min-width: 48px; }
+.live-score.white-better { color: #e8eaf0; }
+.live-score.black-better { color: #8b93a7; }
+/* The line itself is the long part: it scrolls sideways rather than wrapping
+   into three rows and shoving the panel around every time the depth ticks. */
+.live-pv { flex: 1; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.live-pv::-webkit-scrollbar { display: none; }
+.live-depth { color: var(--muted); font-size: 11px; flex: none; }
+/* A second hiding switch, so a control that is off for this tab and a control
+   that is off because the feature is off don't fight over one class. */
+.tab-hidden { display: none !important; }

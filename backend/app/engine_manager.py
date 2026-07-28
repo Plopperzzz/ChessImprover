@@ -247,6 +247,11 @@ class LiveEngineSession:
         self.engine: EngineProcess | None = None
         self._latest_fen: str | None = None
         self._latest_seq = 0
+        # How many lines the client is asking for. Changing it re-runs the
+        # position it is looking at, so the extra lines appear immediately
+        # rather than when it next moves a piece.
+        self._multipv = 1
+        self._sent_multipv = 1
         self._wake = asyncio.Event()
         self._worker_task: asyncio.Task | None = None
         self._closed = False
@@ -265,12 +270,24 @@ class LiveEngineSession:
         self.last_active = time.monotonic()
         self._wake.set()
 
+    def set_multipv(self, lines: int, seq: int):
+        """How many ranked lines to stream. The search in flight is for one
+        line and can't grow into three, so this re-requests the position the
+        client is already on under a new sequence number."""
+        self._multipv = max(1, min(5, int(lines)))
+        if self._latest_fen:
+            self.request(self._latest_fen, seq)
+
     async def _worker_loop(self):
         try:
             while not self._closed:
                 await self._wake.wait()
                 self._wake.clear()
                 fen, seq = self._latest_fen, self._latest_seq
+                if self._sent_multipv != self._multipv:
+                    await self.engine.send_line(
+                        f"setoption name MultiPV value {self._multipv}")
+                    self._sent_multipv = self._multipv
                 await self.engine.send_line(f"position fen {fen}")
                 go_cmd = (
                     f"go movetime {self.limit_value}"

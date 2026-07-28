@@ -11,6 +11,9 @@ const state = {
   ws: null,
   seq: 0,
   lastMoverColor: 'w',
+  // Live engine lines: how many the board is asking for, and the newest
+  // answer for each rank. Cleared whenever the position changes.
+  liveLines: { count: 0, seq: -1, byRank: {} },
   settings: null,
   engineFamilies: [],
   classifications: {}, // ply -> classification dict, from the last completed analysis job
@@ -288,6 +291,7 @@ async function initApp() {
   wireNav();
   wireBoardDialog();
   wireFenBox();
+  wireLiveLines();
   wirePgnUpload();
   wireSettingsDialog();
   wireAnalysis();
@@ -383,7 +387,12 @@ function applyBoardChrome() {
   document.getElementById('eval-bar').classList.toggle('hidden', !analysing);
   document.getElementById('eval-plot-wrap').classList
     .toggle('hidden', !analysing || evalPlotMoves().length < 2);
-  for (const el of document.querySelectorAll('.fen-row')) el.classList.toggle('hidden', !analysing);
+  // The live-analysis controls belong to the analysis tab: during a game or a
+  // puzzle, an engine line beside the board is the answer.
+  for (const id of ['live-lines-btn', 'live-lines-count-row', 'live-lines']) {
+    document.getElementById(id).classList.toggle('tab-hidden', !analysing);
+  }
+  if (!analysing && state.liveLines.count) setLiveLines(0);
   for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
     const btn = document.getElementById(id);
     btn.disabled = !steppable;
@@ -911,6 +920,9 @@ function wireBoardDialog() {
 
   document.getElementById('board-settings-btn').addEventListener('click', async () => {
     await fillBoardForm();
+    // The FEN lives in here now, and it is the position as of opening the
+    // dialog -- refreshFenBox keeps it current while the dialog is closed.
+    refreshFenBox();
     dialog.classList.remove('hidden');
   });
 
@@ -1054,17 +1066,120 @@ function wireFenBox() {
   document.getElementById('fen-copy').addEventListener('click', () => {
     navigator.clipboard.writeText(document.getElementById('fen-box').value);
   });
+  // Setting the board is not loading a game. The position goes up and the
+  // move list empties with it (it is a new tree), but the library selection
+  // and the analysis panel are left alone -- pasting a FEN to look at
+  // something shouldn't put away the game you had open.
   document.getElementById('fen-goto-btn').addEventListener('click', () => {
     const fen = document.getElementById('fen-goto').value.trim();
     if (!fen) return;
     const ok = state.explorer.loadFEN(fen);
     if (!ok) { alert('That FEN could not be parsed.'); return; }
-    state.selectedGameId = null;
-    resetAnalysisState();
-    renderGamePicker();
+    // The classifications belonged to the game that was on the board, and
+    // nothing about this position is that game's ply 7.
+    state.classifications = {};
     renderMoveTable();
     syncBoardFull();
   });
+}
+
+/* ---------------- Live engine lines ----------------
+   The eval bar has always been driven by a live Stockfish process on the
+   position in front of you (spec section 3). This shows its working: the top
+   one to three moves it is considering, with what each is worth and the line
+   it expects to follow.
+
+   It reuses that same process and socket rather than starting anything --
+   turning it on asks the session for more ranked lines, turning it off asks
+   for one again, which is what the bar needs anyway. */
+
+function wireLiveLines() {
+  const btn = document.getElementById('live-lines-btn');
+  const count = document.getElementById('live-lines-count');
+  btn.addEventListener('click', () => setLiveLines(state.liveLines.count ? 0 : Number(count.value)));
+  count.addEventListener('change', () => {
+    if (state.liveLines.count) setLiveLines(Number(count.value));
+  });
+}
+
+function setLiveLines(n) {
+  state.liveLines.count = n;
+  state.liveLines.byRank = {};
+  document.getElementById('live-lines-btn').textContent = n ? 'Stop live analysis' : 'Analyse live';
+  document.getElementById('live-lines-btn').classList.toggle('on', !!n);
+  document.getElementById('live-lines-count-row').classList.toggle('hidden', !n);
+  document.getElementById('live-lines').classList.toggle('hidden', !n);
+  renderLiveLines();
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  state.seq += 1;
+  state.liveLines.seq = state.seq;
+  // One line is what the bar needs, so switching off costs the engine nothing
+  // -- it goes back to the search it would have been running anyway.
+  state.ws.send(JSON.stringify({ type: 'multipv', lines: n || 1, seq: state.seq }));
+}
+
+/** Files an `info` line under its rank. Ranks arrive interleaved as the search
+    deepens and each one supersedes the last of its own rank, which is all this
+    has to know. */
+function noteLiveLine(msg) {
+  if (!state.liveLines.count) return;
+  if (msg.seq !== state.seq) return;
+  if (state.liveLines.seq !== msg.seq) {
+    state.liveLines.seq = msg.seq;
+    state.liveLines.byRank = {};
+  }
+  state.liveLines.byRank[msg.multipv || 1] = msg;
+  renderLiveLines();
+}
+
+/** Centipawns as White sees them, from a mover's-perspective info line. The
+    panel is read next to an eval bar that is already White-relative, and two
+    numbers with opposite signs for the same position is the kind of thing
+    nobody notices until it has misled them. */
+function whiteScore(info) {
+  const flip = state.lastMoverColor === 'b' ? -1 : 1;
+  if (info.mate !== null && info.mate !== undefined) {
+    const mate = flip * info.mate;
+    return { text: (mate > 0 ? '#' : '#-') + Math.abs(info.mate), cp: mate > 0 ? 10000 : -10000 };
+  }
+  if (info.cp === null || info.cp === undefined) return null;
+  const cp = flip * info.cp;
+  return { text: (cp > 0 ? '+' : '') + (cp / 100).toFixed(2), cp };
+}
+
+/** The engine's principal variation as SAN, which is the only form it can be
+    read in. Replayed on a scratch board from the position on ours; a line
+    that doesn't replay is truncated rather than dropped, since the first few
+    moves are the part anyone reads. */
+function pvToSan(uciMoves, fen, limit = 8) {
+  const board = new Chess();
+  if (!board.load(fen)) return '';
+  const out = [];
+  for (const uci of (uciMoves || []).slice(0, limit)) {
+    const move = board.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || 'q' });
+    if (!move) break;
+    out.push(move.san);
+  }
+  return out.join(' ');
+}
+
+function renderLiveLines() {
+  const box = document.getElementById('live-lines');
+  if (!state.liveLines.count) { box.innerHTML = ''; return; }
+  const ranks = Object.keys(state.liveLines.byRank).map(Number).sort((a, b) => a - b);
+  if (!ranks.length) { box.innerHTML = '<p class="hint">Thinking...</p>'; return; }
+  const fen = state.explorer.fen;
+  box.innerHTML = ranks.slice(0, state.liveLines.count).map((rank) => {
+    const info = state.liveLines.byRank[rank];
+    const score = whiteScore(info);
+    if (!score) return '';
+    const san = pvToSan(info.pv, fen);
+    return `<div class="live-line">
+        <span class="live-score ${score.cp >= 0 ? 'white-better' : 'black-better'}">${score.text}</span>
+        <span class="live-pv">${san || '—'}</span>
+        <span class="live-depth">d${info.depth || 0}</span>
+      </div>`;
+  }).join('');
 }
 
 /* ---------------- PGN upload + game picker ---------------- */
@@ -3499,7 +3614,9 @@ function connectLiveEval() {
       return;
     }
     if (msg.type === 'info' && msg.seq === state.seq) {
-      updateEvalBar(msg);
+      // Rank 1 is the bar's number; every rank is a row in the lines panel.
+      if ((msg.multipv || 1) === 1) updateEvalBar(msg);
+      noteLiveLine(msg);
     }
   });
   ws.addEventListener('close', () => {
@@ -3507,13 +3624,20 @@ function connectLiveEval() {
       setTimeout(connectLiveEval, 2000); // reconnect (e.g. after phone screen lock)
     }
   });
-  ws.addEventListener('open', () => requestEval());
+  ws.addEventListener('open', () => {
+    // A reconnect gets a fresh engine session, which is back to one line.
+    if (state.liveLines.count) setLiveLines(state.liveLines.count);
+    requestEval();
+  });
 }
 
 function requestEval() {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
   state.seq += 1;
   state.lastMoverColor = state.explorer.moverColor;
+  // The lines described the position we just left.
+  state.liveLines.byRank = {};
+  renderLiveLines();
   state.ws.send(JSON.stringify({ type: 'position', fen: state.explorer.fen, seq: state.seq }));
 }
 

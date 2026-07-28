@@ -103,10 +103,11 @@ engines; `/api/jobs/pool` covers the queue.
 ### The board
 
 The board faces the side **you** played: open a game you had as Black and it
-opens flipped, with your pieces at the bottom. A plate above and below the
-board names the two players with their header ratings, marks which one is
+opens flipped, with your pieces at the bottom. A line of bold text above and below
+the board names the two players with their header ratings, marks which one is
 you, shows the result once the game is over, and carries the clocks during a
-game against Maia. The plates follow the board, so the name under the board
+game against Maia -- text rather than a bordered card, which boxed in the
+board it belonged to. The plates follow the board, so the name under the board
 is always whoever is at the bottom.
 
 `⇅` (or the `f` key) flips it manually; selecting another game clears that
@@ -125,12 +126,15 @@ with no known route into it has no last move to point at. Stepping *backwards*
 lights the move before the one you undid, which is the move that made the
 position you're now looking at.
 
-**⚙ beside the board** opens the board's own settings, separate from Engine
+**⇅ and ⚙ sit at the top right of the board.** ⚙ opens the board's own settings, separate from Engine
 Settings: which board, which pieces, where the evaluation bar goes, and whether
 picking a piece up shows dots on its legal destinations. The **evaluation bar**
 runs along the top of the board (the default) or stands beside it on either
 hand; standing, it is as tall as the board and fills from the bottom for White,
-which is the shape most sites use. Board and pieces are chosen **separately** -- they
+which is the shape most sites use. The **copyable FEN** of whatever is on the
+board is in here too, since it is a thing you want occasionally rather than a
+thing you want taking up space under the board every day. Board and pieces are
+chosen **separately** -- they
 are independent art, and the pairing you want is rarely both halves of one set
 -- and each dropdown offers only the sets that actually contain that half, so
 a set holding just a `board.png` can't leave you with invisible pieces. It
@@ -185,9 +189,21 @@ columns are labelled with the player's name, and yours says `(you)`.
 
 Above the move table sits the whole-game evaluation curve, so a dip and the
 move that caused it are one glance apart. Under it are the four step buttons,
-directly below the moves they walk. The board keeps its own two controls --
-flip and the ⚙ -- because those apply on every tab that has a board, including
-Puzzles, which has no move list to hang them off.
+directly below the moves they walk. The whole column stops where the board
+does: the plot and the buttons take what they need and the move list gets the
+rest, scrolling inside itself rather than running on past the board.
+
+**Analyse live** in the Analysis panel shows what the eval bar's engine is
+actually looking at -- the top one, two or three moves it is considering, each
+with its score, its line as SAN and the depth it has reached. It doesn't start
+anything: the live-eval process has been running on the position in front of
+you the whole time (spec section 3), and this asks that same process for more
+ranked lines. Switching it off asks for one line again, which is what the bar
+needed anyway.
+
+**Pasting a FEN** lives in **Load games** and does exactly one thing: it puts
+that position on the board. It doesn't load a game, doesn't clear the one you
+have selected, and doesn't touch the analysis panel.
 
 ### Opening database
 

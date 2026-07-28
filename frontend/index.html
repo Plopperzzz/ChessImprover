@@ -62,6 +62,11 @@
         <span class="plate-result"></span>
         <span class="plate-clock"></span>
       </div>
+      <!-- Top right of the board, out of the way of the position. -->
+      <div id="board-controls">
+        <button id="nav-flip" title="Flip the board">⇅</button>
+        <button id="board-settings-btn" title="Board settings — board, pieces, eval bar, FEN">⚙</button>
+      </div>
       <!-- The bar and the board it describes. One flex-direction apart: a
            column puts the bar along the top, a row stands it beside. -->
       <div id="board-row">
@@ -77,25 +82,9 @@
         <span class="plate-result"></span>
         <span class="plate-clock"></span>
       </div>
-      <!-- The board's own two controls stay with the board: the steppers walk
-           the move list and have moved under it, but flipping and the board
-           settings apply on every tab that has a board -- including Puzzles,
-           which has no move list to hang them off. -->
-      <div id="board-controls">
-        <button id="nav-flip" title="Flip the board">⇅</button>
-        <button id="board-settings-btn" title="Board settings — board, pieces, eval bar, legal moves">⚙</button>
-      </div>
       <!-- Only ever shown when the board is behind the live game: the nav
            buttons work during a game, so there has to be a way back. -->
       <div id="board-note" class="hidden"></div>
-      <div class="fen-row">
-        <input type="text" id="fen-box" readonly />
-        <button id="fen-copy">Copy</button>
-      </div>
-      <div class="fen-row">
-        <input type="text" id="fen-goto" placeholder="paste a FEN to jump to it" />
-        <button id="fen-goto-btn">Go</button>
-      </div>
     </section>
 
     <section id="moves-col" data-tabs="analysis play">
@@ -146,6 +135,12 @@
             <textarea id="pgn-paste" placeholder="...or paste PGN text here"></textarea>
             <button id="pgn-upload-btn">Upload</button>
             <div id="upload-status"></div>
+            <!-- Sets the board and nothing else: no game is loaded, and the
+                 library selection is left where it was. -->
+            <div class="fen-row">
+              <input type="text" id="fen-goto" placeholder="paste a FEN to set the board" />
+              <button id="fen-goto-btn">Set</button>
+            </div>
           </div>
         </details>
 
@@ -183,6 +178,17 @@
             <button id="full-analysis-btn" disabled title="Quick + Maia Elo sweep + Great/Brilliant">Full</button>
             <button id="analysis-cancel" class="hidden">Cancel</button>
           </div>
+          <div class="live-row">
+            <button type="button" id="live-lines-btn">Analyse live</button>
+            <label id="live-lines-count-row" class="hidden">Lines
+              <select id="live-lines-count">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+              </select>
+            </label>
+          </div>
+          <div id="live-lines" class="hidden"></div>
           <div id="analysis-progress"><div id="analysis-progress-fill"></div></div>
           <div id="analysis-status"></div>
           <div id="analysis-summary"></div>
@@ -524,6 +530,15 @@
           move lands. Touching the board withdraws it, and a pre-move that
           isn't legal in the position that arrives is simply dropped.
         </p>
+      </fieldset>
+
+      <fieldset>
+        <legend>This position</legend>
+        <div class="fen-row">
+          <input type="text" id="fen-box" readonly />
+          <button type="button" id="fen-copy">Copy</button>
+        </div>
+        <p class="panel-note">The FEN of whatever is on the board right now.</p>
       </fieldset>
 
       <div class="dialog-actions">
