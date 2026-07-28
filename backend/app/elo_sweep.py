@@ -87,6 +87,12 @@ CEILING_SHORTFALL = 0.90
 # Above this the sweep is taken to have reached the curve, which is what makes
 # an edge-pinned peak trustworthy as a floor rather than an artefact.
 CEILING_REACHED = 0.95
+# Far below the shortfall threshold rather than a little under it. Simulated
+# above: a player 400 Elo off the end of the grid still manages 0.79, and a
+# genuine in-grid player 0.95+, so two thirds of the expected rate is not a
+# player the sweep merely struggled with -- it is one it never located. A
+# beginner whose moves no Maia setting predicts lands at 0.3.
+CEILING_LOST = 0.70
 
 
 def hits(rank_matrix: np.ndarray, top_n: int = 1) -> np.ndarray:
@@ -483,11 +489,24 @@ def _confidence(*, n_fit, n_total, rates, params, se, ci_low, ci_high, elos, pea
         score -= 1
         reasons.append("peak sits at the edge of the swept range -- widen the Elo range")
 
-    # Away from the edges a shortfall is not about the grid at all. The player
-    # is simply harder to predict than the population Maia was measured on --
-    # which is worth saying plainly, because it is a fact about how they play
-    # rather than a failure of the estimate.
-    if ceiling and not edged and not ceiling["reached"]:
+    # A shortfall this deep is not "harder to predict than the field", it is
+    # the sweep not having found the player at all: no Elo on the grid agreed
+    # with them much more than any other, so the peak is where the noise put
+    # it. That happens when someone is far below the weakest rating Maia can
+    # model, and saying it any more gently reads as a rating.
+    if ceiling and not ceiling["reached"] and ceiling["ratio"] < CEILING_LOST:
+        score -= 1
+        reasons.append(
+            f"{ceiling['model']} agreed with {ceiling['observed']:.1%} of these moves at its best "
+            f"setting, against the {ceiling['expected']:.1%} it manages on players at "
+            f"{round(peak)} -- no Elo on the grid explains this play, so the number above is "
+            f"where the fit landed rather than a strength. Expect this below about 1100, "
+            f"which is the weakest rating Maia was trained on")
+    # Away from the edges a milder shortfall is not about the grid at all. The
+    # player is simply harder to predict than the population Maia was measured
+    # on -- which is worth saying plainly, because it is a fact about how they
+    # play rather than a failure of the estimate.
+    elif ceiling and not edged and not ceiling["reached"]:
         gap = f", the rate of a {ceiling['implied_rating']}" if ceiling["implied_rating"] else ""
         reasons.append(
             f"your moves match {ceiling['model']} {ceiling['observed']:.1%} of the time at best{gap}, "
