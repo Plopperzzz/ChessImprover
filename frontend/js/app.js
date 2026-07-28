@@ -763,22 +763,33 @@ function applySavedBoardPrefs() {
 }
 
 async function fillBoardForm() {
-  const sets = await api('/api/asset-sets');
-  // A set with only a board.png belongs in one dropdown and not the other;
-  // offering it in both is how you get an empty board or invisible pieces.
-  for (const [id, key, chosen] of [['b-board-set', 'has_board', state.user.board_set],
-                                   ['b-piece-set', 'has_pieces', state.user.piece_set]]) {
-    const sel = document.getElementById(id);
-    sel.innerHTML = '';
-    for (const set of sets.filter((s) => s[key])) {
-      const opt = document.createElement('option');
-      opt.value = set.name;
-      opt.textContent = set.name;
-      sel.appendChild(opt);
-    }
-    const current = chosen || state.user.asset_set || 'default';
-    if (sets.some((s) => s.name === current && s[key])) sel.value = current;
+  const [boardImages, sets] = await Promise.all([
+    api('/api/board-images'),
+    api('/api/asset-sets'),
+  ]);
+  // Board dropdown: populated from /assets/boards/ (flat .png files)
+  const boardSel = document.getElementById('b-board-set');
+  boardSel.innerHTML = '';
+  for (const img of boardImages.filter((s) => s.has_board)) {
+    const opt = document.createElement('option');
+    opt.value = img.name;
+    opt.textContent = img.name;
+    boardSel.appendChild(opt);
   }
+  const currentBoard = state.user.board_set || state.user.asset_set || 'default';
+  if (boardImages.some((s) => s.name === currentBoard && s.has_board)) boardSel.value = currentBoard;
+
+  // Piece dropdown: populated from asset sets that have all 12 piece images
+  const pieceSel = document.getElementById('b-piece-set');
+  pieceSel.innerHTML = '';
+  for (const set of sets.filter((s) => s.has_pieces)) {
+    const opt = document.createElement('option');
+    opt.value = set.name;
+    opt.textContent = set.name;
+    pieceSel.appendChild(opt);
+  }
+  const currentPieces = state.user.piece_set || state.user.asset_set || 'default';
+  if (sets.some((s) => s.name === currentPieces && s.has_pieces)) pieceSel.value = currentPieces;
   document.getElementById('b-legal-moves').checked = state.user.show_legal_moves !== 0;
   document.getElementById('b-premoves').checked = state.user.allow_premoves !== 0;
   renderBoardPreview(document.getElementById('b-board-set').value,
@@ -794,9 +805,19 @@ function renderBoardPreview(boardSet, pieceSet) {
 
   const bg = document.createElement('img');
   bg.className = 'prev-board';
-  bg.src = `/assets/sets/${boardSet}/board.png`;
   bg.alt = '';
-  bg.onerror = () => { wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%'; };
+  bg.onerror = () => {
+    // First fallback: try the old /assets/sets/{name}/board.png path
+    if (bg.src.includes('/assets/boards/')) {
+      bg.src = `/assets/sets/${boardSet}/board.png`;
+      bg.onerror = () => {
+        wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%';
+      };
+    } else {
+      wrap.style.background = 'repeating-conic-gradient(#2a3040 0% 25%, #1a1f2c 0% 50%) 50% / 50% 50%';
+    }
+  };
+  bg.src = `/assets/boards/${boardSet}.png`;
   wrap.appendChild(bg);
 
   // A representative handful of pieces, laid out on the swatch's 4x4 grid.

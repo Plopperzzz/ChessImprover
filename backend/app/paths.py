@@ -38,3 +38,16 @@ def asset_set_details() -> list[dict]:
             "has_pieces": all(os.path.isfile(os.path.join(directory, f)) for f in PIECE_FILES),
         })
     return out
+
+def list_board_images() -> list[dict]:
+    boards_dir = os.path.join(ASSETS_DIR, "boards")
+    if not os.path.isdir(boards_dir):
+        return []
+    out = []
+    for name in sorted(os.listdir(boards_dir)):
+        if name.lower().endswith(".png"):
+            out.append({
+                "name": name[:-4],  # strip .png extension
+                "has_board": True,
+            })
+    return out

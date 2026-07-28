@@ -9,7 +9,7 @@ from .auth import USER_FIELDS, require_user
 from .db import db_cursor
 from . import engine_probe, engines
 from .maia import FALLBACK_SIZES, discover_sizes, resolve_binary
-from .paths import ENGINES_DIR, list_asset_sets
+from .paths import ENGINES_DIR, list_asset_sets, list_board_images
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -190,12 +190,20 @@ def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
             raise HTTPException(400, "display_name cannot be blank")
         updates["display_name"] = name
 
-    available = list_asset_sets()
+    available_sets = list_asset_sets()
+    board_names = {img["name"] for img in list_board_images()}
 
     def check(value: str) -> str:
-        if value not in available:
-            raise HTTPException(400, f"unknown asset set '{value}' (available: {available})")
+        if value not in available_sets:
+            raise HTTPException(400, f"unknown asset set '{value}' (available: {available_sets})")
         return value
+
+    def check_board(value: str) -> str:
+        """Board names come from either assets/sets/{name}/board.png or
+        assets/boards/{name}.png, so validate against both sources."""
+        if value in board_names or value in available_sets:
+            return value
+        raise HTTPException(400, f"unknown board set '{value}' (available: {sorted(board_names | set(available_sets))})")
 
     # asset_set predates the board/piece split and means "use this set for
     # both", which is still what a client that doesn't know about the split
@@ -205,7 +213,7 @@ def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
         updates["board_set"] = body.asset_set
         updates["piece_set"] = body.asset_set
     if body.board_set is not None:
-        updates["board_set"] = check(body.board_set)
+        updates["board_set"] = check_board(body.board_set)
     if body.piece_set is not None:
         updates["piece_set"] = check(body.piece_set)
     if body.show_legal_moves is not None:
