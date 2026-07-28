@@ -773,6 +773,66 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
 .browse-entry.dir::before { content: "📁 "; }
 .browse-entry.file::before { content: "📄 "; }
 
+/* ---------------- Opening database ---------------- */
+
+#opening-total {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.op-total-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+#opening-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+#opening-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 6px 4px 0;
+}
+#opening-table td { padding: 3px 6px 3px 0; }
+/* Every row is a move you can play, so the whole row is the target. */
+#opening-table tbody tr { cursor: pointer; }
+#opening-table tbody tr:hover { background: #24314a; }
+.op-san { font-weight: 600; white-space: nowrap; }
+.op-games { white-space: nowrap; color: var(--muted); }
+.op-share { margin-left: 6px; font-size: 11px; opacity: 0.75; }
+.op-wdl { width: 100%; }
+.op-rating { color: var(--muted); font-size: 12px; text-align: right; }
+/* White / draw / black in the colours of the thing they describe, so the bar
+   reads without a legend. */
+.wdl {
+  display: flex;
+  width: 100%;
+  min-width: 90px;
+  height: 15px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--border);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+.wdl > span { overflow: hidden; }
+.wdl-w { background: #e8eaf0; color: #14161c; }
+.wdl-d { background: #6b7285; color: #e8eaf0; }
+.wdl-b { background: #14161c; color: #e8eaf0; }
+.hint { font-size: 12px; color: var(--muted); margin: 6px 0; }
+.hint-cmd {
+  font-family: monospace;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+
 @media (max-width: 700px) {
   #layout { padding: 10px; gap: 10px; }
   #tabs { padding: 0 8px; }

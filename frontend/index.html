@@ -117,6 +117,17 @@
       <!-- ============ Analyse a game ============ -->
       <div class="tab-panels" id="panels-analysis" role="tabpanel"
            aria-labelledby="tab-btn-analysis">
+        <!-- The reference library, answering "what do people play here?" for
+             whatever is on the board. Push moves around on the board and it
+             follows you -- no engine, no game, just the database. -->
+        <details class="panel collapsible" id="opening-panel" open>
+          <summary><h3>Opening database</h3><span class="panel-summary" id="opening-summary"></span></summary>
+          <div class="collapsible-body">
+            <div id="opening-total"></div>
+            <div id="opening-body"></div>
+          </div>
+        </details>
+
         <details class="panel collapsible" id="upload-panel">
           <summary><h3>Load games</h3><span class="panel-summary" id="upload-summary"></span></summary>
           <div class="collapsible-body">

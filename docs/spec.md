@@ -99,6 +99,11 @@
   square around a circular hole cut for the piece instead of a dot.
 - Board sized responsively from available viewport space, clamped to a
   sensible min/max — must work acceptably on a phone screen.
+- Opening database (beyond the spec): a panel beside the analysis board
+  listing every move a reference PGN library played from the current
+  position, with game counts, the white/draw/black split and average
+  rating; clicking a row plays the move. Built once from a PGN dump by
+  `app.opening_import` into its own SQLite file, keyed by EPD.
 
 ## 6. Board Animation During Analysis
 

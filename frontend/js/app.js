@@ -294,6 +294,7 @@ async function initApp() {
   wireBatch();
   wireStrength();
   wireTrend();
+  wireOpeningPanel();
   wirePuzzles();
   wirePlay();
   // Last of the wiring: opening a tab can enter play or puzzle mode, which
@@ -452,8 +453,13 @@ function refreshLastMove() {
   state.board.setLastMove(node && node.from, node && node.to);
 }
 
+/** Everything the analysis board does to the position -- a move played on it,
+    a step through the game, a jump to a node or a pasted FEN -- comes through
+    here, which is why the opening lookup hangs off it rather than being
+    repeated at half a dozen call sites. */
 function refreshFenBox() {
   document.getElementById('fen-box').value = state.explorer.fen;
+  refreshOpeningStats();
 }
 
 async function onBoardMove(from, to, promotion) {
@@ -466,6 +472,126 @@ async function onBoardMove(from, to, promotion) {
   renderMoveTable(); // a new variation node may have just been created
   refreshMoveTableHighlight();
   requestEval();
+}
+
+/* ---------------- Opening database ----------------
+   What a large reference library played from the position in front of you.
+   The analysis board already lets you push moves around freely -- no engine,
+   no opponent -- so this needs no mode of its own: it follows the board, and
+   clicking a row plays that move, which is the fastest way to walk a line.
+
+   Every lookup is sequenced. Clicking down a variation fires a request per
+   position and they can come back out of order; the answer to the position
+   you're on now is the only one allowed to reach the screen. */
+
+const opening = { seq: 0, status: null };
+
+function wireOpeningPanel() {
+  const panel = document.getElementById('opening-panel');
+  // Nothing is fetched for a folded panel -- but unfolding it is a request to
+  // see the position you're on, not the one you were on when you folded it.
+  panel.addEventListener('toggle', () => { if (panel.open) refreshOpeningStats(); });
+  document.getElementById('opening-body').addEventListener('click', (ev) => {
+    const row = ev.target.closest('tr[data-uci]');
+    if (!row) return;
+    const uci = row.dataset.uci;
+    onBoardMove(uci.slice(0, 2), uci.slice(2, 4), uci[4] || undefined);
+  });
+  refreshOpeningStatus();
+}
+
+async function refreshOpeningStatus() {
+  try {
+    opening.status = await api('/api/openings/status');
+  } catch (err) {
+    opening.status = null;
+  }
+  refreshOpeningStats();
+}
+
+/** Debounced, because the position can change a hundred times in a few
+    seconds -- an analysis run steps the board through a whole game -- and
+    only the position it settles on is worth asking about. */
+function refreshOpeningStats() {
+  clearTimeout(opening.timer);
+  opening.timer = setTimeout(loadOpeningStats, 120);
+}
+
+async function loadOpeningStats() {
+  const panel = document.getElementById('opening-panel');
+  if (!panel || !panel.open || !boardIsAnalysing()) return;
+  const seq = ++opening.seq;
+  let res = null;
+  try {
+    res = await api('/api/openings/stats?fen=' + encodeURIComponent(state.explorer.fen));
+  } catch (err) { /* rendered as "no database" below */ }
+  if (seq !== opening.seq) return;   // a later position has already answered
+  renderOpeningStats(res);
+}
+
+function renderOpeningStats(res) {
+  const summary = document.getElementById('opening-summary');
+  const totalEl = document.getElementById('opening-total');
+  const body = document.getElementById('opening-body');
+
+  if (!res || !res.available) {
+    summary.textContent = 'not built';
+    totalEl.innerHTML = '';
+    body.innerHTML = `<p class="hint">No opening database yet. Build one from a PGN library
+      — LumbrasGigaBase, or any other — by running this in <code>backend/</code>:</p>
+      <pre class="hint-cmd">python -m app.opening_import /path/to/LumbrasGigaBase.pgn</pre>
+      <p class="hint">It indexes the first 12 moves of each game by default
+      (<code>--max-plies</code>), and takes a while on a giga-base. The server
+      picks it up with no restart.</p>`;
+    return;
+  }
+
+  const s = opening.status;
+  summary.textContent = s && s.games ? `${fmtCount(s.games)} games` : '';
+
+  if (!res.total.games) {
+    totalEl.innerHTML = '';
+    body.innerHTML = '<p class="hint">Out of book — no game in the database reached this position.</p>';
+    return;
+  }
+
+  totalEl.innerHTML = `<span class="op-total-count">${res.total.games.toLocaleString()} games</span>`
+    + wdlBar(res.total, res.total.games);
+
+  const rows = res.moves.map((m) => `
+    <tr data-uci="${m.uci}" title="Play ${m.san}">
+      <td class="op-san">${m.san}</td>
+      <td class="op-games">${fmtCount(m.games)}<span class="op-share">${
+        Math.round((m.games / res.total.games) * 100)}%</span></td>
+      <td class="op-wdl">${wdlBar(m, m.games)}</td>
+      <td class="op-rating">${m.avg_rating || ''}</td>
+    </tr>`).join('');
+  body.innerHTML = `<table id="opening-table">
+      <thead><tr><th>Move</th><th>Games</th><th>White / Draw / Black</th><th>Avg</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+/** The result split as one bar. Percentages are only written into a segment
+    wide enough to hold them -- a 3% sliver with "3%" spilling out of it is
+    worse than a plain sliver. */
+function wdlBar(counts, games) {
+  const parts = [
+    ['w', counts.white], ['d', counts.draws], ['b', counts.black],
+  ].map(([cls, n]) => {
+    const pct = (n / games) * 100;
+    if (!n) return '';
+    return `<span class="wdl-${cls}" style="width:${pct}%">${pct >= 14 ? Math.round(pct) + '%' : ''}</span>`;
+  }).join('');
+  return `<span class="wdl">${parts}</span>`;
+}
+
+/** 1,234 / 12.3k / 1.2M -- the counts run to eight figures and the column has
+    to stay narrow enough to sit beside the move. */
+function fmtCount(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'k';
+  return n.toLocaleString();
 }
 
 /* ---------------- Sound ----------------

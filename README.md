@@ -21,7 +21,8 @@ the whole build order from the spec.
 
 Beyond the spec: the page is split into four tabs rather than one long column,
 puzzles built from your own mistakes, pre-moves, looking back through a game
-while you're playing it, and separate board/piece sets. What's next is in
+while you're playing it, separate board/piece sets, and an opening database
+built from a PGN library that answers the board as you move. What's next is in
 [`docs/TODO.md`](docs/TODO.md).
 
 ### The four tabs
@@ -153,6 +154,50 @@ then the panels.
 The move table keeps your moves in the left column whichever colour you
 played (section 5), which is confusing without a header saying so — so the
 columns are labelled with the two players' names.
+
+### Opening database
+
+Beside the board on **Analyse a game**: what a large reference library
+actually played from the position in front of you. Every move seen from here,
+most-played first, with how many games took it, how those games finished as a
+white/draw/black bar from the side-to-move's point of view, and the players'
+average rating. Clicking a row plays that move, which is the quick way to walk
+a line; pushing pieces around on the board does the same thing from the other
+direction, and the panel follows either way. No engine and no opponent are
+involved -- the analysis board has always let you move both sides freely, and
+this is that board with the library's answer beside it. Past the last position
+anyone reached, it says so rather than showing an empty table.
+
+The database is not shipped: point it at a PGN library and build it once. From
+`backend/`:
+
+```bash
+python -m app.opening_import /path/to/LumbrasGigaBase.pgn
+```
+
+`.pgn`, `.pgn.gz`, `.pgn.bz2` and `.pgn.zst` all work. It writes
+`backend/data/openings.db` (override with `CHESSIMPROVER_OPENING_DB`), which
+is a separate file from `chessimprover.db` on purpose: it is a rebuildable
+derived thing that no account owns, and deleting it costs you nothing but the
+rebuild. The running server picks it up without a restart.
+
+| Option | What it does |
+| --- | --- |
+| `--max-plies 24` | How deep to index, in half-moves. Past the opening, positions stop repeating between games, so deeper mostly adds rows that will be seen once and can't tell you anything. |
+| `--min-elo 2200` | Skip games whose two players average below this. |
+| `--since 2015` | Skip games played before this year. |
+| `--limit 50000` | Stop early — for a trial run before committing to the whole file. |
+| `--reset` | Start from empty instead of adding to what's there. Without it a second file is merged into the same database. |
+
+Budget roughly an hour per three million games; the two filters and
+`--max-plies` are the levers if that's too long, since a game rejected by a
+filter is never parsed at all. A giga-base is an afternoon, once.
+
+**Use the PGN, not the `.db3`/`.ecsi` copy of the same library.** PGN is a
+documented text format that python-chess reads directly, and either way the
+games have to be walked once and re-indexed by position -- a database built
+for a different program's queries doesn't answer "which moves were played
+here" any faster than the text does.
 
 ### Evaluation plot
 
