@@ -51,7 +51,6 @@
     <!-- data-tabs lists the tabs an element belongs to; Progress is all
          aggregates and has no use for a board. -->
     <section id="board-col" data-tabs="analysis play puzzles">
-      <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
       <!-- The plates sit with the board and follow its orientation, so the
            name below the board is always the player at the bottom. -->
       <div class="player-plate" id="plate-top">
@@ -63,7 +62,12 @@
         <span class="plate-result"></span>
         <span class="plate-clock"></span>
       </div>
-      <div id="board"></div>
+      <!-- The bar and the board it describes. One flex-direction apart: a
+           column puts the bar along the top, a row stands it beside. -->
+      <div id="board-row">
+        <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
+        <div id="board"></div>
+      </div>
       <div class="player-plate" id="plate-bottom">
         <span class="plate-dot"></span>
         <span class="plate-name">—</span>
@@ -73,17 +77,13 @@
         <span class="plate-result"></span>
         <span class="plate-clock"></span>
       </div>
-      <div id="eval-plot-wrap" class="hidden">
-        <div id="eval-plot"></div>
-        <div id="eval-plot-hint"></div>
-      </div>
-      <div id="nav-buttons">
-        <button id="nav-start" title="First move">|&lt;</button>
-        <button id="nav-prev" title="Previous move">&lt;</button>
-        <button id="nav-next" title="Next move">&gt;</button>
-        <button id="nav-end" title="Last move">&gt;|</button>
+      <!-- The board's own two controls stay with the board: the steppers walk
+           the move list and have moved under it, but flipping and the board
+           settings apply on every tab that has a board -- including Puzzles,
+           which has no move list to hang them off. -->
+      <div id="board-controls">
         <button id="nav-flip" title="Flip the board">⇅</button>
-        <button id="board-settings-btn" title="Board settings — board, pieces, legal moves">⚙</button>
+        <button id="board-settings-btn" title="Board settings — board, pieces, eval bar, legal moves">⚙</button>
       </div>
       <!-- Only ever shown when the board is behind the live game: the nav
            buttons work during a game, so there has to be a way back. -->
@@ -99,15 +99,26 @@
     </section>
 
     <section id="moves-col" data-tabs="analysis play">
+      <!-- The curve of the game sits above the moves it is a curve of, so a
+           dip and the move that caused it are one glance apart. -->
+      <div id="eval-plot-wrap" class="hidden">
+        <div id="eval-plot"></div>
+        <div id="eval-plot-hint"></div>
+      </div>
       <div class="panel" id="moves-panel">
         <h3>Moves</h3>
         <div id="move-table-wrap">
-          <!-- Section 5 puts your moves in the left column whichever colour
-               you played, so the header has to say which is which. -->
           <table id="move-table">
-            <thead><tr><th></th><th id="mt-yours"></th><th id="mt-theirs"></th></tr></thead>
+            <thead><tr><th></th><th id="mt-white"></th><th id="mt-black"></th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+        <!-- Under the moves they step through. -->
+        <div id="nav-buttons">
+          <button id="nav-start" title="First move">|&lt;</button>
+          <button id="nav-prev" title="Previous move">&lt;</button>
+          <button id="nav-next" title="Next move">&gt;</button>
+          <button id="nav-end" title="Last move">&gt;|</button>
         </div>
       </div>
     </section>
@@ -480,6 +491,18 @@
         <!-- The dialog is a full-screen overlay, so the real board behind it
              is not visible while choosing -- this swatch is the feedback. -->
         <div id="board-preview" aria-hidden="true"></div>
+        <label>Evaluation bar
+          <select id="b-eval-bar-side">
+            <option value="top">Along the top</option>
+            <option value="left">Standing on the left</option>
+            <option value="right">Standing on the right</option>
+          </select>
+        </label>
+        <p class="panel-note">
+          Beside the board it is as tall as the board and reads bottom-up for
+          White, which is the shape most sites use; along the top it takes no
+          width from the board.
+        </p>
       </fieldset>
 
       <fieldset>

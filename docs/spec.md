@@ -74,13 +74,16 @@
   `/assets/sets/{set_name}/` (board.png, wp.png, bp.png, etc.). Initially one
   set exists; more can be added later via directory scan/manifest with no
   code changes.
-- Eval bar to the left of the board, tied to the live Stockfish process for
-  the currently viewed position (see §3).
-- Move table to the right of the board, two columns, oriented to the
-  selected player (their moves always in the left column, opponent's in the
-  right), independent of whether that player was White or Black.
-- Move navigation buttons below the board (first/prev/next/last; keyboard
-  arrow support is a nice-to-have).
+- Eval bar tied to the live Stockfish process for the currently viewed
+  position (see §3). Its placement is a board setting: along the top of the
+  board, or standing to the left or right of it.
+- Move table to the right of the board, two columns. Built oriented to the
+  selected player; now **White always on the left**, with the player's name
+  (and `(you)`) in the column header instead — a table whose columns swap
+  between games has to be read from its header either way.
+- Move navigation buttons below the *move table*, which is what they step
+  through (first/prev/next/last; keyboard arrow support is a nice-to-have).
+  Flip and the board-settings button stay under the board.
 - Piece movement animation on navigation and on played moves: slide the
   moved piece to its destination, fade out any captured piece, then settle
   to the exact resulting position (handles captures, castling rook,

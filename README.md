@@ -126,8 +126,11 @@ lights the move before the one you undid, which is the move that made the
 position you're now looking at.
 
 **⚙ beside the board** opens the board's own settings, separate from Engine
-Settings: which board, which pieces, and whether picking a piece up shows dots
-on its legal destinations. Board and pieces are chosen **separately** -- they
+Settings: which board, which pieces, where the evaluation bar goes, and whether
+picking a piece up shows dots on its legal destinations. The **evaluation bar**
+runs along the top of the board (the default) or stands beside it on either
+hand; standing, it is as tall as the board and fills from the bottom for White,
+which is the shape most sites use. Board and pieces are chosen **separately** -- they
 are independent art, and the pairing you want is rarely both halves of one set
 -- and each dropdown offers only the sets that actually contain that half, so
 a set holding just a `board.png` can't leave you with invisible pieces. It
@@ -174,9 +177,17 @@ everything else -- putting the move table beside the board as section 5 asks.
 They wrap in that order on anything narrower, so a phone gets board, moves,
 then the panels.
 
-The move table keeps your moves in the left column whichever colour you
-played (section 5), which is confusing without a header saying so — so the
-columns are labelled with the two players' names.
+The move table is **White on the left, Black on the right**, always. Section 5
+asked for your moves in the left column whichever colour you played; a table
+whose columns swap between games turns out to be one you have to read the
+header of every time anyway, so the header carries that instead -- both
+columns are labelled with the player's name, and yours says `(you)`.
+
+Above the move table sits the whole-game evaluation curve, so a dip and the
+move that caused it are one glance apart. Under it are the four step buttons,
+directly below the moves they walk. The board keeps its own two controls --
+flip and the ⚙ -- because those apply on every tab that has a board, including
+Puzzles, which has no move list to hang them off.
 
 ### Opening database
 
@@ -224,7 +235,7 @@ here" any faster than the text does.
 
 ### Evaluation plot
 
-Under the board, once a game has been analysed: the whole game's evaluation,
+Above the move table, once a game has been analysed: the whole game's evaluation,
 with the mistakes and blunders marked on the curve, hover for the move and
 its win probability, click anywhere to jump the board there.
 

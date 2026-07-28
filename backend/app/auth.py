@@ -13,7 +13,7 @@ SESSION_COOKIE = "ci_session"
 # Everything the browser needs about the logged-in user, in one place so the
 # three queries that return a user can't drift apart as fields are added.
 USER_FIELDS = ("id, username, display_name, asset_set, board_set, piece_set, "
-               "show_legal_moves, allow_premoves")
+               "show_legal_moves, allow_premoves, eval_bar_side")
 
 
 class UserOut(BaseModel):
@@ -25,6 +25,7 @@ class UserOut(BaseModel):
     piece_set: str
     show_legal_moves: int
     allow_premoves: int
+    eval_bar_side: str
 
 
 class CreateAccountIn(BaseModel):
@@ -78,7 +79,8 @@ def create_account(body: CreateAccountIn):
         conn.execute("INSERT INTO engine_settings (user_id) VALUES (?)", (user_id,))
     return {"id": user_id, "username": username, "display_name": display_name,
             "asset_set": "default", "board_set": "default", "piece_set": "default",
-            "show_legal_moves": 1, "allow_premoves": 1}
+            "show_legal_moves": 1, "allow_premoves": 1,
+            "eval_bar_side": "top"}
 
 
 @router.patch("/accounts/{user_id}")

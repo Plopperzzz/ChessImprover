@@ -264,6 +264,7 @@ async function initApp() {
     pieces: state.user.piece_set || state.user.asset_set || 'default',
     showLegalMoves: state.user.show_legal_moves !== 0,
   });
+  applyEvalBarSide(state.user.eval_bar_side);
   // The board is shared between analysis and play-vs-Maia, so its handlers
   // dispatch on the current mode rather than being rebound on every switch.
   // The board serves three modes -- analysing a loaded game, playing Maia, and
@@ -906,6 +907,7 @@ function wireBoardDialog() {
   const pieceSel = document.getElementById('b-piece-set');
   const legal = document.getElementById('b-legal-moves');
   const premoves = document.getElementById('b-premoves');
+  const evalSide = document.getElementById('b-eval-bar-side');
 
   document.getElementById('board-settings-btn').addEventListener('click', async () => {
     await fillBoardForm();
@@ -921,6 +923,7 @@ function wireBoardDialog() {
   boardSel.addEventListener('change', preview);
   pieceSel.addEventListener('change', preview);
   legal.addEventListener('change', () => state.board.setShowLegalMoves(legal.checked));
+  evalSide.addEventListener('change', () => applyEvalBarSide(evalSide.value));
   // Turning pre-moves off mid-game withdraws whatever is queued, rather than
   // leaving one that can still fire.
   premoves.addEventListener('change', () => { if (!premoves.checked) clearPremove(); });
@@ -940,6 +943,7 @@ function wireBoardDialog() {
           piece_set: pieceSel.value,
           show_legal_moves: legal.checked,
           allow_premoves: premoves.checked,
+          eval_bar_side: evalSide.value,
         }),
       });
       dialog.classList.add('hidden');
@@ -958,7 +962,20 @@ function applySavedBoardPrefs() {
     pieces: state.user.piece_set || 'default',
   });
   state.board.setShowLegalMoves(state.user.show_legal_moves !== 0);
+  applyEvalBarSide(state.user.eval_bar_side);
   if (state.user.allow_premoves === 0) clearPremove();
+}
+
+/** Where the evaluation bar sits, as a class on the board column: 'top' runs
+    it along the top, 'left'/'right' stand it beside the board. The CSS does
+    the rest -- the bar is one element either way, so nothing has to be torn
+    down and rebuilt to move it. */
+function applyEvalBarSide(side) {
+  const col = document.getElementById('board-col');
+  const chosen = ['top', 'left', 'right'].includes(side) ? side : 'top';
+  for (const option of ['top', 'left', 'right']) {
+    col.classList.toggle('eval-' + option, option === chosen);
+  }
 }
 
 async function fillBoardForm() {
@@ -991,6 +1008,7 @@ async function fillBoardForm() {
   if (sets.some((s) => s.name === currentPieces && s.has_pieces)) pieceSel.value = currentPieces;
   document.getElementById('b-legal-moves').checked = state.user.show_legal_moves !== 0;
   document.getElementById('b-premoves').checked = state.user.allow_premoves !== 0;
+  document.getElementById('b-eval-bar-side').value = state.user.eval_bar_side || 'top';
   renderBoardPreview(document.getElementById('b-board-set').value,
                      document.getElementById('b-piece-set').value);
 }
@@ -1248,30 +1266,30 @@ async function loadSavedAnalysis(gameId) {
 
 /* ---------------- Move table (mainline, two columns, + variations) ---------------- */
 
-/** The left column is yours whichever colour you played (section 5), which is
-    only readable if the header says whose it is. */
-function setMoveTableHeader(yourColor, headers) {
+/** White on the left, Black on the right, always -- the order the moves were
+    played in and the order every other chess interface writes them. Which
+    side was yours is said in the header rather than by moving the column,
+    since a table whose columns swap between games is one you have to read
+    the header of anyway. */
+function setMoveTableHeader(headers) {
   const names = { w: headers.White || 'White', b: headers.Black || 'Black' };
-  const theirColor = yourColor === 'w' ? 'b' : 'w';
   const known = !!(headers.White || headers.Black);
-  const mine = state.explorer.yourColor === 'w' || state.explorer.yourColor === 'b';
-  document.getElementById('mt-yours').textContent =
-    known ? (mine ? `${names[yourColor]} (you)` : names[yourColor]) : '';
-  document.getElementById('mt-theirs').textContent = known ? names[theirColor] : '';
+  const yours = state.explorer.yourColor;
+  for (const colour of ['w', 'b']) {
+    const cell = document.getElementById(colour === 'w' ? 'mt-white' : 'mt-black');
+    cell.textContent = !known ? '' : names[colour] + (colour === yours ? ' (you)' : '');
+  }
 }
 
 function renderMoveTable() {
   const tbody = document.getElementById('move-table').querySelector('tbody');
   tbody.innerHTML = '';
   const mainlineIds = state.explorer.mainlineNodeIds;
-  const yourColor = state.explorer.yourColor === 'b' ? 'b' : 'w'; // unassigned defaults to White-on-left
-  setMoveTableHeader(yourColor, state.explorer.headers || {});
+  setMoveTableHeader(state.explorer.headers || {});
 
   for (let i = 0; i < mainlineIds.length; i += 2) {
     const whiteId = mainlineIds[i];
     const blackId = mainlineIds[i + 1];
-    const yourId = yourColor === 'w' ? whiteId : blackId;
-    const theirId = yourColor === 'w' ? blackId : whiteId;
 
     const tr = document.createElement('tr');
     const numTd = document.createElement('td');
@@ -1279,7 +1297,7 @@ function renderMoveTable() {
     numTd.textContent = (i / 2 + 1) + '.';
     tr.appendChild(numTd);
 
-    for (const id of [yourId, theirId]) {
+    for (const id of [whiteId, blackId]) {
       const td = document.createElement('td');
       if (id !== undefined) {
         const node = state.explorer.nodes[id];
@@ -1828,7 +1846,7 @@ function renderBlunderElo(moves, yourColor) {
   for (const m of bad) {
     const side = m.ply % 2 === 1 ? 'w' : 'b';
     const row = document.createElement('div');
-    const who = side === yourColor ? 'you' : 'opponent';
+    const who = sideLabel(side, yourColor);
     row.innerHTML = m.lowest_matching_elo === null
       ? `<b>${m.san}</b> (${who}) — no swept Elo played this`
       : `<b>${m.san}</b> (${who}) — first played by Maia at ${m.lowest_matching_elo}`;
@@ -2172,6 +2190,17 @@ function finishSweep() {
   document.getElementById('sweep-cancel').classList.add('hidden');
 }
 
+/** What to call the player of a side in the sweep panel. The PGN's own names,
+    because a one-off analysis is just as likely to be a game between two other
+    people as one of yours -- "You" and "Opponent" name nobody in that game.
+    When one of the sides *is* yours it still says so, which is the only thing
+    the old wording carried that a name doesn't. */
+function sideLabel(side, yourColor) {
+  const headers = state.explorer.headers || {};
+  const name = (side === 'w' ? headers.White : headers.Black) || (side === 'w' ? 'White' : 'Black');
+  return side === yourColor ? `${name} (you)` : name;
+}
+
 function renderSweepResults(msg) {
   const box = document.getElementById('sweep-results');
   box.innerHTML = '';
@@ -2185,7 +2214,7 @@ function renderSweepResults(msg) {
     head.className = 'sweep-head';
     const who = document.createElement('span');
     who.className = 'sweep-who';
-    who.textContent = side === msg.your_color ? 'You' : 'Opponent';
+    who.textContent = sideLabel(side, msg.your_color);
     const elo = document.createElement('span');
     elo.className = 'sweep-elo';
     // Same rule as the pooled view: a peak that never reached the match rate
@@ -3418,18 +3447,18 @@ function formatClock(ms) {
 
 
 /** Play-mode move list, reusing the analysis move table's markup so the two
-    modes look consistent. Oriented to the human, same as section 5 requires
-    for the analysis view. Clicking a move puts that position on the board --
-    the same gesture as in the analysis table, and it doesn't interrupt the
-    game (see goToPlayPly). */
+    modes look consistent -- White on the left there and here. Clicking a move
+    puts that position on the board: the same gesture as in the analysis
+    table, and it doesn't interrupt the game (see goToPlayPly). */
 function renderPlayMoveTable() {
   const tbody = document.getElementById('move-table').querySelector('tbody');
   tbody.innerHTML = '';
   const history = state.play.sanHistory || [];
   const humanIsWhite = state.play.humanColor === 'w';
   const shown = playViewPly();
-  document.getElementById('mt-yours').textContent = `${state.user.display_name || 'You'} (you)`;
-  document.getElementById('mt-theirs').textContent = 'Maia3';
+  const you = `${state.user.display_name || 'You'} (you)`;
+  document.getElementById('mt-white').textContent = humanIsWhite ? you : 'Maia3';
+  document.getElementById('mt-black').textContent = humanIsWhite ? 'Maia3' : you;
   for (let i = 0; i < history.length; i += 2) {
     const tr = document.createElement('tr');
     const numTd = document.createElement('td');
@@ -3439,7 +3468,7 @@ function renderPlayMoveTable() {
     // Ply numbers are 1-based; i is the index of White's move in this row.
     const white = { san: history[i], ply: i + 1 };
     const black = { san: history[i + 1], ply: i + 2 };
-    for (const move of humanIsWhite ? [white, black] : [black, white]) {
+    for (const move of [white, black]) {
       const td = document.createElement('td');
       td.textContent = move.san || '';
       if (move.san) {
@@ -3502,7 +3531,11 @@ function updateEvalBar(info) {
     return;
   }
   const wp = 1 / (1 + Math.exp(-0.00368208 * cpWhite));
-  document.getElementById('eval-fill').style.width = (wp * 100).toFixed(1) + '%';
+  // One number, two orientations: the CSS decides whether White's share of
+  // the bar is its width or its height, so the bar can move without this
+  // knowing where it went.
+  document.getElementById('eval-bar').style.setProperty(
+    '--eval-white', (wp * 100).toFixed(1) + '%');
   document.getElementById('eval-label').textContent = label;
 }
 

@@ -213,32 +213,74 @@ input[type="text"], input[type="number"], textarea, select {
   min-width: 230px;
 }
 
+/* The evaluation bar and the board it describes. Which way round they sit is
+   a board setting, and the whole difference is a flex-direction: a column
+   runs the bar along the top of the board, a row stands it up beside. The
+   share of the bar that is White's arrives as one number either way --
+   `--eval-white`, set by the live-eval handler -- and it is this stylesheet
+   that decides whether that is a width or a height. */
+#board-row { display: flex; gap: 8px; }
+#board-col.eval-top #board-row { flex-direction: column; }
+#board-col.eval-left #board-row { flex-direction: row; }
+#board-col.eval-right #board-row { flex-direction: row-reverse; }
+
 #eval-bar {
-  width: var(--board-w);
-  height: 20px;
+  --eval-white: 50%;
   background: #222;
   border: 1px solid var(--border);
   border-radius: 4px;
   position: relative;
   overflow: hidden;
+  flex: none;
 }
 #eval-fill {
   position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 50%;
   background: #eee;
-  transition: width 200ms ease;
 }
 #eval-label {
-  position: relative;
+  position: absolute;
   z-index: 2;
-  display: block;
   text-align: center;
-  font-size: 12px;
-  line-height: 20px;
   mix-blend-mode: difference;
   color: white;
 }
+
+/* Along the top: White's share fills from the left. */
+#board-col.eval-top #eval-bar { width: var(--board-w); height: 20px; }
+#board-col.eval-top #eval-fill {
+  left: 0; top: 0; bottom: 0;
+  width: var(--eval-white);
+  transition: width 200ms ease;
+}
+#board-col.eval-top #eval-label { inset: 0; font-size: 12px; line-height: 20px; }
+
+/* Standing beside it: White fills from the bottom, the way the board is laid
+   out -- White's side is the near one. */
+#board-col.eval-left #eval-bar,
+#board-col.eval-right #eval-bar { width: 26px; height: var(--board-w); }
+#board-col.eval-left #eval-fill,
+#board-col.eval-right #eval-fill {
+  left: 0; right: 0; bottom: 0;
+  height: var(--eval-white);
+  transition: height 200ms ease;
+}
+/* At the far end from White's fill, so the number isn't sitting on the edge
+   between the two colours as it moves. */
+#board-col.eval-left #eval-label,
+#board-col.eval-right #eval-label {
+  left: 0; right: 0; top: 2px;
+  font-size: 10px;
+  line-height: 12px;
+}
+/* A standing bar makes the board row wider than everything stacked with it,
+   which would leave the plates half a bar off-centre from the board they
+   name. Nudge them back over it. */
+#board-col.eval-left .player-plate,
+#board-col.eval-left .fen-row,
+#board-col.eval-left #board-note { margin-left: 34px; }
+#board-col.eval-right .player-plate,
+#board-col.eval-right .fen-row,
+#board-col.eval-right #board-note { margin-right: 34px; }
 
 #board {
   position: relative;
@@ -389,7 +431,9 @@ input[type="text"], input[type="number"], textarea, select {
 }
 
 /* Evaluation plot: the whole game's win probability, White's point of view. */
-#eval-plot-wrap { width: var(--board-w); }
+/* It lives above the move table now, so it takes that column's width rather
+   than the board's. */
+#eval-plot-wrap { width: 100%; }
 #eval-plot {
   height: 90px;
   border: 1px solid var(--border);
@@ -405,7 +449,8 @@ input[type="text"], input[type="number"], textarea, select {
   font-variant-numeric: tabular-nums;
 }
 
-#nav-buttons { display: flex; gap: 8px; }
+#nav-buttons { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+#board-controls { display: flex; gap: 8px; }
 #board-settings-btn { margin-left: auto; }
 /* Only visible when the board is showing an earlier position of a game still
    in progress, so it reads as a state you're in, not as decoration. */
@@ -714,7 +759,9 @@ input[type="text"], input[type="number"], textarea, select {
 #run-delete:hover { color: #e05050; border-color: #e05050; }
 
 #move-table-wrap { max-height: 300px; overflow-y: auto; }
-@media (min-width: 1150px) { #move-table-wrap { max-height: calc(var(--board-w) + 60px); } }
+/* Beside the board, the moves scroll within roughly the board's height --
+   less what the plot above and the buttons below now take out of the column. */
+@media (min-width: 1150px) { #move-table-wrap { max-height: calc(var(--board-w) - 90px); } }
 #move-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 #move-table thead th {
   position: sticky; top: 0; z-index: 1;      /* stays put while the list scrolls */
