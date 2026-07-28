@@ -11,6 +11,9 @@ const state = {
   ws: null,
   seq: 0,
   lastMoverColor: 'w',
+  // Live engine lines: how many the board is asking for, and the newest
+  // answer for each rank. Cleared whenever the position changes.
+  liveLines: { count: 0, seq: -1, byRank: {} },
   settings: null,
   engineFamilies: [],
   classifications: {}, // ply -> classification dict, from the last completed analysis job
@@ -264,6 +267,7 @@ async function initApp() {
     pieces: state.user.piece_set || state.user.asset_set || 'default',
     showLegalMoves: state.user.show_legal_moves !== 0,
   });
+  applyEvalBarSide(state.user.eval_bar_side);
   // The board is shared between analysis and play-vs-Maia, so its handlers
   // dispatch on the current mode rather than being rebound on every switch.
   // The board serves three modes -- analysing a loaded game, playing Maia, and
@@ -287,6 +291,7 @@ async function initApp() {
   wireNav();
   wireBoardDialog();
   wireFenBox();
+  wireLiveLines();
   wirePgnUpload();
   wireSettingsDialog();
   wireAnalysis();
@@ -294,6 +299,7 @@ async function initApp() {
   wireBatch();
   wireStrength();
   wireTrend();
+  wireOpeningPanel();
   wirePuzzles();
   wirePlay();
   // Last of the wiring: opening a tab can enter play or puzzle mode, which
@@ -381,7 +387,12 @@ function applyBoardChrome() {
   document.getElementById('eval-bar').classList.toggle('hidden', !analysing);
   document.getElementById('eval-plot-wrap').classList
     .toggle('hidden', !analysing || evalPlotMoves().length < 2);
-  for (const el of document.querySelectorAll('.fen-row')) el.classList.toggle('hidden', !analysing);
+  // The live-analysis controls belong to the analysis tab: during a game or a
+  // puzzle, an engine line beside the board is the answer.
+  for (const id of ['live-lines-btn', 'live-lines']) {
+    document.getElementById(id).classList.toggle('tab-hidden', !analysing);
+  }
+  if (!analysing && state.liveLines.count) setLiveLines(0);
   for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
     const btn = document.getElementById(id);
     btn.disabled = !steppable;
@@ -449,11 +460,19 @@ function refreshLastMove() {
     return;
   }
   const node = state.explorer.nodes[state.explorer.currentNodeId];
-  state.board.setLastMove(node && node.from, node && node.to);
+  // The badge rides with the last-move marks: both describe the move that
+  // produced what's on the board, and both have to be redrawn together.
+  const cls = node && state.classifications[node.ply];
+  state.board.setLastMove(node && node.from, node && node.to, badgeFor(cls));
 }
 
+/** Everything the analysis board does to the position -- a move played on it,
+    a step through the game, a jump to a node or a pasted FEN -- comes through
+    here, which is why the opening lookup hangs off it rather than being
+    repeated at half a dozen call sites. */
 function refreshFenBox() {
   document.getElementById('fen-box').value = state.explorer.fen;
+  refreshOpeningStats();
 }
 
 async function onBoardMove(from, to, promotion) {
@@ -465,7 +484,134 @@ async function onBoardMove(from, to, promotion) {
   refreshFenBox();
   renderMoveTable(); // a new variation node may have just been created
   refreshMoveTableHighlight();
+  announceClassification();
   requestEval();
+}
+
+/* ---------------- Opening database ----------------
+   What a large reference library played from the position in front of you.
+   The analysis board already lets you push moves around freely -- no engine,
+   no opponent -- so this needs no mode of its own: it follows the board, and
+   clicking a row plays that move, which is the fastest way to walk a line.
+
+   Every lookup is sequenced. Clicking down a variation fires a request per
+   position and they can come back out of order; the answer to the position
+   you're on now is the only one allowed to reach the screen. */
+
+const opening = { seq: 0, status: null };
+
+function wireOpeningPanel() {
+  const panel = document.getElementById('opening-panel');
+  // Nothing is fetched for a folded panel -- but unfolding it is a request to
+  // see the position you're on, not the one you were on when you folded it.
+  panel.addEventListener('toggle', () => { if (panel.open) refreshOpeningStats(); });
+  document.getElementById('opening-body').addEventListener('click', (ev) => {
+    const row = ev.target.closest('tr[data-uci]');
+    if (!row) return;
+    const uci = row.dataset.uci;
+    onBoardMove(uci.slice(0, 2), uci.slice(2, 4), uci[4] || undefined);
+  });
+  refreshOpeningStatus();
+}
+
+async function refreshOpeningStatus() {
+  try {
+    opening.status = await api('/api/openings/status');
+  } catch (err) {
+    opening.status = null;
+  }
+  refreshOpeningStats();
+}
+
+/** Debounced, because the position can change a hundred times in a few
+    seconds -- an analysis run steps the board through a whole game -- and
+    only the position it settles on is worth asking about. */
+function refreshOpeningStats() {
+  clearTimeout(opening.timer);
+  opening.timer = setTimeout(loadOpeningStats, 120);
+}
+
+async function loadOpeningStats() {
+  const panel = document.getElementById('opening-panel');
+  if (!panel || !panel.open || !boardIsAnalysing()) return;
+  const seq = ++opening.seq;
+  let res = null;
+  try {
+    res = await api('/api/openings/stats?fen=' + encodeURIComponent(state.explorer.fen));
+  } catch (err) { /* rendered as "no database" below */ }
+  if (seq !== opening.seq) return;   // a later position has already answered
+  // A database that has just finished building appears under a page that has
+  // been open the whole time. The stats endpoint notices by itself; the size
+  // in the panel header comes from the status call, so go and get it rather
+  // than leaving the header blank until a reload.
+  const appeared = res && res.available && !(opening.status && opening.status.available);
+  renderOpeningStats(res);
+  if (appeared) refreshOpeningStatus();
+}
+
+function renderOpeningStats(res) {
+  const summary = document.getElementById('opening-summary');
+  const totalEl = document.getElementById('opening-total');
+  const body = document.getElementById('opening-body');
+
+  if (!res || !res.available) {
+    summary.textContent = 'not built';
+    totalEl.innerHTML = '';
+    body.innerHTML = `<p class="hint">Nothing indexed yet. Building the database is a one-off
+      job you run yourself, on the machine holding the PGN — from <code>backend/</code>:</p>
+      <pre class="hint-cmd">.venv/bin/python -m app.opening_import /path/to/LumbrasGigaBase.pgn</pre>
+      <p class="hint">It indexes the first 12 moves of each game (<code>--max-plies</code>),
+      at roughly an hour per three million. When it finishes, play a move and this
+      panel fills in — no restart, no reload.</p>`;
+    return;
+  }
+
+  const s = opening.status;
+  summary.textContent = s && s.games ? `${fmtCount(s.games)} games` : '';
+
+  if (!res.total.games) {
+    totalEl.innerHTML = '';
+    body.innerHTML = '<p class="hint">Out of book — no game in the database reached this position.</p>';
+    return;
+  }
+
+  totalEl.innerHTML = `<span class="op-total-count">${res.total.games.toLocaleString()} games</span>`
+    + wdlBar(res.total, res.total.games);
+
+  const rows = res.moves.map((m) => `
+    <tr data-uci="${m.uci}" title="Play ${m.san}">
+      <td class="op-san">${m.san}</td>
+      <td class="op-games">${fmtCount(m.games)}<span class="op-share">${
+        Math.round((m.games / res.total.games) * 100)}%</span></td>
+      <td class="op-wdl">${wdlBar(m, m.games)}</td>
+      <td class="op-rating">${m.avg_rating || ''}</td>
+    </tr>`).join('');
+  body.innerHTML = `<table id="opening-table">
+      <thead><tr><th>Move</th><th>Games</th><th>White / Draw / Black</th><th>Avg</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+/** The result split as one bar. Percentages are only written into a segment
+    wide enough to hold them -- a 3% sliver with "3%" spilling out of it is
+    worse than a plain sliver. */
+function wdlBar(counts, games) {
+  const parts = [
+    ['w', counts.white], ['d', counts.draws], ['b', counts.black],
+  ].map(([cls, n]) => {
+    const pct = (n / games) * 100;
+    if (!n) return '';
+    return `<span class="wdl-${cls}" style="width:${pct}%">${pct >= 14 ? Math.round(pct) + '%' : ''}</span>`;
+  }).join('');
+  return `<span class="wdl">${parts}</span>`;
+}
+
+/** 1,234 / 12.3k / 1.2M -- the counts run to eight figures and the column has
+    to stay narrow enough to sit beside the move. */
+function fmtCount(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'k';
+  return n.toLocaleString();
 }
 
 /* ---------------- Sound ----------------
@@ -485,6 +631,7 @@ const SOUND_FILES = {
   start: 'game-start.webm',
   end: 'game-end.webm',
   lowtime: 'tenseconds.webm',
+  brilliant: 'brilliant-86fb4d6.mp3',
   correct: 'correct-c1411f4.mp3',
   wrong: 'fail-blip-hi-2b78df0.mp3',
   solved: 'puzzle-solved-fee614d.mp3',
@@ -524,6 +671,66 @@ function playMoveSound(san, mine) {
   else if (san.startsWith('O-O')) playSound('castle');
   else if (san.includes('x')) playSound('capture');
   else playSound(mine ? 'move' : 'opponent');
+}
+
+/* ---------------- Move classifications ----------------
+   The badge a move earns: on the square it landed on, and beside it in the
+   move table. Names are the classifier's own, so the icon file and the CSS
+   class are both reached by the same string and adding a classification
+   means adding art rather than editing a lookup.
+
+   Only six of these are produced today -- good, inaccuracy, mistake, blunder
+   from Stockfish alone, plus great and brilliant once the Maia sweep has run.
+   `best`, `excellent`, `book` and `miss` are here with their art ready for
+   whatever comes to award them; nothing renders a badge it has no move for. */
+
+const CLASSIFICATIONS = [
+  'brilliant', 'great', 'best', 'excellent', 'good', 'book',
+  'inaccuracy', 'mistake', 'miss', 'blunder',
+];
+
+/** Which of them earn a badge. Excellent, good and book are the moves you
+    were always going to play, and a badge on almost every move is a badge on
+    none of them -- they keep their colour in the move table and say nothing
+    else. Everything here is either rare or worth stopping at. */
+const BADGED_CLASSIFICATIONS = [
+  'brilliant', 'great', 'best', 'inaccuracy', 'mistake', 'miss', 'blunder',
+];
+
+/** The badge name for a classification record, or null when that
+    classification doesn't get one. The single gate both the board and the
+    move table go through. */
+function badgeFor(cls) {
+  const name = cls && cls.classification;
+  return name && BADGED_CLASSIFICATIONS.includes(name) ? name : null;
+}
+
+function classificationIcon(classification, size) {
+  if (!classification || !BADGED_CLASSIFICATIONS.includes(classification)) return null;
+  const img = document.createElement('img');
+  img.className = 'cls-icon';
+  img.src = `/assets/icons/classification/${classification}.svg`;
+  img.width = size;
+  img.height = size;
+  img.alt = classification;
+  img.title = classification;
+  img.draggable = false;
+  return img;
+}
+
+/** Brilliant, and only brilliant, gets a sound of its own. Every move already
+    says what it did -- a capture, a check, a castle -- and a second noise on
+    top of every one of them turns stepping through a game into a slot
+    machine. A brilliancy is rare enough to be worth interrupting for.
+
+    Called from the places a *person* moves the board -- stepping, clicking a
+    move, playing one -- and not from the analysis animation, which walks a
+    hundred positions. */
+function announceClassification() {
+  if (state.playMode || state.puzzleMode) return;
+  const node = state.explorer.nodes[state.explorer.currentNodeId];
+  const cls = node && state.classifications[node.ply];
+  if (cls && cls.classification === 'brilliant') playSound('brilliant');
 }
 
 function wireSound() {
@@ -661,6 +868,7 @@ function wireNav() {
     refreshLastMove();
     refreshFenBox();
     refreshMoveTableHighlight();
+    announceClassification();
     requestEval();
   });
   document.getElementById('nav-next').addEventListener('click', async () => {
@@ -672,6 +880,7 @@ function wireNav() {
     refreshLastMove();
     refreshFenBox();
     refreshMoveTableHighlight();
+    announceClassification();
     requestEval();
   });
   document.getElementById('nav-end').addEventListener('click', () => {
@@ -707,9 +916,13 @@ function wireBoardDialog() {
   const pieceSel = document.getElementById('b-piece-set');
   const legal = document.getElementById('b-legal-moves');
   const premoves = document.getElementById('b-premoves');
+  const evalSide = document.getElementById('b-eval-bar-side');
 
   document.getElementById('board-settings-btn').addEventListener('click', async () => {
     await fillBoardForm();
+    // The FEN lives in here now, and it is the position as of opening the
+    // dialog -- refreshFenBox keeps it current while the dialog is closed.
+    refreshFenBox();
     dialog.classList.remove('hidden');
   });
 
@@ -722,6 +935,7 @@ function wireBoardDialog() {
   boardSel.addEventListener('change', preview);
   pieceSel.addEventListener('change', preview);
   legal.addEventListener('change', () => state.board.setShowLegalMoves(legal.checked));
+  evalSide.addEventListener('change', () => applyEvalBarSide(evalSide.value));
   // Turning pre-moves off mid-game withdraws whatever is queued, rather than
   // leaving one that can still fire.
   premoves.addEventListener('change', () => { if (!premoves.checked) clearPremove(); });
@@ -741,6 +955,7 @@ function wireBoardDialog() {
           piece_set: pieceSel.value,
           show_legal_moves: legal.checked,
           allow_premoves: premoves.checked,
+          eval_bar_side: evalSide.value,
         }),
       });
       dialog.classList.add('hidden');
@@ -759,7 +974,20 @@ function applySavedBoardPrefs() {
     pieces: state.user.piece_set || 'default',
   });
   state.board.setShowLegalMoves(state.user.show_legal_moves !== 0);
+  applyEvalBarSide(state.user.eval_bar_side);
   if (state.user.allow_premoves === 0) clearPremove();
+}
+
+/** Where the evaluation bar sits, as a class on the board column: 'top' runs
+    it along the top, 'left'/'right' stand it beside the board. The CSS does
+    the rest -- the bar is one element either way, so nothing has to be torn
+    down and rebuilt to move it. */
+function applyEvalBarSide(side) {
+  const col = document.getElementById('board-col');
+  const chosen = ['top', 'left', 'right'].includes(side) ? side : 'top';
+  for (const option of ['top', 'left', 'right']) {
+    col.classList.toggle('eval-' + option, option === chosen);
+  }
 }
 
 async function fillBoardForm() {
@@ -792,6 +1020,7 @@ async function fillBoardForm() {
   if (sets.some((s) => s.name === currentPieces && s.has_pieces)) pieceSel.value = currentPieces;
   document.getElementById('b-legal-moves').checked = state.user.show_legal_moves !== 0;
   document.getElementById('b-premoves').checked = state.user.allow_premoves !== 0;
+  document.getElementById('b-eval-bar-side').value = state.user.eval_bar_side || 'top';
   renderBoardPreview(document.getElementById('b-board-set').value,
                      document.getElementById('b-piece-set').value);
 }
@@ -837,17 +1066,119 @@ function wireFenBox() {
   document.getElementById('fen-copy').addEventListener('click', () => {
     navigator.clipboard.writeText(document.getElementById('fen-box').value);
   });
+  // Setting the board is not loading a game. The position goes up and the
+  // move list empties with it (it is a new tree), but the library selection
+  // and the analysis panel are left alone -- pasting a FEN to look at
+  // something shouldn't put away the game you had open.
   document.getElementById('fen-goto-btn').addEventListener('click', () => {
     const fen = document.getElementById('fen-goto').value.trim();
     if (!fen) return;
     const ok = state.explorer.loadFEN(fen);
     if (!ok) { alert('That FEN could not be parsed.'); return; }
-    state.selectedGameId = null;
-    resetAnalysisState();
-    renderGamePicker();
+    // The classifications belonged to the game that was on the board, and
+    // nothing about this position is that game's ply 7.
+    state.classifications = {};
     renderMoveTable();
     syncBoardFull();
   });
+}
+
+/* ---------------- Live engine lines ----------------
+   The eval bar has always been driven by a live Stockfish process on the
+   position in front of you (spec section 3). This shows its working: the top
+   one to three moves it is considering, with what each is worth and the line
+   it expects to follow.
+
+   It reuses that same process and socket rather than starting anything --
+   turning it on asks the session for more ranked lines, turning it off asks
+   for one again, which is what the bar needs anyway. */
+
+function wireLiveLines() {
+  const btn = document.getElementById('live-lines-btn');
+  const count = document.getElementById('live-lines-count');
+  btn.addEventListener('click', () => setLiveLines(state.liveLines.count ? 0 : Number(count.value)));
+  count.addEventListener('change', () => {
+    if (state.liveLines.count) setLiveLines(Number(count.value));
+  });
+}
+
+function setLiveLines(n) {
+  state.liveLines.count = n;
+  state.liveLines.byRank = {};
+  document.getElementById('live-lines-btn').textContent = n ? 'Stop live analysis' : 'Analyse live';
+  document.getElementById('live-lines-btn').classList.toggle('on', !!n);
+  document.getElementById('live-lines').classList.toggle('hidden', !n);
+  renderLiveLines();
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  state.seq += 1;
+  state.liveLines.seq = state.seq;
+  // One line is what the bar needs, so switching off costs the engine nothing
+  // -- it goes back to the search it would have been running anyway.
+  state.ws.send(JSON.stringify({ type: 'multipv', lines: n || 1, seq: state.seq }));
+}
+
+/** Files an `info` line under its rank. Ranks arrive interleaved as the search
+    deepens and each one supersedes the last of its own rank, which is all this
+    has to know. */
+function noteLiveLine(msg) {
+  if (!state.liveLines.count) return;
+  if (msg.seq !== state.seq) return;
+  if (state.liveLines.seq !== msg.seq) {
+    state.liveLines.seq = msg.seq;
+    state.liveLines.byRank = {};
+  }
+  state.liveLines.byRank[msg.multipv || 1] = msg;
+  renderLiveLines();
+}
+
+/** Centipawns as White sees them, from a mover's-perspective info line. The
+    panel is read next to an eval bar that is already White-relative, and two
+    numbers with opposite signs for the same position is the kind of thing
+    nobody notices until it has misled them. */
+function whiteScore(info) {
+  const flip = state.lastMoverColor === 'b' ? -1 : 1;
+  if (info.mate !== null && info.mate !== undefined) {
+    const mate = flip * info.mate;
+    return { text: (mate > 0 ? '#' : '#-') + Math.abs(info.mate), cp: mate > 0 ? 10000 : -10000 };
+  }
+  if (info.cp === null || info.cp === undefined) return null;
+  const cp = flip * info.cp;
+  return { text: (cp > 0 ? '+' : '') + (cp / 100).toFixed(2), cp };
+}
+
+/** The engine's principal variation as SAN, which is the only form it can be
+    read in. Replayed on a scratch board from the position on ours; a line
+    that doesn't replay is truncated rather than dropped, since the first few
+    moves are the part anyone reads. */
+function pvToSan(uciMoves, fen, limit = 8) {
+  const board = new Chess();
+  if (!board.load(fen)) return '';
+  const out = [];
+  for (const uci of (uciMoves || []).slice(0, limit)) {
+    const move = board.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || 'q' });
+    if (!move) break;
+    out.push(move.san);
+  }
+  return out.join(' ');
+}
+
+function renderLiveLines() {
+  const box = document.getElementById('live-lines-body');
+  if (!state.liveLines.count) { box.innerHTML = ''; return; }
+  const ranks = Object.keys(state.liveLines.byRank).map(Number).sort((a, b) => a - b);
+  if (!ranks.length) { box.innerHTML = '<p class="hint">Thinking...</p>'; return; }
+  const fen = state.explorer.fen;
+  box.innerHTML = ranks.slice(0, state.liveLines.count).map((rank) => {
+    const info = state.liveLines.byRank[rank];
+    const score = whiteScore(info);
+    if (!score) return '';
+    const san = pvToSan(info.pv, fen);
+    return `<div class="live-line">
+        <span class="live-score ${score.cp >= 0 ? 'white-better' : 'black-better'}">${score.text}</span>
+        <span class="live-pv">${san || '—'}</span>
+        <span class="live-depth">d${info.depth || 0}</span>
+      </div>`;
+  }).join('');
 }
 
 /* ---------------- PGN upload + game picker ---------------- */
@@ -1030,6 +1361,7 @@ async function loadSavedAnalysis(gameId) {
   for (const m of saved.moves) state.classifications[m.ply] = m;
   renderMoveTable();
   refreshMoveTableHighlight();
+  refreshLastMove();   // the badge for whatever is on the board is known now
   renderAnalysisSummary(saved.moves);
   renderEvalPlot();
 
@@ -1048,30 +1380,30 @@ async function loadSavedAnalysis(gameId) {
 
 /* ---------------- Move table (mainline, two columns, + variations) ---------------- */
 
-/** The left column is yours whichever colour you played (section 5), which is
-    only readable if the header says whose it is. */
-function setMoveTableHeader(yourColor, headers) {
+/** White on the left, Black on the right, always -- the order the moves were
+    played in and the order every other chess interface writes them. Which
+    side was yours is said in the header rather than by moving the column,
+    since a table whose columns swap between games is one you have to read
+    the header of anyway. */
+function setMoveTableHeader(headers) {
   const names = { w: headers.White || 'White', b: headers.Black || 'Black' };
-  const theirColor = yourColor === 'w' ? 'b' : 'w';
   const known = !!(headers.White || headers.Black);
-  const mine = state.explorer.yourColor === 'w' || state.explorer.yourColor === 'b';
-  document.getElementById('mt-yours').textContent =
-    known ? (mine ? `${names[yourColor]} (you)` : names[yourColor]) : '';
-  document.getElementById('mt-theirs').textContent = known ? names[theirColor] : '';
+  const yours = state.explorer.yourColor;
+  for (const colour of ['w', 'b']) {
+    const cell = document.getElementById(colour === 'w' ? 'mt-white' : 'mt-black');
+    cell.textContent = !known ? '' : names[colour] + (colour === yours ? ' (you)' : '');
+  }
 }
 
 function renderMoveTable() {
   const tbody = document.getElementById('move-table').querySelector('tbody');
   tbody.innerHTML = '';
   const mainlineIds = state.explorer.mainlineNodeIds;
-  const yourColor = state.explorer.yourColor === 'b' ? 'b' : 'w'; // unassigned defaults to White-on-left
-  setMoveTableHeader(yourColor, state.explorer.headers || {});
+  setMoveTableHeader(state.explorer.headers || {});
 
   for (let i = 0; i < mainlineIds.length; i += 2) {
     const whiteId = mainlineIds[i];
     const blackId = mainlineIds[i + 1];
-    const yourId = yourColor === 'w' ? whiteId : blackId;
-    const theirId = yourColor === 'w' ? blackId : whiteId;
 
     const tr = document.createElement('tr');
     const numTd = document.createElement('td');
@@ -1079,17 +1411,21 @@ function renderMoveTable() {
     numTd.textContent = (i / 2 + 1) + '.';
     tr.appendChild(numTd);
 
-    for (const id of [yourId, theirId]) {
+    for (const id of [whiteId, blackId]) {
       const td = document.createElement('td');
       if (id !== undefined) {
         const node = state.explorer.nodes[id];
         const cls = state.classifications[node.ply];
-        td.textContent = node.san + (cls ? CLASSIFICATION_SUFFIX[cls.classification] : '');
+        const icon = cls && classificationIcon(cls.classification, 24);
+        // The icon says what the suffix said, so it doesn't say it twice.
+        td.textContent = node.san + (cls && !icon ? classificationSuffix(cls.classification) : '');
         if (cls) td.classList.add('cls-' + cls.classification);
+        if (icon) td.appendChild(icon);
         td.dataset.nodeId = id;
         td.addEventListener('click', () => {
           state.explorer.goToNode(id);
           syncBoardFull();
+          announceClassification();
         });
       }
       tr.appendChild(td);
@@ -1199,9 +1535,11 @@ function whiteWinProb(cp, ply) {
   return 1 / (1 + Math.exp(-0.00368208 * white));
 }
 
+// Matched to the badge art, so a mark on the curve and a badge on the board
+// are recognisably the same judgement.
 const PLOT_MARK_COLOURS = {
-  blunder: '#e05050', mistake: '#e08040', inaccuracy: '#e0c040',
-  great: '#5fc9e8', brilliant: '#21c2a4',
+  blunder: '#fa412d', miss: '#ff7769', mistake: '#ffa459', inaccuracy: '#f7c631',
+  great: '#749bbf', brilliant: '#26c2a3',
 };
 
 function evalPlotMoves() {
@@ -1304,7 +1642,18 @@ function markEvalPlotPosition() {
 
 /* ---------------- Quick analysis (Stockfish-only move classification) ---------------- */
 
-const CLASSIFICATION_SUFFIX = { good: '', inaccuracy: '?!', mistake: '?', blunder: '??', great: '!', brilliant: '!!' };
+/** The old text annotation, still used for the classifications that don't get
+    a badge -- which today means it renders nothing at all, since those are the
+    unremarkable ones. Kept so that unbadging a label doesn't silently drop
+    what it was saying. */
+const CLASSIFICATION_SUFFIX = {
+  brilliant: '!!', great: '!', best: '', excellent: '', good: '', book: '',
+  inaccuracy: '?!', mistake: '?', miss: '??', blunder: '??',
+};
+
+function classificationSuffix(classification) {
+  return CLASSIFICATION_SUFFIX[classification] || '';
+}
 
 function resetAnalysisState() {
   state.classifications = {};
@@ -1517,6 +1866,7 @@ async function handleAnalysisMessage(msg) {
     for (const m of msg.moves) state.classifications[m.ply] = m;
     renderMoveTable();
     refreshMoveTableHighlight();
+    refreshLastMove();   // the badge for whatever is on the board is known now
     renderAnalysisSummary(msg.moves);
     renderEvalPlot();
     if (msg.mode === 'full') {
@@ -1570,14 +1920,19 @@ async function animateToMainlinePly(ply) {
 }
 
 function renderAnalysisSummary(moves) {
-  const counts = { brilliant: 0, great: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
-  for (const m of moves) counts[m.classification]++;
+  const counts = {};
+  for (const key of CLASSIFICATIONS) counts[key] = 0;
+  for (const m of moves) if (m.classification in counts) counts[m.classification]++;
   const el = document.getElementById('analysis-summary');
   el.innerHTML = '';
-  const labels = { brilliant: 'Brilliant', great: 'Great', good: 'Good',
-                   inaccuracy: 'Inaccuracies', mistake: 'Mistakes', blunder: 'Blunders' };
-  for (const key of ['brilliant', 'great', 'good', 'inaccuracy', 'mistake', 'blunder']) {
-    if (counts[key] === 0 && (key === 'brilliant' || key === 'great')) continue;
+  const labels = { brilliant: 'Brilliant', great: 'Great', best: 'Best', excellent: 'Excellent',
+                   good: 'Good', book: 'Book', inaccuracy: 'Inaccuracies', mistake: 'Mistakes',
+                   miss: 'Misses', blunder: 'Blunders' };
+  // The rare awards are worth a line only when they happened; the everyday
+  // counts are the shape of the game and read better with the zeroes in.
+  const onlyWhenEarned = ['brilliant', 'great', 'best', 'book', 'miss'];
+  for (const key of CLASSIFICATIONS) {
+    if (counts[key] === 0 && onlyWhenEarned.includes(key)) continue;
     const span = document.createElement('span');
     span.className = 'cnt-' + key;
     span.textContent = `${labels[key]}: ${counts[key]}`;
@@ -1605,7 +1960,7 @@ function renderBlunderElo(moves, yourColor) {
   for (const m of bad) {
     const side = m.ply % 2 === 1 ? 'w' : 'b';
     const row = document.createElement('div');
-    const who = side === yourColor ? 'you' : 'opponent';
+    const who = sideLabel(side, yourColor);
     row.innerHTML = m.lowest_matching_elo === null
       ? `<b>${m.san}</b> (${who}) — no swept Elo played this`
       : `<b>${m.san}</b> (${who}) — first played by Maia at ${m.lowest_matching_elo}`;
@@ -1949,6 +2304,17 @@ function finishSweep() {
   document.getElementById('sweep-cancel').classList.add('hidden');
 }
 
+/** What to call the player of a side in the sweep panel. The PGN's own names,
+    because a one-off analysis is just as likely to be a game between two other
+    people as one of yours -- "You" and "Opponent" name nobody in that game.
+    When one of the sides *is* yours it still says so, which is the only thing
+    the old wording carried that a name doesn't. */
+function sideLabel(side, yourColor) {
+  const headers = state.explorer.headers || {};
+  const name = (side === 'w' ? headers.White : headers.Black) || (side === 'w' ? 'White' : 'Black');
+  return side === yourColor ? `${name} (you)` : name;
+}
+
 function renderSweepResults(msg) {
   const box = document.getElementById('sweep-results');
   box.innerHTML = '';
@@ -1962,7 +2328,7 @@ function renderSweepResults(msg) {
     head.className = 'sweep-head';
     const who = document.createElement('span');
     who.className = 'sweep-who';
-    who.textContent = side === msg.your_color ? 'You' : 'Opponent';
+    who.textContent = sideLabel(side, msg.your_color);
     const elo = document.createElement('span');
     elo.className = 'sweep-elo';
     // Same rule as the pooled view: a peak that never reached the match rate
@@ -3195,18 +3561,18 @@ function formatClock(ms) {
 
 
 /** Play-mode move list, reusing the analysis move table's markup so the two
-    modes look consistent. Oriented to the human, same as section 5 requires
-    for the analysis view. Clicking a move puts that position on the board --
-    the same gesture as in the analysis table, and it doesn't interrupt the
-    game (see goToPlayPly). */
+    modes look consistent -- White on the left there and here. Clicking a move
+    puts that position on the board: the same gesture as in the analysis
+    table, and it doesn't interrupt the game (see goToPlayPly). */
 function renderPlayMoveTable() {
   const tbody = document.getElementById('move-table').querySelector('tbody');
   tbody.innerHTML = '';
   const history = state.play.sanHistory || [];
   const humanIsWhite = state.play.humanColor === 'w';
   const shown = playViewPly();
-  document.getElementById('mt-yours').textContent = `${state.user.display_name || 'You'} (you)`;
-  document.getElementById('mt-theirs').textContent = 'Maia3';
+  const you = `${state.user.display_name || 'You'} (you)`;
+  document.getElementById('mt-white').textContent = humanIsWhite ? you : 'Maia3';
+  document.getElementById('mt-black').textContent = humanIsWhite ? 'Maia3' : you;
   for (let i = 0; i < history.length; i += 2) {
     const tr = document.createElement('tr');
     const numTd = document.createElement('td');
@@ -3216,7 +3582,7 @@ function renderPlayMoveTable() {
     // Ply numbers are 1-based; i is the index of White's move in this row.
     const white = { san: history[i], ply: i + 1 };
     const black = { san: history[i + 1], ply: i + 2 };
-    for (const move of humanIsWhite ? [white, black] : [black, white]) {
+    for (const move of [white, black]) {
       const td = document.createElement('td');
       td.textContent = move.san || '';
       if (move.san) {
@@ -3247,7 +3613,9 @@ function connectLiveEval() {
       return;
     }
     if (msg.type === 'info' && msg.seq === state.seq) {
-      updateEvalBar(msg);
+      // Rank 1 is the bar's number; every rank is a row in the lines panel.
+      if ((msg.multipv || 1) === 1) updateEvalBar(msg);
+      noteLiveLine(msg);
     }
   });
   ws.addEventListener('close', () => {
@@ -3255,13 +3623,20 @@ function connectLiveEval() {
       setTimeout(connectLiveEval, 2000); // reconnect (e.g. after phone screen lock)
     }
   });
-  ws.addEventListener('open', () => requestEval());
+  ws.addEventListener('open', () => {
+    // A reconnect gets a fresh engine session, which is back to one line.
+    if (state.liveLines.count) setLiveLines(state.liveLines.count);
+    requestEval();
+  });
 }
 
 function requestEval() {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
   state.seq += 1;
   state.lastMoverColor = state.explorer.moverColor;
+  // The lines described the position we just left.
+  state.liveLines.byRank = {};
+  renderLiveLines();
   state.ws.send(JSON.stringify({ type: 'position', fen: state.explorer.fen, seq: state.seq }));
 }
 
@@ -3279,7 +3654,11 @@ function updateEvalBar(info) {
     return;
   }
   const wp = 1 / (1 + Math.exp(-0.00368208 * cpWhite));
-  document.getElementById('eval-fill').style.width = (wp * 100).toFixed(1) + '%';
+  // One number, two orientations: the CSS decides whether White's share of
+  // the bar is its width or its height, so the bar can move without this
+  // knowing where it went.
+  document.getElementById('eval-bar').style.setProperty(
+    '--eval-white', (wp * 100).toFixed(1) + '%');
   document.getElementById('eval-label').textContent = label;
 }
 

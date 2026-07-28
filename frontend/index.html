@@ -51,6 +51,9 @@
     <!-- data-tabs lists the tabs an element belongs to; Progress is all
          aggregates and has no use for a board. -->
     <section id="board-col" data-tabs="analysis play puzzles">
+      <!-- The bar goes above the names or beside the board; the column is
+           laid out for whichever, so the names stay hard against the board
+           either way. -->
       <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
       <!-- The plates sit with the board and follow its orientation, so the
            name below the board is always the player at the bottom. -->
@@ -62,6 +65,14 @@
         <span class="spacer"></span>
         <span class="plate-result"></span>
         <span class="plate-clock"></span>
+        <!-- Top right of the board, sharing the line the name is on: the
+             names belong hard against the board, so the buttons come to
+             them rather than pushing them away from it. -->
+        <span id="board-controls">
+          <button id="live-lines-btn" title="Show what the engine is looking at">Analyse live</button>
+          <button id="nav-flip" title="Flip the board">⇅</button>
+          <button id="board-settings-btn" title="Board settings — board, pieces, eval bar, FEN">⚙</button>
+        </span>
       </div>
       <div id="board"></div>
       <div class="player-plate" id="plate-bottom">
@@ -73,41 +84,47 @@
         <span class="plate-result"></span>
         <span class="plate-clock"></span>
       </div>
+      <!-- Only ever shown when the board is behind the live game: the nav
+           buttons work during a game, so there has to be a way back. -->
+      <div id="board-note" class="hidden"></div>
+    </section>
+
+    <section id="moves-col" data-tabs="analysis play">
+      <!-- The curve of the game sits above the moves it is a curve of, so a
+           dip and the move that caused it are one glance apart. -->
       <div id="eval-plot-wrap" class="hidden">
         <div id="eval-plot"></div>
         <div id="eval-plot-hint"></div>
       </div>
-      <div id="nav-buttons">
-        <button id="nav-start" title="First move">|&lt;</button>
-        <button id="nav-prev" title="Previous move">&lt;</button>
-        <button id="nav-next" title="Next move">&gt;</button>
-        <button id="nav-end" title="Last move">&gt;|</button>
-        <button id="nav-flip" title="Flip the board">⇅</button>
-        <button id="board-settings-btn" title="Board settings — board, pieces, legal moves">⚙</button>
+      <!-- Between the curve and the moves: the engine's answer for the
+           position the move list is pointing at. -->
+      <div id="live-lines" class="hidden">
+        <div class="live-row">
+          <span class="live-title">Engine</span>
+          <label>Lines
+            <select id="live-lines-count">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </label>
+        </div>
+        <div id="live-lines-body"></div>
       </div>
-      <!-- Only ever shown when the board is behind the live game: the nav
-           buttons work during a game, so there has to be a way back. -->
-      <div id="board-note" class="hidden"></div>
-      <div class="fen-row">
-        <input type="text" id="fen-box" readonly />
-        <button id="fen-copy">Copy</button>
-      </div>
-      <div class="fen-row">
-        <input type="text" id="fen-goto" placeholder="paste a FEN to jump to it" />
-        <button id="fen-goto-btn">Go</button>
-      </div>
-    </section>
-
-    <section id="moves-col" data-tabs="analysis play">
       <div class="panel" id="moves-panel">
         <h3>Moves</h3>
         <div id="move-table-wrap">
-          <!-- Section 5 puts your moves in the left column whichever colour
-               you played, so the header has to say which is which. -->
           <table id="move-table">
-            <thead><tr><th></th><th id="mt-yours"></th><th id="mt-theirs"></th></tr></thead>
+            <thead><tr><th></th><th id="mt-white"></th><th id="mt-black"></th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+        <!-- Under the moves they step through. -->
+        <div id="nav-buttons">
+          <button id="nav-start" title="First move">|&lt;</button>
+          <button id="nav-prev" title="Previous move">&lt;</button>
+          <button id="nav-next" title="Next move">&gt;</button>
+          <button id="nav-end" title="Last move">&gt;|</button>
         </div>
       </div>
     </section>
@@ -117,6 +134,17 @@
       <!-- ============ Analyse a game ============ -->
       <div class="tab-panels" id="panels-analysis" role="tabpanel"
            aria-labelledby="tab-btn-analysis">
+        <!-- The reference library, answering "what do people play here?" for
+             whatever is on the board. Push moves around on the board and it
+             follows you -- no engine, no game, just the database. -->
+        <details class="panel collapsible" id="opening-panel" open>
+          <summary><h3>Opening database</h3><span class="panel-summary" id="opening-summary"></span></summary>
+          <div class="collapsible-body">
+            <div id="opening-total"></div>
+            <div id="opening-body"></div>
+          </div>
+        </details>
+
         <details class="panel collapsible" id="upload-panel">
           <summary><h3>Load games</h3><span class="panel-summary" id="upload-summary"></span></summary>
           <div class="collapsible-body">
@@ -124,6 +152,12 @@
             <textarea id="pgn-paste" placeholder="...or paste PGN text here"></textarea>
             <button id="pgn-upload-btn">Upload</button>
             <div id="upload-status"></div>
+            <!-- Sets the board and nothing else: no game is loaded, and the
+                 library selection is left where it was. -->
+            <div class="fen-row">
+              <input type="text" id="fen-goto" placeholder="paste a FEN to set the board" />
+              <button id="fen-goto-btn">Set</button>
+            </div>
           </div>
         </details>
 
@@ -469,6 +503,18 @@
         <!-- The dialog is a full-screen overlay, so the real board behind it
              is not visible while choosing -- this swatch is the feedback. -->
         <div id="board-preview" aria-hidden="true"></div>
+        <label>Evaluation bar
+          <select id="b-eval-bar-side">
+            <option value="top">Along the top</option>
+            <option value="left">Standing on the left</option>
+            <option value="right">Standing on the right</option>
+          </select>
+        </label>
+        <p class="panel-note">
+          Beside the board it is as tall as the board and reads bottom-up for
+          White, which is the shape most sites use; along the top it takes no
+          width from the board.
+        </p>
       </fieldset>
 
       <fieldset>
@@ -490,6 +536,15 @@
           move lands. Touching the board withdraws it, and a pre-move that
           isn't legal in the position that arrives is simply dropped.
         </p>
+      </fieldset>
+
+      <fieldset>
+        <legend>This position</legend>
+        <div class="fen-row">
+          <input type="text" id="fen-box" readonly />
+          <button type="button" id="fen-copy">Copy</button>
+        </div>
+        <p class="panel-note">The FEN of whatever is on the board right now.</p>
       </fieldset>
 
       <div class="dialog-actions">

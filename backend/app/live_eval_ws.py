@@ -48,6 +48,13 @@ async def live_eval(websocket: WebSocket):
                 seq = msg.get("seq")
                 if fen and seq is not None:
                     manager.sessions[connection_id].request(fen, seq)
+            elif msg.get("type") == "multipv":
+                # How many ranked lines the board wants back. Carries a
+                # sequence number because it re-runs the current position,
+                # and the client has to be able to tell the answers apart.
+                seq = msg.get("seq")
+                if seq is not None:
+                    manager.sessions[connection_id].set_multipv(msg.get("lines", 1), seq)
     except WebSocketDisconnect:
         pass
     finally:

@@ -21,7 +21,8 @@ the whole build order from the spec.
 
 Beyond the spec: the page is split into four tabs rather than one long column,
 puzzles built from your own mistakes, pre-moves, looking back through a game
-while you're playing it, and separate board/piece sets. What's next is in
+while you're playing it, separate board/piece sets, and an opening database
+built from a PGN library that answers the board as you move. What's next is in
 [`docs/TODO.md`](docs/TODO.md).
 
 ### The four tabs
@@ -102,10 +103,11 @@ engines; `/api/jobs/pool` covers the queue.
 ### The board
 
 The board faces the side **you** played: open a game you had as Black and it
-opens flipped, with your pieces at the bottom. A plate above and below the
-board names the two players with their header ratings, marks which one is
+opens flipped, with your pieces at the bottom. A line of bold text above and below
+the board names the two players with their header ratings, marks which one is
 you, shows the result once the game is over, and carries the clocks during a
-game against Maia. The plates follow the board, so the name under the board
+game against Maia -- text rather than a bordered card, which boxed in the
+board it belonged to. The plates follow the board, so the name under the board
 is always whoever is at the bottom.
 
 `⇅` (or the `f` key) flips it manually; selecting another game clears that
@@ -124,9 +126,15 @@ with no known route into it has no last move to point at. Stepping *backwards*
 lights the move before the one you undid, which is the move that made the
 position you're now looking at.
 
-**⚙ beside the board** opens the board's own settings, separate from Engine
-Settings: which board, which pieces, and whether picking a piece up shows dots
-on its legal destinations. Board and pieces are chosen **separately** -- they
+**⇅ and ⚙ sit at the top right of the board.** ⚙ opens the board's own settings, separate from Engine
+Settings: which board, which pieces, where the evaluation bar goes, and whether
+picking a piece up shows dots on its legal destinations. The **evaluation bar**
+runs along the top of the board (the default) or stands beside it on either
+hand; standing, it is as tall as the board and fills from the bottom for White,
+which is the shape most sites use. The **copyable FEN** of whatever is on the
+board is in here too, since it is a thing you want occasionally rather than a
+thing you want taking up space under the board every day. Board and pieces are
+chosen **separately** -- they
 are independent art, and the pairing you want is rarely both halves of one set
 -- and each dropdown offers only the sets that actually contain that half, so
 a set holding just a `board.png` can't leave you with invisible pieces. It
@@ -142,21 +150,108 @@ over is outlined as the one it would land on, so letting go there plays the
 move and letting go anywhere else puts it back. Picking a piece up sweeps a
 circle out over its square, and its destinations arrive by growing rather than
 appearing all at once -- a dot on an empty square, and for a piece you could
-take, the square tinted around a hole cut for the piece itself, because a dot
-would simply hide behind it.
+take, the square tinted around a hole cut for the piece itself. All of it is
+drawn *under* the pieces: a marker is about a piece, and covering the piece
+with it is backwards.
+
+The board takes as much height as the window leaves it, down to the plates and
+the nav buttons under it, and it resizes with the window rather than at fixed
+breakpoints -- drag the edge and it follows. The FEN boxes at the bottom of the
+column are the first thing to fall past the fold on a short screen.
+
+Once a game has been analysed, the move that produced the position on the board
+carries its **classification badge** on the corner of the square it landed on,
+and the same badge sits beside the move in the move table. They live in
+`assets/icons/classification/<name>.svg`, reached by the classifier's own name
+for the move.
+
+Only the ones worth stopping at are badged: Brilliant, Great, Best,
+Inaccuracy, Mistake, Miss and Blunder. Excellent, Good and Book are the moves
+you were always going to play, and a badge on nearly every move is a badge on
+none of them -- those three keep their colour in the move table and say nothing
+else. `BADGED_CLASSIFICATIONS` in `app.js` is the whole list.
+
+Only **brilliant** gets a sound of its own. Every move already says what it did
+-- a capture, a check, a castle -- and a second noise stacked on every one of
+them turns stepping through a game into a slot machine; a brilliancy is rare
+enough to be worth interrupting for.
 
 On a wide screen the layout is three columns -- board, move table, then
 everything else -- putting the move table beside the board as section 5 asks.
 They wrap in that order on anything narrower, so a phone gets board, moves,
 then the panels.
 
-The move table keeps your moves in the left column whichever colour you
-played (section 5), which is confusing without a header saying so — so the
-columns are labelled with the two players' names.
+The move table is **White on the left, Black on the right**, always. Section 5
+asked for your moves in the left column whichever colour you played; a table
+whose columns swap between games turns out to be one you have to read the
+header of every time anyway, so the header carries that instead -- both
+columns are labelled with the player's name, and yours says `(you)`.
+
+Above the move table sits the whole-game evaluation curve, so a dip and the
+move that caused it are one glance apart. Under it are the four step buttons,
+directly below the moves they walk. The whole column stops where the board
+does: the plot and the buttons take what they need and the move list gets the
+rest, scrolling inside itself rather than running on past the board.
+
+**Analyse live** in the Analysis panel shows what the eval bar's engine is
+actually looking at -- the top one, two or three moves it is considering, each
+with its score, its line as SAN and the depth it has reached. It doesn't start
+anything: the live-eval process has been running on the position in front of
+you the whole time (spec section 3), and this asks that same process for more
+ranked lines. Switching it off asks for one line again, which is what the bar
+needed anyway.
+
+**Pasting a FEN** lives in **Load games** and does exactly one thing: it puts
+that position on the board. It doesn't load a game, doesn't clear the one you
+have selected, and doesn't touch the analysis panel.
+
+### Opening database
+
+Beside the board on **Analyse a game**: what a large reference library
+actually played from the position in front of you. Every move seen from here,
+most-played first, with how many games took it, how those games finished as a
+white/draw/black bar from the side-to-move's point of view, and the players'
+average rating. Clicking a row plays that move, which is the quick way to walk
+a line; pushing pieces around on the board does the same thing from the other
+direction, and the panel follows either way. No engine and no opponent are
+involved -- the analysis board has always let you move both sides freely, and
+this is that board with the library's answer beside it. Past the last position
+anyone reached, it says so rather than showing an empty table.
+
+The database is not shipped: point it at a PGN library and build it once. From
+`backend/`:
+
+```bash
+python -m app.opening_import /path/to/LumbrasGigaBase.pgn
+```
+
+`.pgn`, `.pgn.gz`, `.pgn.bz2` and `.pgn.zst` all work. It writes
+`backend/data/openings.db` (override with `CHESSIMPROVER_OPENING_DB`), which
+is a separate file from `chessimprover.db` on purpose: it is a rebuildable
+derived thing that no account owns, and deleting it costs you nothing but the
+rebuild. The running server picks it up without a restart.
+
+| Option | What it does |
+| --- | --- |
+| `--max-plies 24` | How deep to index, in half-moves. Past the opening, positions stop repeating between games, so deeper mostly adds rows that will be seen once and can't tell you anything. |
+| `--min-elo 2200` | Skip games whose two players average below this. |
+| `--since 2015` | Skip games played before this year. |
+| `--limit 50000` | Stop early — for a trial run before committing to the whole file. |
+| `--reset` | Start from empty instead of adding to what's there. Without it a second file is merged into the same database. |
+
+Budget roughly an hour per three million games; the two filters and
+`--max-plies` are the levers if that's too long, since a game rejected by a
+filter is never parsed at all. A giga-base is an afternoon, once.
+
+**Use the PGN, not the `.db3`/`.ecsi` copy of the same library.** PGN is a
+documented text format that python-chess reads directly, and either way the
+games have to be walked once and re-indexed by position -- a database built
+for a different program's queries doesn't answer "which moves were played
+here" any faster than the text does.
 
 ### Evaluation plot
 
-Under the board, once a game has been analysed: the whole game's evaluation,
+Above the move table, once a game has been analysed: the whole game's evaluation,
 with the mistakes and blunders marked on the curve, hover for the move and
 its win probability, click anywhere to jump the board there.
 
@@ -378,27 +473,77 @@ gone.
 
 ### Analysis modes
 
-**Quick** is the Stockfish-only pass. **Full** adds the Maia sweep, and with
-it two things that need Maia:
+**Quick** is the Stockfish-only pass, which labels every move from what it gave
+up against the engine's own best play:
 
-- **Great / Brilliant.** A move qualifies when it gave up essentially nothing
-  against the engine's own best play *and* players around your estimated
-  strength mostly wouldn't have found it. Brilliant is Great plus a material
-  sacrifice, detected with a static exchange evaluation (both a capture into
-  a losing exchange and a quiet move that leaves something hanging count).
+| Label | What it means |
+|---|---|
+| **Best** | the move the engine picked |
+| **Excellent** | under 2% win probability given up |
+| **Good** | under 5% |
+| **Book** | theory: the opening database has this move played from this position at least five times. Only ever replaces Best/Excellent/Good — a move being popular is not a defence, so if the engine says it dropped the game, the label that says so wins |
+| **Inaccuracy** | 5% or more given up |
+| **Mistake** | 10% or more |
+| **Miss** | a mistake or blunder of a particular shape: the position was winning (80%) and after the move it isn't (55% or less). Losing a won game is a different mistake from drifting from equal to slightly worse, and it's the one worth practising -- so Misses become puzzles alongside mistakes and blunders |
+| **Blunder** | 20% or more |
+
+**Full** adds the Maia sweep, and with it two things that need Maia:
+
+- **Great / Brilliant.** A **Great** is the *only* move: it gave up essentially
+  nothing, the second-best move the engine could find was far worse, the
+  position had more than one legal move to choose between, and players around
+  your estimated strength mostly wouldn't have played it. **Brilliant** is a
+  Great that also gives up material.
 - **Blunder to Elo correlation.** For each mistake or blunder, the weakest
   swept Elo whose Maia choice was the move you actually played -- "a player
   even this weak would have been expected to avoid it". If no swept Elo plays
   it, that's reported as no correlation rather than as a number.
 
-The spec asked for the two Great/Brilliant criteria to be pinned down rather
-than improvised. They're settings, defaulting to:
+The only-move test is the load-bearing one, and it is why the analysis pass
+searches two lines per position rather than one. Without it, "gave up nothing"
+is true of most moves in a quiet position, and a sacrifice detector on its own
+awards a Brilliant every time something happens to be hanging -- a king
+stepping out of a knight fork read as sacrificing the forked rook, which the
+fork had already won. The sacrifice test now also compares what the opponent
+can take *after* the move against what they could have taken anyway, so
+material that was already lost isn't credited to the move that didn't save it.
+
+The spec asked for the Great/Brilliant criteria to be pinned down rather than
+improvised. They're settings, defaulting to:
 
 | Setting | Default | Meaning |
 |---|---|---|
 | Max win-prob given up vs best | `0.02` | near-lossless; allows for the engine having several equal best moves |
+| Min win-prob gap to the second-best move | `0.15` | "there was nothing else". +7.0 falling to +2.0 is a gap of `0.25`; a rook for nothing from level material is about `0.4` |
 | Max share of players who'd find it | `0.20` | roughly a 1-in-5 move |
 | Brilliant | on | Great + a material sacrifice |
+
+A raw centipawn gap would be the obvious way to say "the alternative was much
+worse" and is the wrong one: +20 against +15 is 500 centipawns between two
+moves that both win trivially. Win probability is what the rest of the
+classifier already speaks, and it says the two are the same move.
+
+**When no setting explains the play at all**, the panel now says so rather
+than describing the player. The models cover 600 up and match about 47% of a
+600-rated player's moves, so a best-case match rate far under that is not the
+grid being too narrow -- it is a player no setting predicts, or too few moves
+to tell one setting from another. When the best match rate anywhere on the grid
+comes in under 70% of what the model manages at the fitted rating, the panel
+says the number is where the fit landed rather than a strength. It shows up
+alongside a wide interval and a low confidence, and all three mean the same
+thing.
+
+**Top-1 matching is the weak part of this method, not the grid.** Asking only
+"was this the model's single favourite move" throws away everything else it
+believed: a move it ranked second with 30% probability and a move it never
+considered both score zero. That is why this needs a hundred positions to
+settle when a likelihood over the model's policy -- the probability it gave the
+move actually played, at each rating, multiplied across the game -- gets a
+usable answer from a couple of dozen. The sweep already stores *where* the
+played move ranked (1-9, not just hit/miss), so a rank-weighted likelihood is
+available from the cached scores with no extra engine time; the full policy
+would need the wrapper to expose per-candidate probabilities. Both are in
+[`docs/TODO.md`](docs/TODO.md).
 
 Note the "share who'd find it" is read off the cached sweep matrix as Maia's
 match rate in a band around your estimated Elo, not from a single grid point,

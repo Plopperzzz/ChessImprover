@@ -74,13 +74,16 @@
   `/assets/sets/{set_name}/` (board.png, wp.png, bp.png, etc.). Initially one
   set exists; more can be added later via directory scan/manifest with no
   code changes.
-- Eval bar to the left of the board, tied to the live Stockfish process for
-  the currently viewed position (see §3).
-- Move table to the right of the board, two columns, oriented to the
-  selected player (their moves always in the left column, opponent's in the
-  right), independent of whether that player was White or Black.
-- Move navigation buttons below the board (first/prev/next/last; keyboard
-  arrow support is a nice-to-have).
+- Eval bar tied to the live Stockfish process for the currently viewed
+  position (see §3). Its placement is a board setting: along the top of the
+  board, or standing to the left or right of it.
+- Move table to the right of the board, two columns. Built oriented to the
+  selected player; now **White always on the left**, with the player's name
+  (and `(you)`) in the column header instead — a table whose columns swap
+  between games has to be read from its header either way.
+- Move navigation buttons below the *move table*, which is what they step
+  through (first/prev/next/last; keyboard arrow support is a nice-to-have).
+  Flip and the board-settings button stay under the board.
 - Piece movement animation on navigation and on played moves: slide the
   moved piece to its destination, fade out any captured piece, then settle
   to the exact resulting position (handles captures, castling rook,
@@ -99,6 +102,18 @@
   square around a circular hole cut for the piece instead of a dot.
 - Board sized responsively from available viewport space, clamped to a
   sensible min/max — must work acceptably on a phone screen.
+- Move classification (beyond the four bands of section 8): Best, Excellent
+  and Good split the top band by whether the engine picked the move and how
+  much it gave up; Book comes from the opening database; Miss is a
+  mistake/blunder that threw away a won position. Great and Brilliant now
+  require the move to have been the *only* move — the second-best line at
+  least 0.15 win probability worse, and more than one legal move to choose
+  from — which is why the analysis pass searches MultiPV 2.
+- Opening database (beyond the spec): a panel beside the analysis board
+  listing every move a reference PGN library played from the current
+  position, with game counts, the white/draw/black split and average
+  rating; clicking a row plays the move. Built once from a PGN dump by
+  `app.opening_import` into its own SQLite file, keyed by EPD.
 
 ## 6. Board Animation During Analysis
 

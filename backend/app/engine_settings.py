@@ -172,6 +172,10 @@ def maia_models(path: str | None = None, size: str | None = None, user: dict = D
     }
 
 
+# Along the top of the board, or standing beside it on either hand.
+EVAL_BAR_SIDES = {"top", "left", "right"}
+
+
 class ProfileUpdate(BaseModel):
     display_name: str | None = None
     asset_set: str | None = None       # legacy: one set for both halves
@@ -179,6 +183,7 @@ class ProfileUpdate(BaseModel):
     piece_set: str | None = None
     show_legal_moves: bool | None = None
     allow_premoves: bool | None = None
+    eval_bar_side: str | None = None
 
 
 @router.put("/profile")
@@ -220,6 +225,10 @@ def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
         updates["show_legal_moves"] = int(body.show_legal_moves)
     if body.allow_premoves is not None:
         updates["allow_premoves"] = int(body.allow_premoves)
+    if body.eval_bar_side is not None:
+        if body.eval_bar_side not in EVAL_BAR_SIDES:
+            raise HTTPException(400, f"eval_bar_side must be one of {sorted(EVAL_BAR_SIDES)}")
+        updates["eval_bar_side"] = body.eval_bar_side
 
     if not updates:
         raise HTTPException(400, "nothing to update")

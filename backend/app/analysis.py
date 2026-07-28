@@ -21,17 +21,26 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from pydantic import BaseModel
 
 from .auth import SESSION_COOKIE, _user_for_token, require_user
-from .classify import classify_moves, eval_to_cp
+from .classify import apply_book, classify_moves, eval_to_cp
 from .db import db_cursor
 from .engine_manager import engine_options_from_settings, evaluate_position, start_configured_engine
 from .engine_settings import get_effective_settings
 from .jobqueue import pool, slots_for
+from .openings import book_lookup
 from .runs import load_for_game, save_analysis
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 ws_router = APIRouter()  # unprefixed -- /ws/analysis/{job_id}, matching live_eval_ws.py's pattern
 
 MAX_RETAINED_JOBS = 50
+
+# Two lines from every search in the analysis pass. The second one is what
+# says whether the best move was the *only* move, which is what Great and
+# Brilliant are now awarded for -- and getting it during the pass that has to
+# visit every position anyway beats a second pass over the game. MultiPV
+# costs search speed (Stockfish can prune less), so this stays at the one
+# extra line the classification needs and no more.
+ANALYSIS_MULTIPV = 2
 
 # Event types a reconnecting client only needs the *most recent* of. The
 # backlog is replayed on every reconnect, and a phone that locks its screen
@@ -135,17 +144,20 @@ def _evict_old_jobs(keep: int = MAX_RETAINED_JOBS):
 
 
 def _parse_game_positions(pgn_text: str):
-    """Returns (fens, sans, final_board). fens has N+1 entries (fens[0] is
-    the start position, fens[N] the final one) for a game of N moves."""
+    """Returns (fens, sans, ucis, final_board). fens has N+1 entries (fens[0]
+    is the start position, fens[N] the final one) for a game of N moves; sans
+    and ucis have N, describing the move played out of fens[i]."""
     game = chess.pgn.read_game(io.StringIO(pgn_text))
     board = game.board()
     fens = [board.fen()]
     sans = []
+    ucis = []
     for move in game.mainline_moves():
         sans.append(board.san(move))
+        ucis.append(move.uci())
         board.push(move)
         fens.append(board.fen())
-    return fens, sans, board
+    return fens, sans, ucis, board
 
 
 async def open_stockfish(engine_settings: dict):
@@ -164,9 +176,14 @@ async def stockfish_pass(job: AnalysisJob, pgn_text: str, engine_settings: dict,
     mode so all three classify identically. progress_scale/base fold this into
     a combined progress bar; `engine` reuses a caller-owned process, in which
     case the caller also owns closing it."""
-    fens, sans, final_board = _parse_game_positions(pgn_text)
+    fens, sans, ucis, final_board = _parse_game_positions(pgn_text)
     total = len(fens) - 1
     cp_evals: list[float] = [0.0] * len(fens)
+    # Per position: the move the engine preferred, and what the second-best
+    # one was worth (None when there was only one legal move). Best/Excellent
+    # and the only-move test behind Great and Brilliant are read off these.
+    best_ucis: list[str | None] = [None] * len(fens)
+    second_cp: list[float | None] = [None] * len(fens)
 
     owned = engine is None
     if owned:
@@ -192,8 +209,14 @@ async def stockfish_pass(job: AnalysisJob, pgn_text: str, engine_settings: dict,
             elif is_final and final_board.is_stalemate():
                 cp = 0.0
             else:
-                info = await evaluate_position(engine, fen, limit_type, limit_value)
+                info = await evaluate_position(engine, fen, limit_type, limit_value,
+                                               multipv=ANALYSIS_MULTIPV)
                 cp = eval_to_cp(info)
+                lines = info.get("lines") or []
+                if lines and lines[0].get("pv"):
+                    best_ucis[i] = lines[0]["pv"][0]
+                if len(lines) > 1:
+                    second_cp[i] = eval_to_cp(lines[1])
             cp_evals[i] = cp
             frac = progress_base + progress_scale * (i / max(1, total))
             await job.emit({"type": "progress", "ply": i, "total": total, "fen": fen,
@@ -203,9 +226,17 @@ async def stockfish_pass(job: AnalysisJob, pgn_text: str, engine_settings: dict,
             engine.terminate()
             await engine.wait_closed()
 
-    moves = classify_moves(cp_evals)
-    for m, san in zip(moves, sans):
+    moves = classify_moves(cp_evals, played_ucis=ucis, best_ucis=best_ucis,
+                           second_cp=second_cp)
+    for m, san, uci in zip(moves, sans, ucis):
         m["san"] = san
+        m["uci"] = uci
+    apply_book(
+        moves,
+        fens_before={i + 1: fens[i] for i in range(total)},
+        ucis={i + 1: ucis[i] for i in range(total)},
+        lookup=book_lookup,
+    )
     return moves
 
 

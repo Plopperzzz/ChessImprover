@@ -7,8 +7,15 @@
   --muted: #8b93a7;
   --accent: #5b8dee;
   /* One board width, shared by everything stacked with the board so the
-     column lines up instead of each element picking its own max. */
-  --board-w: min(92vw, 78vh, 620px);
+     column lines up instead of each element picking its own max.
+
+     Sized from the window rather than pinned: as tall as the screen leaves
+     room for once the plates and the nav buttons under it are counted, and
+     it follows the window down as well as up -- these are live units, so a
+     board that fits at full screen still fits half-way through a drag of the
+     window edge. The FEN boxes below can fall past the fold on a short
+     screen; the board is what you came to look at. */
+  --board-w: clamp(260px, min(94vw, calc(100vh - 260px)), 1200px);
 }
 
 * { box-sizing: border-box; }
@@ -206,32 +213,93 @@ input[type="text"], input[type="number"], textarea, select {
   min-width: 230px;
 }
 
+/* The evaluation bar and the board it describes. Which way round they sit is
+   a board setting, and the whole difference is a flex-direction: a column
+   runs the bar along the top of the board, a row stands it up beside. The
+   share of the bar that is White's arrives as one number either way --
+   `--eval-white`, set by the live-eval handler -- and it is this stylesheet
+   that decides whether that is a width or a height. */
+/* Along the top, the column is the plain stack it always was and the bar is
+   simply its first row. Beside the board it becomes a two-column grid: only
+   the bar and the board share the middle row, so the names still sit hard
+   against the board rather than being pushed off it by a bar that is taller
+   than both of them put together. */
+#board-col.eval-left, #board-col.eval-right {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: center;
+  align-items: center;
+  /* The column is a flex item of #layout and stretches to whichever column is
+     tallest -- with a game loaded, the panels beside it. A grid's rows take
+     that spare height and share it out, which walks the board away from the
+     name above it; the stack has to sit at the top and leave the slack
+     underneath. */
+  align-content: start;
+  row-gap: 6px;
+  column-gap: 8px;
+}
+#board-col.eval-left {
+  grid-template-areas: ". top" "bar board" ". bottom" ". note";
+}
+#board-col.eval-right {
+  grid-template-columns: auto auto;
+  grid-template-areas: "top ." "board bar" "bottom ." "note .";
+}
+#board-col.eval-left #eval-bar, #board-col.eval-right #eval-bar { grid-area: bar; }
+#board-col.eval-left #board, #board-col.eval-right #board { grid-area: board; }
+#board-col.eval-left #plate-top, #board-col.eval-right #plate-top { grid-area: top; }
+#board-col.eval-left #plate-bottom, #board-col.eval-right #plate-bottom { grid-area: bottom; }
+#board-col.eval-left #board-note, #board-col.eval-right #board-note { grid-area: note; }
+
 #eval-bar {
-  width: var(--board-w);
-  height: 20px;
+  --eval-white: 50%;
   background: #222;
   border: 1px solid var(--border);
   border-radius: 4px;
   position: relative;
   overflow: hidden;
+  flex: none;
 }
 #eval-fill {
   position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 50%;
   background: #eee;
-  transition: width 200ms ease;
 }
 #eval-label {
-  position: relative;
+  position: absolute;
   z-index: 2;
-  display: block;
   text-align: center;
-  font-size: 12px;
-  line-height: 20px;
   mix-blend-mode: difference;
   color: white;
 }
+
+/* Along the top: White's share fills from the left. */
+#board-col.eval-top #eval-bar { width: var(--board-w); height: 20px; }
+#board-col.eval-top #eval-fill {
+  left: 0; top: 0; bottom: 0;
+  width: var(--eval-white);
+  transition: width 200ms ease;
+}
+#board-col.eval-top #eval-label { inset: 0; font-size: 12px; line-height: 20px; }
+
+/* Standing beside it: White fills from the bottom, the way the board is laid
+   out -- White's side is the near one. */
+#board-col.eval-left #eval-bar,
+#board-col.eval-right #eval-bar { width: 26px; height: var(--board-w); }
+#board-col.eval-left #eval-fill,
+#board-col.eval-right #eval-fill {
+  left: 0; right: 0; bottom: 0;
+  height: var(--eval-white);
+  transition: height 200ms ease;
+}
+/* At the far end from White's fill, so the number isn't sitting on the edge
+   between the two colours as it moves. */
+#board-col.eval-left #eval-label,
+#board-col.eval-right #eval-label {
+  left: 0; right: 0; top: 2px;
+  font-size: 10px;
+  line-height: 12px;
+}
+
 
 #board {
   position: relative;
@@ -243,10 +311,20 @@ input[type="text"], input[type="number"], textarea, select {
   touch-action: none;
 }
 .board-bg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.piece-layer, .highlight-layer, .last-move-layer, .premove-layer, .drag-layer {
+.piece-layer, .highlight-layer, .last-move-layer, .premove-layer,
+.drag-layer, .mark-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
+}
+/* How the move that landed here was judged, straddling the square's top-right
+   corner the way a badge does -- `left` is set to the corner and the transform
+   centres it there. */
+.sq-mark {
+  position: absolute;
+  width: 35px;
+  height: 35px;
+  transform: translate(-55%, -45%);
 }
 /* A queued pre-move: a different colour from the last move, because it is a
    different kind of thing -- it might never happen. */
@@ -306,7 +384,7 @@ input[type="text"], input[type="number"], textarea, select {
   border-radius: 50%;
   background: rgba(91, 141, 238, 0.45);
 }
-.sq-select.animate::after { animation: sq-grow 190ms cubic-bezier(0.2, 0.85, 0.35, 1); }
+.sq-select.animate::after { animation: sq-grow 500ms cubic-bezier(0.2, 0.85, 0.35, 1); }
 .sq-select.premove::after { background: rgba(126, 110, 224, 0.5); }
 .sq-dot {
   position: absolute;
@@ -322,7 +400,7 @@ input[type="text"], input[type="number"], textarea, select {
   height: 32%;
   border-radius: 50%;
   background: rgba(91, 141, 238, 0.65);
-  animation: sq-grow 170ms cubic-bezier(0.2, 0.85, 0.35, 1);
+  animation: sq-grow 500ms cubic-bezier(0.2, 0.85, 0.35, 1);
 }
 .sq-dot.premove::after { background: rgba(150, 136, 235, 0.6); }
 /* A capture: the square tints around a hole cut for the piece being taken --
@@ -340,7 +418,7 @@ input[type="text"], input[type="number"], textarea, select {
      is a plain fraction of the square rather than of its diagonal. */
   background: radial-gradient(circle closest-side at 50% 50%,
     rgba(0, 0, 0, 0) 0 65%, rgba(91, 141, 238, 0.55) 67% 100%);
-  animation: sq-grow 170ms cubic-bezier(0.2, 0.85, 0.35, 1);
+  animation: sq-grow 500ms cubic-bezier(0.2, 0.85, 0.35, 1);
 }
 .sq-capture.premove::after {
   background: radial-gradient(circle closest-side at 50% 50%,
@@ -372,9 +450,11 @@ input[type="text"], input[type="number"], textarea, select {
 }
 
 /* Evaluation plot: the whole game's win probability, White's point of view. */
-#eval-plot-wrap { width: var(--board-w); }
+/* It lives above the move table now, so it takes that column's width rather
+   than the board's. */
+#eval-plot-wrap { width: 100%; }
 #eval-plot {
-  height: 90px;
+  height: 68px;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -388,8 +468,11 @@ input[type="text"], input[type="number"], textarea, select {
   font-variant-numeric: tabular-nums;
 }
 
-#nav-buttons { display: flex; gap: 8px; }
-#board-settings-btn { margin-left: auto; }
+#nav-buttons { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+/* At the right-hand end of the line the top player's name is on, so the name
+   still sits hard against the board. */
+#board-controls { display: flex; gap: 6px; flex: none; margin-left: 8px; }
+#board-controls button { padding: 2px 8px; font-size: 12px; line-height: 1.6; font-weight: 400; }
 /* Only visible when the board is showing an earlier position of a game still
    in progress, so it reads as a state you're in, not as decoration. */
 #board-note {
@@ -406,7 +489,9 @@ input[type="text"], input[type="number"], textarea, select {
 /* The plates hug the board rather than floating in the column's gap. */
 #plate-top { margin-bottom: -4px; }
 #plate-bottom { margin-top: -4px; }
-.fen-row { display: flex; gap: 8px; width: var(--board-w); }
+/* In the board dialog and the Load games panel now, so it takes the width
+   of whatever it is in rather than the board's. */
+.fen-row { display: flex; gap: 8px; width: 100%; margin-top: 6px; }
 .fen-row input { flex: 1; font-family: monospace; }
 
 #side-col {
@@ -431,17 +516,17 @@ input[type="text"], input[type="number"], textarea, select {
 /* Player plates: the board's own width, so they read as part of it. The one
    below the board is always whoever is at the bottom, which is you unless
    the board has been flipped. */
+/* Names, not cards. The plate is a line of text above and below the board --
+   a bordered panel around each one boxed in the board it belongs to. */
 .player-plate {
   display: flex;
   align-items: center;
   gap: 7px;
   width: var(--board-w);
-  padding: 5px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
+  padding: 1px 2px;
   font-size: 14px;
   line-height: 1.3;
+  font-weight: 600;
 }
 .player-plate .spacer { flex: 1; }
 .plate-dot {
@@ -606,21 +691,39 @@ input[type="text"], input[type="number"], textarea, select {
 #analysis-status { font-size: 13px; color: var(--muted); }
 #analysis-summary { font-size: 13px; margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; }
 #analysis-summary span.cnt-good { color: #6fc46f; }
-#analysis-summary span.cnt-inaccuracy { color: #e0c040; }
-#analysis-summary span.cnt-mistake { color: #e08040; }
-#analysis-summary span.cnt-blunder { color: #e05050; }
+#analysis-summary span.cnt-inaccuracy { color: #f7c631; }
+#analysis-summary span.cnt-mistake { color: #ffa459; }
+#analysis-summary span.cnt-blunder { color: #fa412d; }
 
-#move-table td.cls-great { color: #5fc9e8; font-weight: bold; }
-#move-table td.cls-brilliant { color: #21c2a4; font-weight: bold; }
-#analysis-summary span.cnt-great { color: #5fc9e8; }
-#analysis-summary span.cnt-brilliant { color: #21c2a4; }
+#move-table td.cls-great { color: #749bbf; font-weight: bold; }
+#move-table td.cls-brilliant { color: #26c2a3; font-weight: bold; }
+#analysis-summary span.cnt-great { color: #749bbf; }
+#analysis-summary span.cnt-brilliant { color: #26c2a3; }
 .blunder-elo { font-size: 11px; color: var(--muted); margin-top: 8px; }
 .blunder-elo b { color: var(--text); font-weight: 600; }
 .blunder-elo div { margin: 2px 0; }
 
-#move-table td.cls-inaccuracy { color: #e0c040; }
-#move-table td.cls-mistake { color: #e08040; }
-#move-table td.cls-blunder { color: #e05050; font-weight: bold; }
+#move-table td.cls-inaccuracy { color: #f7c631; }
+#move-table td.cls-mistake { color: #ffa459; }
+#move-table td.cls-miss { color: #ff7769; font-weight: bold; }
+#move-table td.cls-blunder { color: #fa412d; font-weight: bold; }
+/* The everyday moves. Book and Excellent carry no badge, so the colour is
+   all they get to say -- kept quiet, because most of a game is these. */
+#move-table td.cls-best { color: #81b64c; }
+#move-table td.cls-excellent { color: #95b776; }
+#move-table td.cls-book { color: #d5a47d; }
+#analysis-summary span.cnt-best { color: #81b64c; }
+#analysis-summary span.cnt-excellent { color: #95b776; }
+#analysis-summary span.cnt-book { color: #d5a47d; }
+#analysis-summary span.cnt-miss { color: #ff7769; }
+/* The badge beside the move it belongs to. The cell keeps the SAN on the
+   baseline and lets the icon sit beside it rather than pushing it around. */
+#move-table td .cls-icon {
+  vertical-align: middle;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+#move-table td:has(.cls-icon) { white-space: nowrap; }
 
 #game-picker { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .game-row {
@@ -678,8 +781,17 @@ input[type="text"], input[type="number"], textarea, select {
 .run-controls button { padding: 6px 10px; }
 #run-delete:hover { color: #e05050; border-color: #e05050; }
 
-#move-table-wrap { max-height: 300px; overflow-y: auto; }
-@media (min-width: 1150px) { #move-table-wrap { max-height: calc(var(--board-w) + 60px); } }
+#move-table-wrap { overflow-y: auto; min-height: 60px; }
+/* Beside the board, the column ends where the board does: the plot and the
+   step buttons take what they need and the move list gets the rest, scrolling
+   inside itself rather than growing past the board. Below 1150px the columns
+   have stacked and there is no board beside it to match. */
+@media (min-width: 1150px) {
+  #moves-col { max-height: calc(var(--board-w) + 60px); }
+  #moves-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  #move-table-wrap { flex: 1; min-height: 0; }
+}
+@media (max-width: 1149px) { #move-table-wrap { max-height: 300px; } }
 #move-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 #move-table thead th {
   position: sticky; top: 0; z-index: 1;      /* stays put while the list scrolls */
@@ -773,6 +885,66 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
 .browse-entry.dir::before { content: "📁 "; }
 .browse-entry.file::before { content: "📄 "; }
 
+/* ---------------- Opening database ---------------- */
+
+#opening-total {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.op-total-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+#opening-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+#opening-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 6px 4px 0;
+}
+#opening-table td { padding: 3px 6px 3px 0; }
+/* Every row is a move you can play, so the whole row is the target. */
+#opening-table tbody tr { cursor: pointer; }
+#opening-table tbody tr:hover { background: #24314a; }
+.op-san { font-weight: 600; white-space: nowrap; }
+.op-games { white-space: nowrap; color: var(--muted); }
+.op-share { margin-left: 6px; font-size: 11px; opacity: 0.75; }
+.op-wdl { width: 100%; }
+.op-rating { color: var(--muted); font-size: 12px; text-align: right; }
+/* White / draw / black in the colours of the thing they describe, so the bar
+   reads without a legend. */
+.wdl {
+  display: flex;
+  width: 100%;
+  min-width: 90px;
+  height: 15px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--border);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+.wdl > span { overflow: hidden; }
+.wdl-w { background: #e8eaf0; color: #14161c; }
+.wdl-d { background: #6b7285; color: #e8eaf0; }
+.wdl-b { background: #14161c; color: #e8eaf0; }
+.hint { font-size: 12px; color: var(--muted); margin: 6px 0; }
+.hint-cmd {
+  font-family: monospace;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+
 @media (max-width: 700px) {
   #layout { padding: 10px; gap: 10px; }
   #tabs { padding: 0 8px; }
@@ -782,3 +954,37 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
      wrap, so it just needs to not eat the whole screen. */
   #move-table-wrap { max-height: 40vh; }
 }
+
+/* ---------------- Live engine lines ----------------
+   What the eval bar's engine is actually looking at, in the panel that starts
+   the analyses rather than beside the board -- it is a lot of text, and the
+   board column is the one place with no room for any. */
+.live-row { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+.live-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.live-row select { width: auto; padding: 2px 6px; font-size: 12px; }
+.live-title { font-size: 12px; font-weight: 600; color: var(--muted); flex: 1; }
+#live-lines-btn.on { border-color: var(--accent); color: var(--accent); }
+/* Between the game's curve and its move list, which is where the position it
+   describes is being pointed at from. */
+#live-lines { flex: none; font-size: 12px; }
+#live-lines-body { display: flex; flex-direction: column; gap: 3px; }
+.live-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.live-score { font-weight: 700; font-variant-numeric: tabular-nums; flex: none; min-width: 48px; }
+.live-score.white-better { color: #e8eaf0; }
+.live-score.black-better { color: #8b93a7; }
+/* The line itself is the long part: it scrolls sideways rather than wrapping
+   into three rows and shoving the panel around every time the depth ticks. */
+.live-pv { flex: 1; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.live-pv::-webkit-scrollbar { display: none; }
+.live-depth { color: var(--muted); font-size: 11px; flex: none; }
+/* A second hiding switch, so a control that is off for this tab and a control
+   that is off because the feature is off don't fight over one class. */
+.tab-hidden { display: none !important; }

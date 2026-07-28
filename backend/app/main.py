@@ -17,6 +17,7 @@ from .engine_settings import router as settings_router
 from .games import router as games_router
 from .jobqueue import pool
 from .live_eval_ws import router as ws_router
+from .openings import router as openings_router
 from .paths import ASSETS_DIR, FRONTEND_DIR, asset_set_details, list_board_images
 from .play import router as play_router
 from .play import status as play_status
@@ -58,6 +59,7 @@ app.include_router(sweep_router)
 app.include_router(runs_router)
 app.include_router(batch_router)
 app.include_router(trend_router)
+app.include_router(openings_router)
 app.include_router(strength_router)
 app.include_router(puzzles_router)
 

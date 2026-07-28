@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- they follow you from the desktop to the phone.
     show_legal_moves INTEGER NOT NULL DEFAULT 1,
     allow_premoves INTEGER NOT NULL DEFAULT 1,
+    -- Where the evaluation bar goes: 'top' runs it along the top of the
+    -- board, 'left'/'right' stand it up beside the board.
+    eval_bar_side TEXT NOT NULL DEFAULT 'top',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -199,7 +202,7 @@ CREATE TABLE IF NOT EXISTS puzzles (
     played_uci TEXT NOT NULL,
     played_san TEXT,
     your_color TEXT NOT NULL,
-    classification TEXT NOT NULL,     -- 'mistake' | 'blunder'
+    classification TEXT NOT NULL,     -- 'mistake' | 'blunder' | 'miss'
     wp_drop REAL,                     -- win probability you gave up with it
     cp_before REAL,
     solution_uci TEXT,
@@ -312,6 +315,7 @@ def init_db():
         _ensure_column(conn, "users", "piece_set", "TEXT NOT NULL DEFAULT 'default'")
         _ensure_column(conn, "users", "show_legal_moves", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "users", "allow_premoves", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "users", "eval_bar_side", "TEXT NOT NULL DEFAULT 'top'")
         _split_asset_set(conn)
         _ensure_column(conn, "engine_settings", "maia_options_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "engine_settings", "great_max_drop", "REAL NOT NULL DEFAULT 0.02")

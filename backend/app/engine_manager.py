@@ -105,6 +105,7 @@ _CP_RE = re.compile(r"score cp (-?\d+)")
 _MATE_RE = re.compile(r"score mate (-?\d+)")
 _DEPTH_RE = re.compile(r"\bdepth (\d+)")
 _PV_RE = re.compile(r"\bpv (.+)$")
+_MULTIPV_RE = re.compile(r"\bmultipv (\d+)")
 
 
 def parse_info_line(line: str) -> dict | None:
@@ -118,11 +119,14 @@ def parse_info_line(line: str) -> dict | None:
         return None
     m_depth = _DEPTH_RE.search(line)
     m_pv = _PV_RE.search(line)
+    m_multipv = _MULTIPV_RE.search(line)
     return {
         "depth": int(m_depth.group(1)) if m_depth else None,
         "pv": m_pv.group(1).split() if m_pv else [],
         "cp": int(m_cp.group(1)) if m_cp else None,
         "mate": int(m_mate.group(1)) if m_mate else None,
+        # Absent on a single-PV search, where every line is the first one.
+        "multipv": int(m_multipv.group(1)) if m_multipv else 1,
     }
 
 
@@ -192,13 +196,27 @@ async def start_configured_engine(path: str, options: dict) -> EngineProcess:
     return engine
 
 
-async def evaluate_position(engine: EngineProcess, fen: str, limit_type: str, limit_value: int) -> dict:
+async def evaluate_position(engine: EngineProcess, fen: str, limit_type: str,
+                            limit_value: int, multipv: int = 1) -> dict:
     """Runs one blocking `go` on an already-configured engine and returns the
-    deepest info line seen before `bestmove` (mover's-perspective cp/mate)."""
+    deepest info line seen before `bestmove` (mover's-perspective cp/mate).
+
+    With `multipv` above 1 the return also carries `lines`: the deepest info
+    for each rank the engine reported, ordered best first. Rank 2 is what
+    says whether the best move was the *only* move, and asking for it during
+    the pass that has to visit every position anyway is far cheaper than a
+    second pass. The engine's MultiPV is set to match on every call, so a
+    process shared between callers can't be left in the wrong mode.
+    """
+    if getattr(engine, "_multipv", 1) != multipv:
+        await engine.send_line(f"setoption name MultiPV value {multipv}")
+        engine._multipv = multipv
     await engine.send_line(f"position fen {fen}")
     go_cmd = f"go movetime {limit_value}" if limit_type == "movetime" else f"go depth {limit_value}"
     await engine.send_line(go_cmd)
-    last_info = None
+    # Deepest info seen per rank. Ranks are reported round-robin as the search
+    # deepens, so the last one for each is the one to keep.
+    by_rank: dict[int, dict] = {}
     while True:
         line = await engine.readline()
         if line is None:
@@ -206,10 +224,13 @@ async def evaluate_position(engine: EngineProcess, fen: str, limit_type: str, li
         if line.startswith("info"):
             info = parse_info_line(line)
             if info:
-                last_info = info
+                by_rank[info["multipv"]] = info
         if line.startswith("bestmove"):
             break
-    return last_info or {"cp": 0, "mate": None, "depth": 0, "pv": []}
+    if not by_rank:
+        return {"cp": 0, "mate": None, "depth": 0, "pv": [], "multipv": 1, "lines": []}
+    lines = [by_rank[rank] for rank in sorted(by_rank)]
+    return {**lines[0], "lines": lines}
 
 
 class LiveEngineSession:
@@ -226,6 +247,11 @@ class LiveEngineSession:
         self.engine: EngineProcess | None = None
         self._latest_fen: str | None = None
         self._latest_seq = 0
+        # How many lines the client is asking for. Changing it re-runs the
+        # position it is looking at, so the extra lines appear immediately
+        # rather than when it next moves a piece.
+        self._multipv = 1
+        self._sent_multipv = 1
         self._wake = asyncio.Event()
         self._worker_task: asyncio.Task | None = None
         self._closed = False
@@ -244,12 +270,24 @@ class LiveEngineSession:
         self.last_active = time.monotonic()
         self._wake.set()
 
+    def set_multipv(self, lines: int, seq: int):
+        """How many ranked lines to stream. The search in flight is for one
+        line and can't grow into three, so this re-requests the position the
+        client is already on under a new sequence number."""
+        self._multipv = max(1, min(5, int(lines)))
+        if self._latest_fen:
+            self.request(self._latest_fen, seq)
+
     async def _worker_loop(self):
         try:
             while not self._closed:
                 await self._wake.wait()
                 self._wake.clear()
                 fen, seq = self._latest_fen, self._latest_seq
+                if self._sent_multipv != self._multipv:
+                    await self.engine.send_line(
+                        f"setoption name MultiPV value {self._multipv}")
+                    self._sent_multipv = self._multipv
                 await self.engine.send_line(f"position fen {fen}")
                 go_cmd = (
                     f"go movetime {self.limit_value}"
