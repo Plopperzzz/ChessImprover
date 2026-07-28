@@ -93,6 +93,10 @@ CEILING_REACHED = 0.95
 # player the sweep merely struggled with -- it is one it never located. A
 # beginner whose moves no Maia setting predicts lands at 0.3.
 CEILING_LOST = 0.70
+# Roughly what the models manage against the weakest players they cover. Worth
+# quoting in the message: it is what makes "no setting explains this" a claim
+# about the play rather than about the grid being too narrow.
+LOWEST_RATED_ACCURACY = 0.47
 
 
 def hits(rank_matrix: np.ndarray, top_n: int = 1) -> np.ndarray:
@@ -492,16 +496,17 @@ def _confidence(*, n_fit, n_total, rates, params, se, ci_low, ci_high, elos, pea
     # A shortfall this deep is not "harder to predict than the field", it is
     # the sweep not having found the player at all: no Elo on the grid agreed
     # with them much more than any other, so the peak is where the noise put
-    # it. That happens when someone is far below the weakest rating Maia can
-    # model, and saying it any more gently reads as a rating.
+    # it. The curves run down to 600, so this is not the grid being too narrow
+    # -- it is a player the model has no setting for, or too few moves to tell.
+    # Saying it any more gently reads as a rating.
     if ceiling and not ceiling["reached"] and ceiling["ratio"] < CEILING_LOST:
         score -= 1
         reasons.append(
             f"{ceiling['model']} agreed with {ceiling['observed']:.1%} of these moves at its best "
             f"setting, against the {ceiling['expected']:.1%} it manages on players at "
-            f"{round(peak)} -- no Elo on the grid explains this play, so the number above is "
-            f"where the fit landed rather than a strength. Expect this below about 1100, "
-            f"which is the weakest rating Maia was trained on")
+            f"{round(peak)} -- and it manages {LOWEST_RATED_ACCURACY:.0%} even on 600-rated "
+            f"players. No Elo on the grid explains this play, so the number above is where the "
+            f"fit landed rather than a strength")
     # Away from the edges a milder shortfall is not about the grid at all. The
     # player is simply harder to predict than the population Maia was measured
     # on -- which is worth saying plainly, because it is a fact about how they

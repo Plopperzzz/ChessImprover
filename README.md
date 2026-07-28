@@ -523,15 +523,27 @@ worse" and is the wrong one: +20 against +15 is 500 centipawns between two
 moves that both win trivially. Win probability is what the rest of the
 classifier already speaks, and it says the two are the same move.
 
-**Below about 1100 the sweep has nothing to measure with.** Maia's models are
-trained on Lichess games from 1100 up; a player weaker than that is not
-predicted much better by one setting than another, so the fitted peak lands
-wherever the noise put it and the number is not a rating. That case is now
-named as itself: when the best match rate anywhere on the grid comes in under
-70% of what Maia manages on players at the fitted rating, the panel says no Elo
-on the grid explains the play rather than describing it as an unusually
-unpredictable player. It shows up alongside a wide interval and a low
-confidence, and all three mean the same thing.
+**When no setting explains the play at all**, the panel now says so rather
+than describing the player. The models cover 600 up and match about 47% of a
+600-rated player's moves, so a best-case match rate far under that is not the
+grid being too narrow -- it is a player no setting predicts, or too few moves
+to tell one setting from another. When the best match rate anywhere on the grid
+comes in under 70% of what the model manages at the fitted rating, the panel
+says the number is where the fit landed rather than a strength. It shows up
+alongside a wide interval and a low confidence, and all three mean the same
+thing.
+
+**Top-1 matching is the weak part of this method, not the grid.** Asking only
+"was this the model's single favourite move" throws away everything else it
+believed: a move it ranked second with 30% probability and a move it never
+considered both score zero. That is why this needs a hundred positions to
+settle when a likelihood over the model's policy -- the probability it gave the
+move actually played, at each rating, multiplied across the game -- gets a
+usable answer from a couple of dozen. The sweep already stores *where* the
+played move ranked (1-9, not just hit/miss), so a rank-weighted likelihood is
+available from the cached scores with no extra engine time; the full policy
+would need the wrapper to expose per-candidate probabilities. Both are in
+[`docs/TODO.md`](docs/TODO.md).
 
 Note the "share who'd find it" is read off the cached sweep matrix as Maia's
 match rate in a band around your estimated Elo, not from a single grid point,
