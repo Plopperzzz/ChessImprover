@@ -20,6 +20,7 @@
         <button type="submit">Create account</button>
       </form>
     </details>
+    <p id="login-message" class="login-message hidden"></p>
   </div>
 </div>
 
@@ -133,6 +134,16 @@
           <summary><h3>Games</h3><span class="panel-summary" id="games-summary"></span></summary>
           <div class="collapsible-body">
             <div id="game-picker"></div>
+            <!-- A game is "unassigned" when neither PGN header matched your
+                 names. Re-checking is the one-click fix after a rename; the
+                 per-game W/B chips are for the ones matching can't get. -->
+            <div class="games-tools">
+              <button type="button" id="rematch-colors-btn"
+                      title="Re-check which side was yours in every game, using this account's names">
+                Re-check my side
+              </button>
+              <span id="rematch-status"></span>
+            </div>
           </div>
         </details>
 

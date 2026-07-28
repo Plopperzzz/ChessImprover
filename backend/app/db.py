@@ -107,6 +107,10 @@ CREATE TABLE IF NOT EXISTS games (
     year INTEGER,          -- NULL if year/month unparseable -- excluded from date-bucketed views
     month INTEGER,
     your_color TEXT,       -- 'w' | 'b' | 'unassigned'
+    -- Set when a human picked the side by hand. A re-match after an account
+    -- rename skips these rows, so correcting one odd game (an alt handle, a
+    -- team event under a different name) isn't undone by the next rename.
+    your_color_locked INTEGER NOT NULL DEFAULT 0,
     pgn_text TEXT NOT NULL,
     headers_json TEXT NOT NULL,
     -- Milliseconds spent per ply, from the %clk comments in the export. Read
@@ -318,6 +322,7 @@ def init_db():
         _ensure_column(conn, "engine_settings", "maia_multipv", "INTEGER NOT NULL DEFAULT 3")
         _ensure_column(conn, "engine_settings", "min_think_ms", "INTEGER NOT NULL DEFAULT 2000")
         _ensure_column(conn, "games", "clocks_json", "TEXT")
+        _ensure_column(conn, "games", "your_color_locked", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "sweep_positions", "think_ms", "INTEGER")
         _ensure_column(conn, "run_games", "maia_model_size", "TEXT")
         _ensure_column(conn, "engine_settings", "maia_accuracy_offset", "REAL NOT NULL DEFAULT 0.0")

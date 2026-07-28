@@ -23,15 +23,72 @@ def _parse_year_month(headers: dict) -> tuple[int | None, int | None]:
         return None, None
 
 
-def _match_color(headers: dict, display_name: str) -> str:
-    name = display_name.strip().lower()
+def account_names(user) -> list[str]:
+    """Every name an account may appear under in a PGN header.
+
+    Both the display name and the username are tried, because which of the two
+    someone typed as their chess.com handle is not something they should have
+    to get right when creating the account -- getting it wrong used to leave
+    every uploaded game 'unassigned', with no way to correct it short of
+    re-uploading.
+    """
+    names = []
+    for key in ("display_name", "username"):
+        value = (user[key] or "").strip().lower() if key in user.keys() else ""
+        if value and value not in names:
+            names.append(value)
+    return names
+
+
+def match_color(headers: dict, names) -> str:
+    """Which side the account played, by matching any of its names against the
+    White/Black headers (case-insensitive, trimmed). Returns 'unassigned'
+    rather than guessing if neither matches -- callers must surface that to
+    the user, not drop the game or silently pick a side."""
+    if isinstance(names, str):
+        names = [names]
+    wanted = {n.strip().lower() for n in names if n and n.strip()}
     white = (headers.get("White") or "").strip().lower()
     black = (headers.get("Black") or "").strip().lower()
-    if name and name == white:
+    if white in wanted:
         return "w"
-    if name and name == black:
+    if black in wanted:
         return "b"
     return "unassigned"
+
+
+def reassign_your_colors(conn, user_id: int, names) -> dict:
+    """Re-runs the White/Black match over every game already in the library,
+    for when the names an account answers to have changed.
+
+    Only games whose colour actually moves are written, and a game the user
+    has assigned by hand is left alone -- see `games.your_color_locked`.
+    Puzzles built for a side that is no longer the user's side are dropped:
+    they were made from the opponent's mistakes, which are not your lesson.
+    """
+    rows = conn.execute(
+        "SELECT id, headers_json, your_color FROM games "
+        "WHERE user_id = ? AND your_color_locked = 0",
+        (user_id,),
+    ).fetchall()
+    changed = []
+    for row in rows:
+        try:
+            headers = json.loads(row["headers_json"])
+        except (ValueError, TypeError):
+            continue
+        colour = match_color(headers, names)
+        if colour != row["your_color"]:
+            changed.append((colour, row["id"]))
+    if changed:
+        conn.executemany("UPDATE games SET your_color = ? WHERE id = ?", changed)
+        conn.executemany(
+            "DELETE FROM puzzles WHERE game_id = ? AND your_color != ?",
+            [(game_id, colour) for colour, game_id in changed],
+        )
+    assigned = sum(1 for colour, _ in changed if colour != "unassigned")
+    return {"changed": len(changed), "assigned": assigned,
+            "unassigned": len(changed) - assigned}
 
 
 _CLK_RE = re.compile(r"\[%clk\s+(\d+):(\d+):([\d.]+)\]")
@@ -92,7 +149,7 @@ def _think_times(game, headers: dict) -> list | None:
     return out
 
 
-def parse_games_from_text(source_name: str, text: str, display_name: str) -> list[dict]:
+def parse_games_from_text(source_name: str, text: str, names) -> list[dict]:
     """Parses every game out of a (possibly multi-game) PGN text blob.
     Returns a list of dicts ready to insert into the games table, in the
     order the games appear in the source text."""
@@ -105,7 +162,7 @@ def parse_games_from_text(source_name: str, text: str, display_name: str) -> lis
             break
         headers = dict(game.headers)
         year, month = _parse_year_month(headers)
-        your_color = _match_color(headers, display_name)
+        your_color = match_color(headers, names)
         # Clocks are read here because the exporter below strips comments --
         # once a game is stored there is no way to recover them.
         think_ms = _think_times(game, headers)

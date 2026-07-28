@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from .auth import require_user
 from .db import db_cursor
-from .pgn_parse import parse_games_from_text
+from .pgn_parse import account_names, parse_games_from_text, reassign_your_colors
 from .runs import analyzed_game_ids
 
 router = APIRouter(prefix="/api/games", tags=["games"])
@@ -33,7 +34,7 @@ async def upload_games(
                 (user["id"], source_name, raw_text),
             )
             upload_id = cur.lastrowid
-            games = parse_games_from_text(source_name, raw_text, user["display_name"])
+            games = parse_games_from_text(source_name, raw_text, account_names(user))
             if not games:
                 continue
             for g in games:
@@ -79,7 +80,8 @@ def list_games(user: dict = Depends(require_user)):
     with db_cursor() as conn:
         rows = conn.execute(
             """SELECT id, batch_index, source_name, white, black, result,
-                      date_header, utc_date_header, year, month, your_color
+                      date_header, utc_date_header, year, month, your_color,
+                      your_color_locked
                FROM games WHERE user_id = ? ORDER BY id""",
             (user["id"],),
         ).fetchall()
@@ -87,6 +89,52 @@ def list_games(user: dict = Depends(require_user)):
     # picker can mark which games already have a saved analysis.
     analysed = analyzed_game_ids(user["id"])
     return [{**dict(r), "analyzed": analysed.get(r["id"])} for r in rows]
+
+
+@router.post("/rematch-colors")
+def rematch_colors(user: dict = Depends(require_user)):
+    """Re-runs the White/Black match over the whole library using the account's
+    current names. An account rename already does this; this is for the games
+    that were uploaded under a name that has since been corrected some other
+    way, and for seeing the result without renaming anything."""
+    with db_cursor() as conn:
+        return reassign_your_colors(conn, user["id"], account_names(user))
+
+
+class ColorIn(BaseModel):
+    your_color: str
+
+
+@router.patch("/{game_id}/color")
+def set_your_color(game_id: int, body: ColorIn, user: dict = Depends(require_user)):
+    """Assigns which side of one game was yours, by hand.
+
+    Header matching can't win every time -- a game played under an alt handle,
+    or a team event that lists a club name -- so a game stuck on 'unassigned'
+    needs a way out that doesn't involve renaming the account. The choice is
+    marked locked so a later rename doesn't quietly overwrite it. Puzzles
+    built for the other side are dropped, since they came from moves that are
+    now the opponent's.
+    """
+    colour = body.your_color.strip().lower()
+    if colour not in ("w", "b", "unassigned"):
+        raise HTTPException(400, "your_color must be 'w', 'b' or 'unassigned'")
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT id FROM games WHERE id = ? AND user_id = ?", (game_id, user["id"])
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "no such game")
+        # Setting it back to 'unassigned' by hand releases the lock as well:
+        # that is "I don't know either", not a decision worth protecting.
+        conn.execute(
+            "UPDATE games SET your_color = ?, your_color_locked = ? WHERE id = ?",
+            (colour, 0 if colour == "unassigned" else 1, game_id),
+        )
+        conn.execute(
+            "DELETE FROM puzzles WHERE game_id = ? AND your_color != ?", (game_id, colour)
+        )
+    return {"ok": True, "your_color": colour}
 
 
 @router.delete("/{game_id}")

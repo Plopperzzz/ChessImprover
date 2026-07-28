@@ -249,6 +249,15 @@ async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color:
                                                    accuracy=accuracy)
 
             _store_matrices(job, grid, by_player, matrices)
+            # Persisted like every other analysis. A sweep on its own used to
+            # be the one kind of run that vanished the moment you selected
+            # another game -- and it is the expensive one, so re-running it to
+            # get the number back cost the whole sweep again.
+            save_analysis(job.user_id, job.game_id, "sweep", {
+                "grid": grid, "results": results,
+                "model_note": sweep["note"], "maia_model_size": sweep["model_size"],
+                "sweep_cache": job.sweep_cache,
+            }, run_id=getattr(job, "run_id", None))
         await job.emit({
             "type": "done",
             "grid": grid,
@@ -279,6 +288,7 @@ def _store_matrices(job, grid, by_player, matrices):
 
 class SweepIn(BaseModel):
     game_id: int
+    run_id: int | None = None
 
 
 @router.post("")
@@ -294,6 +304,7 @@ async def start_sweep(body: SweepIn, user: dict = Depends(require_user)):
 
     job_id = uuid.uuid4().hex
     job = AnalysisJob(job_id, user["id"], body.game_id, kind="sweep")
+    job.run_id = body.run_id
     jobs[job_id] = job
     job.task = asyncio.create_task(run_sweep(job, row["pgn_text"], settings, row["your_color"]))
     return {"job_id": job_id}

@@ -109,9 +109,13 @@ game against Maia. The plates follow the board, so the name under the board
 is always whoever is at the bottom.
 
 `⇅` (or the `f` key) flips it manually; selecting another game clears that
-and goes back to facing you. Where your display name matches neither PGN
-header the board takes the conventional White-at-bottom view and no plate
-claims to be you, rather than guessing.
+and goes back to facing you. Where neither of your names matches a PGN header
+the board takes the conventional White-at-bottom view and no plate claims to
+be you, rather than guessing -- and the game is listed with a `⚠ set side`
+chip, because an unassigned game is skipped by the strength fit, the trend
+view and the puzzle generator. Clicking the chip assigns the side by hand
+(and that choice then survives a later rename); "Re-check my side" under the
+Games list re-runs the header match over the whole library at once.
 
 The two squares of the move that produced the position are tinted, so "what
 just moved" never needs working out from the move list. They follow the board
@@ -326,6 +330,15 @@ existing analysis can be appended into another run without re-running the
 engines. Re-analysing a game in the same mode replaces its previous result
 rather than accumulating duplicates; a full analysis takes precedence over a
 quick one when both exist, since it is a superset.
+
+The standalone Elo sweep is saved too, and it is the one mode that carries an
+estimate but no per-move classifications. So the three modes are loaded back
+in halves rather than winner-takes-all: the move badges come from the best
+run that has moves, the Elo estimate from the most recent run that has one.
+Running a sweep after a quick analysis can't blank the badges, and a quick
+analysis after a sweep can't blank the estimate. A sweep on its own also
+feeds the strength and trend fits, since it produces exactly the same swept
+grid a full run does -- it just skips the Stockfish pass.
 
 Per-*position* sweep scores are stored, not just the final labels, which is
 what lets the trend view re-bucket without re-running any engine. They are
@@ -608,6 +621,20 @@ network/Tailscale tailnet. The first run has no accounts -- use "Add an
 account" on the login screen to create the two profiles, then pick your
 engines and set threads/hash/depth from the Settings dialog.
 
+The **display name is what decides which side of each game was yours**: it is
+matched against the `White`/`Black` headers of everything you upload, so make
+it your chess.com or Lichess handle. The account name is tried as well, so
+getting only one of the two right still works.
+
+Each account on the login screen has a pencil and a cross next to it. The
+pencil renames it -- and re-matches every game already uploaded against the
+new names, which is the fix if a library came in as "unassigned". The cross
+deletes the account and everything filed under it (games, uploads, saved
+analyses, puzzles, engine settings); it says how much that is first, and asks
+for the account name to be typed when there are games at stake. Neither
+needs you to be logged in, since an account with the wrong name typed into
+it is exactly the one you may not be able to get into.
+
 ## Engines
 
 Engines live under `assets/Engines/`. Drop a whole release folder in and it
@@ -668,6 +695,6 @@ Answered, and now built:
 - Maia move timing: yes, a brief randomised delay rather than instant replies.
 
 The trend view needs `WhiteElo`/`BlackElo` and a date in the PGN headers, and
-needs your display name to match the White or Black header. Chess.com and
+needs a side assigned to the game -- by a name match or by hand. Chess.com and
 lichess exports carry all three; a hand-written PGN may not, and the panel
 says how many games it had to leave out and why.

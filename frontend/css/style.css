@@ -68,6 +68,34 @@ input[type="text"], input[type="number"], textarea, select {
 .account-list button { text-align: left; font-size: 16px; padding: 12px; }
 #bootstrap-form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 
+/* One row per account: the big button logs in, the two small ones on the
+   right edit and delete it. The edit/delete pair stays visible rather than
+   appearing on hover -- the login screen is also reached from a phone, where
+   there is no hover. */
+.account-row { display: flex; gap: 6px; align-items: stretch; }
+.account-row > button:first-child { flex: 1; }
+.account-name { display: block; }
+.account-sub { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.account-action {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+.account-action:hover { color: var(--text); border-color: var(--accent); }
+.account-action.danger:hover { color: #e05050; border-color: #e05050; }
+.account-edit { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.account-edit .row { display: flex; gap: 6px; }
+.account-field { display: block; font-size: 11px; color: var(--muted); }
+.account-field input { margin-top: 2px; }
+.account-edit .row button { flex: 1; }
+.account-hint { font-size: 11px; color: var(--muted); }
+.login-message { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+.login-message.error { color: #e05050; }
+
 /* ---------- App shell ---------- */
 #topbar {
   display: flex;
@@ -538,6 +566,27 @@ input[type="text"], input[type="number"], textarea, select {
 .game-row .flag { color: #e0a13a; font-size: 11px; }
 .game-row { align-items: center; }
 .analyzed-mark { font-size: 10px; color: #6fc46f; white-space: nowrap; }
+
+/* Which side of a game was yours, and the inline picker that corrects it. The
+   chip is quiet when the answer is known and loud when it isn't -- an
+   unassigned game is skipped by the strength fit, the trend and the puzzle
+   generator, so it needs to look like something to fix. */
+.game-color { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.color-chip, .color-choice {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.color-chip:hover, .color-choice:hover { color: var(--text); border-color: var(--accent); }
+.color-chip.unassigned { color: #e0a13a; border-color: #e0a13a; }
+.color-choice.current { color: var(--text); border-color: var(--accent); }
+.games-tools { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+#rematch-status { font-size: 12px; color: var(--muted); }
 .game-delete {
   background: none;
   border: none;
