@@ -9,6 +9,9 @@ Anything already built lives in the README; this file is only what isn't.
 
 ## 0. Estimate strength from the model's *policy*, not top-1 matches
 
+**Ready to start:** [`prompts/single-game-strength.md`](prompts/single-game-strength.md)
+is a self-contained brief for this — paste it as the task.
+
 **Why:** this is the biggest single weakness in the Elo estimate. The sweep
 asks one bit per move -- "was this the model's favourite" -- and throws away
 everything else it believed. A move it ranked second at 30% probability and a
