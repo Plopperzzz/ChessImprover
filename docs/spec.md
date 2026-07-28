@@ -91,6 +91,12 @@
 - Click-to-move: click a piece to see its legal destinations highlighted,
   click a destination to move; promotion prompts for the piece choice when
   a move is ambiguous.
+- Drag-to-move: press a piece and it is picked up under the cursor, with the
+  square it is over outlined as the one it would land on; let go on a legal
+  destination to play the move, anywhere else to put it back. Selecting a
+  square sweeps a filled circle out over it, quiet destinations grow their
+  dot in, and a destination holding a piece you'd capture tints the whole
+  square around a circular hole cut for the piece instead of a dot.
 - Board sized responsively from available viewport space, clamped to a
   sensible min/max — must work acceptably on a phone screen.
 

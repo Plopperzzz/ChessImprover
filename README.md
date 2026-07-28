@@ -136,6 +136,15 @@ account, not in the browser, so they follow you to the phone. With the dots
 turned off the square you picked up from is still marked -- otherwise clicking
 a piece looks like nothing happened.
 
+**Moving a piece** works either way round. Click it and click where it goes,
+or press it and drag: the piece comes up under the cursor and the square it is
+over is outlined as the one it would land on, so letting go there plays the
+move and letting go anywhere else puts it back. Picking a piece up sweeps a
+circle out over its square, and its destinations arrive by growing rather than
+appearing all at once -- a dot on an empty square, and for a piece you could
+take, the square tinted around a hole cut for the piece itself, because a dot
+would simply hide behind it.
+
 On a wide screen the layout is three columns -- board, move table, then
 everything else -- putting the move table beside the board as section 5 asks.
 They wrap in that order on anything narrower, so a phone gets board, moves,

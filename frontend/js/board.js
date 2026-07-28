@@ -21,12 +21,30 @@ class Board {
     this.legalTargets = [];
     this.lastMove = null;   // {from, to} of the move that produced this position
     this.premove = null;    // {from, to} queued to play when it's your turn
+    // square -> piece char for the position on the board. Occupancy is what
+    // tells a quiet destination from a capture, and the FEN it came from is
+    // long gone by the time highlights are drawn.
+    this.position = {};
+    // In-flight pointer drag: { from, el, pointerId, origin, hover }.
+    this.drag = null;
     // Bumped on every position change. A slide finishes ~235ms after it
     // starts, and whatever the board was asked to show in the meantime must
     // win -- see animateMove.
     this._renderSeq = 0;
-    this._clickHandler = (ev) => this._handleClick(ev);
-    this.el.addEventListener('click', this._clickHandler);
+    // Pointer events rather than click: the same press that selects a square
+    // also starts a drag, and only the pointer stream can tell where the
+    // piece was let go.
+    this._onPointerDown = (ev) => this._handlePointerDown(ev);
+    this._onPointerMove = (ev) => this._handlePointerMove(ev);
+    this._onPointerUp = (ev) => this._handlePointerUp(ev);
+    this.el.addEventListener('pointerdown', this._onPointerDown);
+    this.el.addEventListener('pointermove', this._onPointerMove);
+    this.el.addEventListener('pointerup', this._onPointerUp);
+    // A cancelled pointer is the system taking the gesture away, not a drop:
+    // the piece goes back where it came from.
+    this.el.addEventListener('pointercancel', (ev) => {
+      if (this.drag && ev.pointerId === this.drag.pointerId) this._cancelDrag();
+    });
     this._build();
     this.renderFEN(START_FEN);
   }
@@ -94,6 +112,13 @@ class Board {
     this.highlightLayer.className = 'highlight-layer';
     this.el.appendChild(this.highlightLayer);
 
+    // The square the held piece would land on. Its own layer because
+    // _showHighlights owns (and empties) the one below it.
+    this.dragLayer = document.createElement('div');
+    this.dragLayer.className = 'drag-layer';
+    this.el.appendChild(this.dragLayer);
+
+    this._cancelDrag();
     this._clearSelection();
   }
 
@@ -136,6 +161,7 @@ class Board {
   setInteractive(enabled, handlers) {
     this.interactive = enabled;
     if (handlers) this.handlers = handlers;
+    this._cancelDrag();
     this._clearSelection();
   }
 
@@ -146,15 +172,25 @@ class Board {
     return String.fromCharCode(97 + file) + (rank + 1);
   }
 
-  _handleClick(ev) {
-    if (!this.interactive) return;
+  /** The square under a pointer event, or null when it is off the board --
+      a piece let go past the edge is a cancelled drag, not a move to the
+      nearest square. */
+  _squareFromEvent(ev) {
     const rect = this.el.getBoundingClientRect();
-    if (rect.width === 0) return;
+    if (rect.width === 0) return null;
     const xFrac = (ev.clientX - rect.left) / rect.width;
     const yFrac = (ev.clientY - rect.top) / rect.height;
-    const col = Math.min(7, Math.max(0, Math.floor(xFrac * 8)));
-    const row = Math.min(7, Math.max(0, Math.floor(yFrac * 8)));
-    const square = this._xyToSquare(col, row);
+    if (xFrac < 0 || xFrac >= 1 || yFrac < 0 || yFrac >= 1) return null;
+    return this._xyToSquare(Math.floor(xFrac * 8), Math.floor(yFrac * 8));
+  }
+
+  _handlePointerDown(ev) {
+    if (!this.interactive) return;
+    if (ev.button != null && ev.button > 0) return;
+    // The promotion picker is its own thing sitting on top of the board.
+    if (ev.target && ev.target.closest && ev.target.closest('.promo-overlay')) return;
+    const square = this._squareFromEvent(ev);
+    if (!square) return;
 
     // Touching the board at all withdraws a queued pre-move -- including the
     // first click of the one that replaces it.
@@ -170,13 +206,104 @@ class Board {
       }
     }
 
-    this._clearSelection();
     const targets = (this.handlers.getLegalTargets && this.handlers.getLegalTargets(square)) || [];
-    if (targets.length) {
+    if (!targets.length) { this._clearSelection(); return; }
+
+    // Re-pressing the square that is already selected keeps the highlights
+    // exactly as they are: the grow animation marks *becoming* selected, and
+    // replaying it on every grab would make picking a piece back up flicker.
+    if (this.selected === square) {
+      this.legalTargets = targets;
+    } else {
+      this._clearSelection();
       this.selected = square;
       this.legalTargets = targets;
-      this._showHighlights(square, targets);
+      this._showHighlights(square, targets, true);
     }
+
+    const piece = this.pieceEls[square];
+    if (!piece) return;
+    this.drag = {
+      from: square,
+      el: piece,
+      pointerId: ev.pointerId,
+      origin: { left: piece.style.left, top: piece.style.top },
+      hover: null,
+    };
+    piece.classList.add('dragging');
+    try { this.el.setPointerCapture(ev.pointerId); } catch (e) { /* not capturable */ }
+    this._dragTo(ev);
+    ev.preventDefault();
+  }
+
+  _handlePointerMove(ev) {
+    if (!this.drag || ev.pointerId !== this.drag.pointerId) return;
+    this._dragTo(ev);
+  }
+
+  _handlePointerUp(ev) {
+    if (!this.drag || ev.pointerId !== this.drag.pointerId) return;
+    const drag = this.drag;
+    const square = this._squareFromEvent(ev);
+    this._cancelDrag();
+
+    const target = square && square !== drag.from
+      ? this.legalTargets.find((t) => t.to === square)
+      : null;
+    if (target) {
+      // Land the piece on the square it was dropped on before handing the
+      // move off: the animation that follows would otherwise start by
+      // yanking it back to where it came from.
+      const { x, y } = this._squareToXY(square);
+      drag.el.style.left = (x * 12.5) + '%';
+      drag.el.style.top = (y * 12.5) + '%';
+      const from = drag.from;
+      this._clearSelection();
+      this._resolveAndMove(from, square, target);
+      return;
+    }
+
+    // Released on its own square: that was a click, and the selection stands.
+    // Let go anywhere else, it was a drag that missed -- put the board back.
+    if (square !== drag.from) this._clearSelection();
+  }
+
+  /** Centres the held piece on the pointer and marks the square under it. */
+  _dragTo(ev) {
+    const rect = this.el.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const half = 6.25; // half a square, in board percent
+    this.drag.el.style.left = (((ev.clientX - rect.left) / rect.width) * 100 - half) + '%';
+    this.drag.el.style.top = (((ev.clientY - rect.top) / rect.height) * 100 - half) + '%';
+    this._setDragHover(this._squareFromEvent(ev));
+  }
+
+  _setDragHover(square) {
+    if (!this.drag || !this.dragLayer) return;
+    if (this.drag.hover === square) return;
+    this.drag.hover = square;
+    this.dragLayer.innerHTML = '';
+    if (!square) return;
+    const mark = document.createElement('div');
+    const legal = this.legalTargets.some((t) => t.to === square);
+    mark.className = 'sq-hover' + (legal ? ' legal' : '');
+    const { x, y } = this._squareToXY(square);
+    mark.style.left = (x * 12.5) + '%';
+    mark.style.top = (y * 12.5) + '%';
+    this.dragLayer.appendChild(mark);
+  }
+
+  /** Ends the drag and puts the piece back on the square it was lifted from.
+      A caller that has somewhere better to put it says so afterwards. */
+  _cancelDrag() {
+    if (this.dragLayer) this.dragLayer.innerHTML = '';
+    if (!this.drag) return;
+    const drag = this.drag;
+    this.drag = null;
+    drag.el.classList.remove('dragging');
+    drag.el.style.left = drag.origin.left;
+    drag.el.style.top = drag.origin.top;
+    try { this.el.releasePointerCapture(drag.pointerId); } catch (e) { /* already gone */ }
   }
 
   async _resolveAndMove(from, to, target) {
@@ -204,26 +331,46 @@ class Board {
     });
   }
 
-  _showHighlights(square, targets) {
+  /** animate: true only when the square is *becoming* selected, so the circle
+      sweeping out over it reads as the selection landing rather than as
+      something the board does at random. */
+  _showHighlights(square, targets, animate = false) {
     this.highlightLayer.innerHTML = '';
     // A pre-move selection is a different promise from a move -- it might
     // never happen -- so it doesn't get to look identical.
     const pre = !!(this.handlers.isPremove && this.handlers.isPremove());
     const sel = document.createElement('div');
-    sel.className = 'sq-select' + (pre ? ' premove' : '');
+    sel.className = 'sq-select' + (pre ? ' premove' : '') + (animate ? ' animate' : '');
     const { x, y } = this._squareToXY(square);
     sel.style.left = (x * 12.5) + '%';
     sel.style.top = (y * 12.5) + '%';
     this.highlightLayer.appendChild(sel);
     if (!this.showLegalMoves) return;
     for (const t of targets) {
-      const dot = document.createElement('div');
-      dot.className = 'sq-dot' + (pre ? ' premove' : '');
+      // A dot in the middle of an occupied square would be hidden behind the
+      // piece it is about, so a capture tints the square instead and leaves a
+      // hole for the piece you'd be taking.
+      const mark = document.createElement('div');
+      const capture = this._isCapture(square, t.to);
+      mark.className = (capture ? 'sq-capture' : 'sq-dot') + (pre ? ' premove' : '');
       const p = this._squareToXY(t.to);
-      dot.style.left = (p.x * 12.5) + '%';
-      dot.style.top = (p.y * 12.5) + '%';
-      this.highlightLayer.appendChild(dot);
+      mark.style.left = (p.x * 12.5) + '%';
+      mark.style.top = (p.y * 12.5) + '%';
+      this.highlightLayer.appendChild(mark);
     }
+  }
+
+  _isCapture(from, to) {
+    const victim = this.position[to];
+    const mover = this.position[from];
+    if (victim) {
+      if (!mover) return true;
+      const victimWhite = victim === victim.toUpperCase();
+      const moverWhite = mover === mover.toUpperCase();
+      return victimWhite !== moverWhite;
+    }
+    // En passant: the only way a pawn changes file onto an empty square.
+    return !!mover && mover.toLowerCase() === 'p' && from[0] !== to[0];
   }
 
   _clearSelection() {
@@ -271,8 +418,27 @@ class Board {
   renderFEN(fen) {
     this._renderSeq++;
     this.currentFEN = fen;
+    // Every piece element is about to be replaced, which would drop a piece
+    // the user is in the middle of dragging and swallow the move they are
+    // about to make -- and a re-render lands mid-gesture routinely, because
+    // the previous move's slide finishes a fifth of a second after it was
+    // played. What survives the rebuild is remembered here and put back on
+    // the new elements below.
+    const held = this.drag && {
+      square: this.drag.from,
+      piece: this.position[this.drag.from],
+      pointerId: this.drag.pointerId,
+      hover: this.drag.hover,
+      left: this.drag.el.style.left,
+      top: this.drag.el.style.top,
+    };
+    const selected = this.selected
+      ? { square: this.selected, piece: this.position[this.selected] }
+      : null;
+    this._cancelDrag();
     this.pieceLayer.innerHTML = '';
     this.pieceEls = {};
+    this.position = {};
     this._clearSelection();
     this.setLastMove(null, null);
     const placement = fen.split(' ')[0];
@@ -287,6 +453,40 @@ class Board {
         file++;
       }
     }
+    this._restoreSelection(held || selected);
+    if (held) this._resumeDrag(held);
+  }
+
+  /** Re-selects a square across a re-render, but only if the same piece is
+      still standing on it and still has somewhere to go: anything else and
+      the selection belonged to a position this one isn't. */
+  _restoreSelection(prev) {
+    if (!prev || !prev.piece || this.position[prev.square] !== prev.piece) return;
+    const targets = (this.handlers.getLegalTargets && this.handlers.getLegalTargets(prev.square)) || [];
+    if (!targets.length) return;
+    this.selected = prev.square;
+    this.legalTargets = targets;
+    // Not animated: the square was already selected, it is not becoming so.
+    this._showHighlights(prev.square, targets, false);
+  }
+
+  /** Puts a drag that outlived a re-render back on the new piece element, at
+      the point the pointer had already dragged it to. */
+  _resumeDrag(held) {
+    const piece = this.pieceEls[held.square];
+    if (!piece || this.selected !== held.square) return;
+    this.drag = {
+      from: held.square,
+      el: piece,
+      pointerId: held.pointerId,
+      origin: { left: piece.style.left, top: piece.style.top },
+      hover: null,
+    };
+    piece.classList.add('dragging');
+    piece.style.left = held.left;
+    piece.style.top = held.top;
+    try { this.el.setPointerCapture(held.pointerId); } catch (e) { /* pointer gone */ }
+    this._setDragHover(held.hover);
   }
 
   _placePiece(square, ch) {
@@ -300,6 +500,7 @@ class Board {
     img.style.top = (y * 12.5) + '%';
     this.pieceLayer.appendChild(img);
     this.pieceEls[square] = img;
+    this.position[square] = ch;
   }
 
   /** Slide the piece at `from` to `to`, then snap the whole board to fenAfter
