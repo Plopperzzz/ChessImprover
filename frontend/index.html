@@ -32,8 +32,24 @@
     <button id="logout-btn">Log out</button>
   </header>
 
+  <!-- One page per thing you came here to do. The board, the move list and the
+       engine settings are shared; everything else belongs to exactly one tab,
+       which is what stops the side column being a mile of panels. -->
+  <nav id="tabs" role="tablist" aria-label="Sections">
+    <button class="tab-btn" role="tab" data-tab="analysis" id="tab-btn-analysis"
+            aria-controls="panels-analysis">Analyse a game</button>
+    <button class="tab-btn" role="tab" data-tab="progress" id="tab-btn-progress"
+            aria-controls="panels-progress">Progress</button>
+    <button class="tab-btn" role="tab" data-tab="play" id="tab-btn-play"
+            aria-controls="panels-play">Play</button>
+    <button class="tab-btn" role="tab" data-tab="puzzles" id="tab-btn-puzzles"
+            aria-controls="panels-puzzles">Puzzles</button>
+  </nav>
+
   <main id="layout">
-    <section id="board-col">
+    <!-- data-tabs lists the tabs an element belongs to; Progress is all
+         aggregates and has no use for a board. -->
+    <section id="board-col" data-tabs="analysis play puzzles">
       <div id="eval-bar"><div id="eval-fill"></div><span id="eval-label">0.0</span></div>
       <!-- The plates sit with the board and follow its orientation, so the
            name below the board is always the player at the bottom. -->
@@ -81,7 +97,7 @@
       </div>
     </section>
 
-    <section id="moves-col">
+    <section id="moves-col" data-tabs="analysis play">
       <div class="panel" id="moves-panel">
         <h3>Moves</h3>
         <div id="move-table-wrap">
@@ -96,190 +112,218 @@
     </section>
 
     <section id="side-col">
-      <div class="panel">
-        <h3>Load games</h3>
-        <input type="file" id="pgn-files" accept=".pgn" multiple />
-        <textarea id="pgn-paste" placeholder="...or paste PGN text here"></textarea>
-        <button id="pgn-upload-btn">Upload</button>
-        <div id="upload-status"></div>
+
+      <!-- ============ Analyse a game ============ -->
+      <div class="tab-panels" id="panels-analysis" role="tabpanel"
+           aria-labelledby="tab-btn-analysis">
+        <details class="panel collapsible" id="upload-panel">
+          <summary><h3>Load games</h3><span class="panel-summary" id="upload-summary"></span></summary>
+          <div class="collapsible-body">
+            <input type="file" id="pgn-files" accept=".pgn" multiple />
+            <textarea id="pgn-paste" placeholder="...or paste PGN text here"></textarea>
+            <button id="pgn-upload-btn">Upload</button>
+            <div id="upload-status"></div>
+          </div>
+        </details>
+
+        <!-- Collapsible: the library only matters while you're picking. Folded, its
+             summary still says which game is loaded, which is all you want from
+             it once a game is on the board. -->
+        <details class="panel collapsible" id="games-panel" open>
+          <summary><h3>Games</h3><span class="panel-summary" id="games-summary"></span></summary>
+          <div class="collapsible-body">
+            <div id="game-picker"></div>
+          </div>
+        </details>
+
+        <div class="panel">
+          <h3>Analysis</h3>
+          <label class="run-row">Save into run
+            <span class="run-controls">
+              <select id="run-picker"></select>
+              <button type="button" id="run-new" title="Create a new run">+</button>
+              <button type="button" id="run-delete" title="Delete this run and every analysis in it">🗑</button>
+            </span>
+          </label>
+          <div class="play-buttons">
+            <button id="quick-analysis-btn" disabled>Quick</button>
+            <button id="full-analysis-btn" disabled title="Quick + Maia Elo sweep + Great/Brilliant">Full</button>
+            <button id="analysis-cancel" class="hidden">Cancel</button>
+          </div>
+          <div id="analysis-progress"><div id="analysis-progress-fill"></div></div>
+          <div id="analysis-status"></div>
+          <div id="analysis-summary"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Batch analysis</h3>
+          <div class="play-grid">
+            <label>Mode
+              <select id="batch-mode">
+                <option value="quick">Quick — Stockfish only</option>
+                <option value="full">Full — + Maia Elo sweep</option>
+              </select>
+            </label>
+            <label>Games
+              <select id="batch-scope">
+                <option value="unanalyzed">Not yet analysed</option>
+                <option value="all">All games</option>
+              </select>
+            </label>
+          </div>
+          <div class="play-buttons">
+            <button id="batch-start">Start batch</button>
+            <button id="batch-cancel" class="hidden">Cancel</button>
+          </div>
+          <div id="batch-progress"><div id="batch-progress-fill"></div></div>
+          <div id="batch-status"></div>
+          <p class="panel-note">
+            Full runs the same Maia Elo sweep as the panel below, on every game in
+            the batch — that's what fills in <b>Progress</b>. It uses a coarser Elo
+            step in batch (Settings) so a long run stays affordable, and steps the
+            board through each game as it goes.
+          </p>
+          <div id="batch-failures"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Elo estimate (this game)</h3>
+          <p class="panel-note">
+            Sweeps the selected game only, which is far too little data to trust
+            on its own — use it to see the shape of one game's curve, and
+            <b>Progress</b> for your actual strength. For many games at once use
+            Batch analysis above in Full mode; it runs this same sweep per game.
+          </p>
+          <div class="play-buttons">
+            <button id="sweep-btn" disabled>Run Elo sweep</button>
+            <button id="sweep-cancel" class="hidden">Cancel</button>
+          </div>
+          <div id="sweep-progress"><div id="sweep-progress-fill"></div></div>
+          <div id="sweep-status"></div>
+          <div id="sweep-results"></div>
+        </div>
       </div>
 
-      <div class="panel">
-        <h3>Games</h3>
-        <div id="game-picker"></div>
+      <!-- ============ Progress -- the long view ============ -->
+      <div class="tab-panels" id="panels-progress" role="tabpanel"
+           aria-labelledby="tab-btn-progress">
+        <div class="panel">
+          <h3>Your strength (all games)</h3>
+          <p class="panel-note">
+            One fit over every position from every game with a stored sweep. This
+            is the number to trust — a single game is only ~25 of your moves and
+            lands within about ±90 Elo of the truth. Re-fits cached scores, so it
+            never runs an engine.
+          </p>
+          <div class="play-buttons">
+            <button id="strength-refresh">Refresh</button>
+            <label class="inline-label">From
+              <select id="strength-run"><option value="">All runs</option></select>
+            </label>
+            <!-- Re-fits cached scores, so switching costs nothing. Top-1 is the
+                 verified default; the wider objectives use the ranked candidates
+                 a sweep records when the engine supports MultiPV. -->
+            <label class="inline-label">Match
+              <select id="strength-topn">
+                <option value="1">Maia's top move</option>
+                <option value="2">its top 2</option>
+                <option value="3">its top 3</option>
+              </select>
+            </label>
+          </div>
+          <div id="strength-status"></div>
+          <div id="strength-body"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Trend over time</h3>
+          <div class="play-grid">
+            <label>Bucket by
+              <select id="trend-granularity">
+                <option value="week">ISO week</option>
+                <option value="month" selected>Month</option>
+                <option value="year">Year</option>
+              </select>
+            </label>
+            <label>From
+              <select id="trend-run"><option value="">All runs</option></select>
+            </label>
+          </div>
+          <!-- Re-bucketing re-fits the cached per-position scores; no engine
+               runs, so switching granularity is instant. -->
+          <div id="trend-status"></div>
+          <div id="trend-chart"></div>
+          <div id="trend-verdict"></div>
+          <div id="trend-table"></div>
+        </div>
       </div>
 
-      <div class="panel">
-        <h3>Play vs Maia3</h3>
-        <div class="play-grid">
-          <label>Maia Elo <input type="number" id="p-elo" value="1500" min="100" max="4000" /></label>
-          <label>You play
-            <select id="p-color">
-              <option value="w">White</option>
-              <option value="b">Black</option>
-              <option value="random">Random</option>
-            </select>
-          </label>
-          <label>Base (min) <input type="number" id="p-base" value="10" min="0" max="180" /></label>
-          <label>Increment (s) <input type="number" id="p-inc" value="0" min="0" max="60" /></label>
+      <!-- ============ Play vs Maia3 ============ -->
+      <div class="tab-panels" id="panels-play" role="tabpanel"
+           aria-labelledby="tab-btn-play">
+        <div class="panel">
+          <h3>Play vs Maia3</h3>
+          <div class="play-grid">
+            <label>Maia Elo <input type="number" id="p-elo" value="1500" min="100" max="4000" /></label>
+            <label>You play
+              <select id="p-color">
+                <option value="w">White</option>
+                <option value="b">Black</option>
+                <option value="random">Random</option>
+              </select>
+            </label>
+            <label>Base (min) <input type="number" id="p-base" value="10" min="0" max="180" /></label>
+            <label>Increment (s) <input type="number" id="p-inc" value="0" min="0" max="60" /></label>
+          </div>
+          <div class="play-buttons">
+            <button id="p-start">Start game</button>
+            <button id="p-resign" disabled>Resign</button>
+            <button id="p-save" disabled>Save to library</button>
+          </div>
+          <div id="p-status"></div>
+          <div id="p-notes"></div>
+          <p class="panel-note">
+            The evaluation bar and the FEN boxes are hidden while you play —
+            leaving them up would just be cheating. The nav buttons still work:
+            they step back through the game in progress, and the board comes
+            back to the live position in one tap.
+          </p>
         </div>
-        <div class="play-buttons">
-          <button id="p-start">Start game</button>
-          <button id="p-resign" disabled>Resign</button>
-          <button id="p-save" disabled>Save to library</button>
-          <button id="p-exit" class="hidden">Back to analysis</button>
-        </div>
-        <div id="p-status"></div>
-        <div id="p-notes"></div>
       </div>
 
-      <div class="panel" id="puzzle-panel">
-        <h3>Puzzles from your games</h3>
-        <p class="panel-note">
-          Every position where you gave something away, as a puzzle. The
-          positions come from your own games — no engine runs to build them,
-          only to check an answer. The move you played is hidden until you've
-          tried, and anything as good as the engine's best counts.
-        </p>
-        <div class="play-grid">
-          <label>From
-            <select id="pz-scope">
-              <option value="blunder">Blunders</option>
-              <option value="all">Blunders + mistakes</option>
-            </select>
-          </label>
-          <label>Order
-            <select id="pz-order">
-              <option value="random">Random</option>
-              <option value="worst">Worst first</option>
-            </select>
-          </label>
+      <!-- ============ Puzzles from your own games ============ -->
+      <div class="tab-panels" id="panels-puzzles" role="tabpanel"
+           aria-labelledby="tab-btn-puzzles">
+        <div class="panel" id="puzzle-panel">
+          <h3>Puzzles from your games</h3>
+          <p class="panel-note">
+            Every position where you gave something away, as a puzzle. The
+            positions come from your own games — no engine runs to build them,
+            only to check an answer. The move you played is hidden until you've
+            tried, and anything as good as the engine's best counts.
+          </p>
+          <div class="play-grid">
+            <label>From
+              <select id="pz-scope">
+                <option value="blunder">Blunders</option>
+                <option value="all">Blunders + mistakes</option>
+              </select>
+            </label>
+            <label>Order
+              <select id="pz-order">
+                <option value="random">Random</option>
+                <option value="worst">Worst first</option>
+              </select>
+            </label>
+          </div>
+          <div class="play-buttons">
+            <button id="pz-next">Next</button>
+            <button id="pz-reveal">Show me</button>
+            <button id="pz-rebuild" title="Scan your analysed games for new mistakes">Rescan</button>
+          </div>
+          <div id="pz-status"></div>
+          <div id="pz-feedback"></div>
         </div>
-        <div class="play-buttons">
-          <button id="pz-start">Puzzle board</button>
-          <button id="pz-next" class="hidden">Next</button>
-          <button id="pz-reveal" class="hidden">Show me</button>
-          <button id="pz-exit" class="hidden">Game board</button>
-          <button id="pz-rebuild" title="Scan your analysed games for new mistakes">Rescan</button>
-        </div>
-        <div id="pz-status"></div>
-        <div id="pz-feedback"></div>
-      </div>
-
-      <div class="panel">
-        <h3>Analysis</h3>
-        <label class="run-row">Save into run
-          <span class="run-controls">
-            <select id="run-picker"></select>
-            <button type="button" id="run-new" title="Create a new run">+</button>
-            <button type="button" id="run-delete" title="Delete this run and every analysis in it">🗑</button>
-          </span>
-        </label>
-        <div class="play-buttons">
-          <button id="quick-analysis-btn" disabled>Quick</button>
-          <button id="full-analysis-btn" disabled title="Quick + Maia Elo sweep + Great/Brilliant">Full</button>
-          <button id="analysis-cancel" class="hidden">Cancel</button>
-        </div>
-        <div id="analysis-progress"><div id="analysis-progress-fill"></div></div>
-        <div id="analysis-status"></div>
-        <div id="analysis-summary"></div>
-      </div>
-
-      <div class="panel">
-        <h3>Batch analysis</h3>
-        <div class="play-grid">
-          <label>Mode
-            <select id="batch-mode">
-              <option value="quick">Quick — Stockfish only</option>
-              <option value="full">Full — + Maia Elo sweep</option>
-            </select>
-          </label>
-          <label>Games
-            <select id="batch-scope">
-              <option value="unanalyzed">Not yet analysed</option>
-              <option value="all">All games</option>
-            </select>
-          </label>
-        </div>
-        <div class="play-buttons">
-          <button id="batch-start">Start batch</button>
-          <button id="batch-cancel" class="hidden">Cancel</button>
-        </div>
-        <div id="batch-progress"><div id="batch-progress-fill"></div></div>
-        <div id="batch-status"></div>
-        <p class="panel-note">
-          Full runs the same Maia Elo sweep as the single-game panel below, on
-          every game in the batch — that's what fills in the trend. It uses a
-          coarser Elo step in batch (Settings) so a long run stays affordable.
-        </p>
-        <div id="batch-failures"></div>
-      </div>
-
-      <div class="panel">
-        <h3>Your strength (all games)</h3>
-        <p class="panel-note">
-          One fit over every position from every game with a stored sweep. This
-          is the number to trust — a single game is only ~25 of your moves and
-          lands within about ±90 Elo of the truth. Re-fits cached scores, so it
-          never runs an engine.
-        </p>
-        <div class="play-buttons">
-          <button id="strength-refresh">Refresh</button>
-          <label class="inline-label">From
-            <select id="strength-run"><option value="">All runs</option></select>
-          </label>
-          <!-- Re-fits cached scores, so switching costs nothing. Top-1 is the
-               verified default; the wider objectives use the ranked candidates
-               a sweep records when the engine supports MultiPV. -->
-          <label class="inline-label">Match
-            <select id="strength-topn">
-              <option value="1">Maia's top move</option>
-              <option value="2">its top 2</option>
-              <option value="3">its top 3</option>
-            </select>
-          </label>
-        </div>
-        <div id="strength-status"></div>
-        <div id="strength-body"></div>
-      </div>
-
-      <div class="panel">
-        <h3>Elo estimate (this game)</h3>
-        <p class="panel-note">
-          Sweeps the selected game only, which is far too little data to trust
-          on its own — use it to see the shape of one game's curve, and the
-          panel above for your actual strength. For many games at once use
-          Batch analysis in Full mode; it runs this same sweep per game.
-        </p>
-        <div class="play-buttons">
-          <button id="sweep-btn" disabled>Run Elo sweep</button>
-          <button id="sweep-cancel" class="hidden">Cancel</button>
-        </div>
-        <div id="sweep-progress"><div id="sweep-progress-fill"></div></div>
-        <div id="sweep-status"></div>
-        <div id="sweep-results"></div>
-      </div>
-
-      <div class="panel">
-        <h3>Trend over time</h3>
-        <div class="play-grid">
-          <label>Bucket by
-            <select id="trend-granularity">
-              <option value="week">ISO week</option>
-              <option value="month" selected>Month</option>
-              <option value="year">Year</option>
-            </select>
-          </label>
-          <label>From
-            <select id="trend-run"><option value="">All runs</option></select>
-          </label>
-        </div>
-        <!-- Re-bucketing re-fits the cached per-position scores; no engine
-             runs, so switching granularity is instant. -->
-        <div id="trend-status"></div>
-        <div id="trend-chart"></div>
-        <div id="trend-verdict"></div>
-        <div id="trend-table"></div>
       </div>
 
     </section>

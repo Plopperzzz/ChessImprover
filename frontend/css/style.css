@@ -78,6 +78,77 @@ input[type="text"], input[type="number"], textarea, select {
 }
 .spacer { flex: 1; }
 
+/* ---------- Tabs ----------
+   One row of pages: analysing a game, the long-term picture, playing, and
+   puzzles. On a phone it scrolls sideways rather than wrapping into two rows,
+   so the board never moves down the screen when the window narrows. */
+#tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+#tabs::-webkit-scrollbar { display: none; }
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  padding: 11px 14px;
+  font-size: 14px;
+  white-space: nowrap;
+  margin-bottom: -1px;
+}
+.tab-btn:hover { color: var(--text); border-color: var(--border); }
+.tab-btn.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+
+.tab-panels { display: none; flex-direction: column; gap: 16px; }
+.tab-panels.active { display: flex; }
+/* Progress has no board beside it, so it gets the whole width -- as columns
+   rather than one very wide chart per row. */
+#side-col.full-width { flex: 1 1 100%; }
+#side-col.full-width #panels-progress {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  align-items: start;
+}
+
+/* ---------- Collapsible panel ---------- */
+.panel.collapsible { padding: 0; }
+.panel.collapsible > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.panel.collapsible > summary::-webkit-details-marker { display: none; }
+.panel.collapsible > summary::before {
+  content: "\25B8";
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 120ms ease;
+}
+.panel.collapsible[open] > summary::before { transform: rotate(90deg); }
+.panel.collapsible > summary h3 { margin: 0; }
+.panel.collapsible > summary:hover h3 { color: var(--text); }
+/* The summary is what a folded panel says about itself; open, the panel says
+   it better. */
+.panel.collapsible[open] > summary .panel-summary { display: none; }
+.panel-summary {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.collapsible-body { padding: 0 12px 12px; }
+
 /* Three columns on a wide screen -- board, move table, everything else --
    which is where section 5 wants the move table. They wrap in DOM order on
    anything narrower, so a phone gets board, moves, then the panels. */
@@ -583,6 +654,8 @@ fieldset label { display: block; margin: 8px 0; font-size: 13px; color: var(--mu
 
 @media (max-width: 700px) {
   #layout { padding: 10px; gap: 10px; }
+  #tabs { padding: 0 8px; }
+  .tab-btn { padding: 10px 11px; font-size: 13px; }
   #topbar { padding: 8px 10px; }
   /* The move table is already directly under the board once the columns
      wrap, so it just needs to not eat the whole screen. */

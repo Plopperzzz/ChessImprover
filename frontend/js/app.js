@@ -22,6 +22,7 @@ const state = {
   batchWs: null,
   batchReconnect: null,        // pending reconnect timer, so retries can't stack
   batchFailures: new Set(),    // game indexes already listed, so a replay can't duplicate them
+  activeTab: 'analysis',
   playMode: false,
   play: null,
   puzzleMode: false,
@@ -127,6 +128,7 @@ async function initApp() {
   });
 
   wireSound();
+  wireCollapsibles();
   wireNav();
   wireBoardDialog();
   wireFenBox();
@@ -139,12 +141,134 @@ async function initApp() {
   wireTrend();
   wirePuzzles();
   wirePlay();
+  // Last of the wiring: opening a tab can enter play or puzzle mode, which
+  // needs everything those modes touch to already be listening.
+  wireTabs();
   connectLiveEval();
 
   await refreshRunPicker();
   await refreshGameList();
   syncBoardFull();
   await reattachRunningJobs();
+}
+
+/* ---------------- Tabs ----------------
+   Four pages over one board: analysing a loaded game, the long-term Progress
+   view, playing Maia, and solving puzzles. Switching tabs is the *only* thing
+   that enters or leaves play/puzzle mode, so there is exactly one place where
+   the board changes hands -- and one place that decides which of the board's
+   neighbours make sense. */
+
+const TABS = ['analysis', 'progress', 'play', 'puzzles'];
+
+function wireTabs() {
+  for (const btn of document.querySelectorAll('.tab-btn')) {
+    btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+  }
+  const remembered = localStorage.getItem('tab');
+  activateTab(TABS.includes(remembered) ? remembered : 'analysis', { force: true });
+}
+
+function activateTab(name, { force = false } = {}) {
+  if (!TABS.includes(name)) return;
+  if (!force && name === state.activeTab) return;
+
+  // Leaving a game half-played loses it: the session lives on the server only
+  // as long as the socket does.
+  if (state.playMode && state.play && !state.play.result && (state.play.sanHistory || []).length) {
+    if (!confirm('Leave the game in progress? It will be abandoned.')) return;
+  }
+  if (state.playMode) exitPlayMode();
+  if (state.puzzleMode) exitPuzzleMode();
+
+  state.activeTab = name;
+  localStorage.setItem('tab', name);
+
+  for (const btn of document.querySelectorAll('.tab-btn')) {
+    const on = btn.dataset.tab === name;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+  for (const panels of document.querySelectorAll('.tab-panels')) {
+    panels.classList.toggle('active', panels.id === 'panels-' + name);
+  }
+  // The board and the move table belong to some tabs and not others; each
+  // declares which in data-tabs.
+  for (const el of document.querySelectorAll('#layout > [data-tabs]')) {
+    el.classList.toggle('hidden', !el.dataset.tabs.split(' ').includes(name));
+  }
+  document.getElementById('side-col').classList.toggle('full-width', name === 'progress');
+
+  if (name === 'play') enterPlayMode();
+  if (name === 'progress') { refreshStrength(); refreshTrend(); }
+  applyBoardChrome();
+  if (name === 'analysis') {
+    // Put the loaded game back on a board that play or a puzzle was using.
+    state.flipOverride = false;
+    applyOrientation();
+    renderMoveTable();
+    syncBoardFull();
+  }
+  // Last, because it fetches: entering the tab is the request for a puzzle.
+  if (name === 'puzzles') startPuzzles();
+}
+
+/** Which of the board's neighbours make sense in the current mode.
+
+    The eval bar and the whole-game plot are analysis instruments: during a game
+    they'd be cheating, and during a puzzle they'd be the answer. The step
+    buttons stay live while playing -- they walk the game in progress (see
+    goToPlayPly) -- but a puzzle is a single position with nothing to step
+    through, so there they go rather than sit greyed out. */
+function applyBoardChrome() {
+  const analysing = state.activeTab === 'analysis';
+  const steppable = analysing || state.activeTab === 'play';
+  document.getElementById('eval-bar').classList.toggle('hidden', !analysing);
+  document.getElementById('eval-plot-wrap').classList
+    .toggle('hidden', !analysing || evalPlotMoves().length < 2);
+  for (const el of document.querySelectorAll('.fen-row')) el.classList.toggle('hidden', !analysing);
+  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
+    const btn = document.getElementById(id);
+    btn.disabled = !steppable;
+    btn.classList.toggle('hidden', !steppable);
+  }
+}
+
+/** True when the analysis streams may drive the board. A job keeps running
+    while you're on another tab -- a batch finishes whether or not you watch it
+    -- and its animation must not scribble over a game in progress or a puzzle
+    you're solving. */
+function boardIsAnalysing() {
+  return state.activeTab === 'analysis';
+}
+
+/* ---------------- Collapsible panels ----------------
+   Open/closed is remembered per panel, so the shape you left the page in is
+   the shape you come back to. */
+
+function wireCollapsibles() {
+  for (const panel of document.querySelectorAll('.panel.collapsible')) {
+    const key = 'open:' + panel.id;
+    const stored = localStorage.getItem(key);
+    if (stored !== null) panel.open = stored === '1';
+    panel.addEventListener('toggle', () => localStorage.setItem(key, panel.open ? '1' : '0'));
+  }
+}
+
+/** What a folded panel says about itself, so putting the game list away doesn't
+    also hide which game is loaded. */
+function refreshPanelSummaries() {
+  const selected = state.games.find((g) => g.id === state.selectedGameId);
+  document.getElementById('games-summary').textContent = selected
+    ? gameLabel(selected)
+    : `${state.games.length} game${state.games.length === 1 ? '' : 's'}`;
+  document.getElementById('upload-summary').textContent =
+    state.games.length ? '' : 'no games yet — start here';
+  // A first-time visitor needs the upload box open; once there are games it's
+  // in the way. Decided once, and after that the panel remembers.
+  if (localStorage.getItem('open:upload-panel') === null) {
+    document.getElementById('upload-panel').open = state.games.length === 0;
+  }
 }
 
 /* ---------------- Board <-> Explorer sync ---------------- */
@@ -405,11 +529,15 @@ function wireNav() {
   });
   document.addEventListener('keydown', (ev) => {
     if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+    // A puzzle is one position and Progress has no board, so there is nothing
+    // for the arrows to walk on those tabs. Flip still makes sense anywhere.
+    const steppable = ['analysis', 'play'].includes(state.activeTab);
+    if (ev.key === 'f' || ev.key === 'F') { document.getElementById('nav-flip').click(); return; }
+    if (!steppable) return;
     if (ev.key === 'ArrowLeft') document.getElementById('nav-prev').click();
     if (ev.key === 'ArrowRight') document.getElementById('nav-next').click();
     if (ev.key === 'ArrowUp') document.getElementById('nav-start').click();
     if (ev.key === 'ArrowDown') document.getElementById('nav-end').click();
-    if (ev.key === 'f' || ev.key === 'F') document.getElementById('nav-flip').click();
   });
 }
 
@@ -578,9 +706,18 @@ async function refreshGameList() {
   renderGamePicker();
 }
 
+/** One line of prose for a game: the picker rows and the collapsed Games
+    panel's summary say the same thing about it. */
+function gameLabel(g) {
+  const opponent = g.your_color === 'w' ? g.black : g.your_color === 'b' ? g.white : `${g.white} vs ${g.black}`;
+  const date = g.utc_date_header || g.date_header || '?';
+  return `${opponent || '?'} — ${date} — ${g.result || '?'}`;
+}
+
 function renderGamePicker() {
   const wrap = document.getElementById('game-picker');
   wrap.innerHTML = '';
+  refreshPanelSummaries();
   if (state.games.length === 0) {
     wrap.innerHTML = '<p style="color:var(--muted);font-size:13px;">No games loaded yet.</p>';
     return;
@@ -588,10 +725,8 @@ function renderGamePicker() {
   for (const g of state.games) {
     const row = document.createElement('div');
     row.className = 'game-row' + (g.id === state.selectedGameId ? ' active' : '');
-    const opponent = g.your_color === 'w' ? g.black : g.your_color === 'b' ? g.white : `${g.white} vs ${g.black}`;
-    const date = g.utc_date_header || g.date_header || '?';
     const left = document.createElement('span');
-    left.textContent = `${opponent || '?'} — ${date} — ${g.result || '?'}`;
+    left.textContent = gameLabel(g);
     row.appendChild(left);
     if (g.your_color === 'unassigned') {
       const flag = document.createElement('span');
@@ -635,10 +770,15 @@ async function selectGame(gameId) {
   renderGamePicker();
   state.explorer.loadPGN(game.pgn_text, state.user.display_name);
   state.flipOverride = false;
-  applyOrientation();
   state.explorer.goToStart();
   renderMoveTable();
-  syncBoardFull();
+  // Reattaching to a job on load can select a game while the Play or Puzzles
+  // tab owns the board (see reattachRunningJobs); the explorer still loads, the
+  // board doesn't move.
+  if (boardIsAnalysing()) {
+    applyOrientation();
+    syncBoardFull();
+  }
   await loadSavedAnalysis(gameId);
 }
 
@@ -845,7 +985,8 @@ function renderEvalPlot() {
   const moves = evalPlotMoves();
   host.innerHTML = '';
   if (moves.length < 2) { wrap.classList.add('hidden'); return; }
-  wrap.classList.remove('hidden');
+  // A batch or a full analysis can finish while you're on another tab.
+  wrap.classList.toggle('hidden', !boardIsAnalysing());
 
   const W = 600, H = 110, padB = 0;
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'eval-plot-svg',
@@ -1127,7 +1268,7 @@ async function handleAnalysisMessage(msg) {
     // Full mode reports an overall fraction across both passes; quick mode
     // only has the one, so fall back to its ply counter.
     if (msg.phase === 'maia') {
-      if (msg.fen) state.board.renderFEN(msg.fen);
+      if (msg.fen && boardIsAnalysing()) state.board.renderFEN(msg.fen);
       document.getElementById('analysis-status').textContent =
         `Maia sweep at Elo ${msg.elo}: ${msg.done} / ${msg.total}`;
     } else {
@@ -1158,7 +1299,7 @@ async function handleAnalysisMessage(msg) {
     await refreshRunPicker();
     await refreshGameList();
     if (msg.mode === 'full') { refreshTrend(); refreshStrength(); }  // new sweep data
-    syncBoardFull();
+    if (boardIsAnalysing()) syncBoardFull();
   } else if (msg.type === 'error') {
     document.getElementById('analysis-status').textContent =
       msg.message === 'cancelled' ? 'Cancelled.' : 'Error: ' + msg.message;
@@ -1180,13 +1321,16 @@ function finishAnalysis() {
 async function animateToMainlinePly(ply) {
   if (ply === 0) {
     state.explorer.goToStart();
-    syncBoardFull();
+    if (boardIsAnalysing()) syncBoardFull();
     return;
   }
   const nodeId = state.explorer.mainlineNodeIds[ply - 1];
   if (nodeId === undefined) return;
   const node = state.explorer.nodes[nodeId];
   state.explorer.goToNode(nodeId);
+  // The explorer keeps following along, so coming back to the tab lands where
+  // the job got to -- but the board belongs to whoever is using it.
+  if (!boardIsAnalysing()) return;
   await state.board.animateMove(node.from, node.to, node.fenAfter);
   refreshFenBox();
   refreshMoveTableHighlight();
@@ -1430,16 +1574,18 @@ async function handleBatchMessage(msg) {
     // Section 6: show whichever game is currently being processed.
     try {
       state.explorer.loadPGN(msg.pgn, state.user.display_name);
-      applyOrientation();
       state.explorer.goToStart();
       state.classifications = {};
       renderMoveTable();
-      state.board.renderFEN(state.explorer.fen);
+      if (boardIsAnalysing()) {
+        applyOrientation();
+        state.board.renderFEN(state.explorer.fen);
+      }
     } catch (e) { /* an unparseable game still gets reported by game_failed */ }
     status.innerHTML = `Game <b>${msg.index + 1}</b> of <b>${msg.total}</b>: ${msg.white || '?'} vs ${msg.black || '?'}`;
   } else if (msg.type === 'progress') {
     if (msg.phase === 'maia') {
-      if (msg.fen) state.board.renderFEN(msg.fen);
+      if (msg.fen && boardIsAnalysing()) state.board.renderFEN(msg.fen);
     } else if (msg.ply !== undefined) {
       await animateToMainlinePly(msg.ply);
     }
@@ -1550,13 +1696,13 @@ async function handleSweepMessage(msg) {
     document.getElementById('sweep-progress-fill').style.width = pct + '%';
     document.getElementById('sweep-status').textContent =
       `Elo ${msg.elo}: ${msg.done} / ${msg.total} position-evaluations (${pct}%)`;
-    if (msg.fen) state.board.renderFEN(msg.fen);
+    if (msg.fen && boardIsAnalysing()) state.board.renderFEN(msg.fen);
   } else if (msg.type === 'done') {
     document.getElementById('sweep-progress-fill').style.width = '100%';
     document.getElementById('sweep-status').textContent = 'Sweep complete.';
     renderSweepResults(msg);
     finishSweep();
-    syncBoardFull();
+    if (boardIsAnalysing()) syncBoardFull();
   } else if (msg.type === 'error') {
     document.getElementById('sweep-status').textContent =
       msg.message === 'cancelled' ? 'Cancelled.' : 'Error: ' + msg.message;
@@ -2113,10 +2259,8 @@ function trendChart(buckets) {
    with what it cost you, is the lesson. */
 
 function wirePuzzles() {
-  document.getElementById('pz-start').addEventListener('click', startPuzzles);
   document.getElementById('pz-next').addEventListener('click', () => loadNextPuzzle());
   document.getElementById('pz-reveal').addEventListener('click', revealPuzzle);
-  document.getElementById('pz-exit').addEventListener('click', exitPuzzleMode);
   document.getElementById('pz-rebuild').addEventListener('click', rebuildPuzzles);
   for (const id of ['pz-scope', 'pz-order']) {
     document.getElementById(id).addEventListener('change', () => {
@@ -2163,47 +2307,20 @@ async function rebuildPuzzles() {
   }
 }
 
+/** Opening the Puzzles tab. Entering the tab *is* the request for a puzzle --
+    there is nothing to configure first, and a filter change just fetches
+    another one. */
 async function startPuzzles() {
-  if (state.playMode) exitPlayMode();
-  enterPuzzleMode();
-  await loadNextPuzzle();
-}
-
-function enterPuzzleMode() {
   state.puzzleMode = true;
-  document.getElementById('pz-start').classList.add('hidden');
-  document.getElementById('pz-exit').classList.remove('hidden');
-  document.getElementById('pz-next').classList.remove('hidden');
-  document.getElementById('pz-reveal').classList.remove('hidden');
-  // A live engine eval of the puzzle position would simply be the answer.
-  document.getElementById('eval-bar').classList.add('hidden');
-  for (const el of document.querySelectorAll('.fen-row')) el.classList.add('hidden');
-  // Nothing to navigate: a puzzle is one position.
-  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
-    document.getElementById(id).disabled = true;
-  }
-  setAnalysisButtonsEnabled(false);
+  await loadNextPuzzle();
 }
 
 function exitPuzzleMode() {
   state.puzzleMode = false;
   state.puzzle = null;
-  document.getElementById('pz-start').classList.remove('hidden');
-  document.getElementById('pz-exit').classList.add('hidden');
-  document.getElementById('pz-next').classList.add('hidden');
-  document.getElementById('pz-reveal').classList.add('hidden');
   document.getElementById('pz-feedback').innerHTML = '';
-  document.getElementById('eval-bar').classList.remove('hidden');
-  for (const el of document.querySelectorAll('.fen-row')) el.classList.remove('hidden');
-  for (const id of ['nav-start', 'nav-prev', 'nav-next', 'nav-end']) {
-    document.getElementById(id).disabled = false;
-  }
-  setAnalysisButtonsEnabled(true);
   refreshPuzzleStats();
   state.flipOverride = false;
-  applyOrientation();
-  renderMoveTable();
-  syncBoardFull();
 }
 
 async function loadNextPuzzle() {
@@ -2221,6 +2338,12 @@ async function loadNextPuzzle() {
       e.message.includes('no puzzles')
         ? 'No puzzles for that selection — press Rescan, or widen it to mistakes.'
         : 'Error: ' + e.message;
+    // Nothing to solve, so nothing should look solvable. Now that the tab loads
+    // a puzzle on its own, this is a state you can land straight in, and the
+    // previous puzzle's board sitting there would read as the next one.
+    state.puzzle = null;
+    state.board.renderFEN(new Chess().fen());
+    renderPlayerPlates();
   }
 }
 
@@ -2325,7 +2448,9 @@ function renderPuzzleVerdict(v) {
 
 async function revealPuzzle() {
   const p = state.puzzle;
-  if (!p || p.busy) return;
+  // Already answered means the board is showing the answer -- asking again
+  // would search the position a second time to say the same thing.
+  if (!p || p.busy || p.answered) return;
   p.busy = true;
   const feedback = document.getElementById('pz-feedback');
   feedback.innerHTML = '<div class="pz-prompt">Working it out...</div>';
@@ -2362,7 +2487,6 @@ function wirePlay() {
   document.getElementById('p-start').addEventListener('click', startPlayGame);
   document.getElementById('p-resign').addEventListener('click', () => sendPlay({ type: 'resign' }));
   document.getElementById('p-save').addEventListener('click', () => sendPlay({ type: 'save' }));
-  document.getElementById('p-exit').addEventListener('click', exitPlayMode);
 }
 
 function sendPlay(msg) {
@@ -2619,6 +2743,10 @@ async function startPlayGame() {
   });
 }
 
+/** Entering the Play tab, and also starting a second game within it: the board
+    changes hands on the tab switch rather than on Start, so an empty Play tab
+    already shows a board ready to play on instead of whichever analysed
+    position happened to be up. */
 function enterPlayMode() {
   state.playMode = true;
   if (!state.play) state.play = {};
@@ -2633,39 +2761,32 @@ function enterPlayMode() {
   rebuildPlayMoves();
   renderPlayReviewNote();
   state.flipOverride = false;   // a new game always starts facing you
-  document.getElementById('p-exit').classList.remove('hidden');
-  // Showing a live Stockfish eval of your own game in progress would just be
-  // cheating, so the eval bar is hidden for the duration of a played game.
-  document.getElementById('eval-bar').classList.add('hidden');
-  for (const el of document.querySelectorAll('.fen-row')) el.classList.add('hidden');
-  // Analysis controls act on the loaded game, which isn't what's on the board now.
-  document.getElementById('quick-analysis-btn').disabled = true;
-  // The nav buttons stay live: they step through the game in progress rather
-  // than the loaded one (see goToPlayPly).
+  // The eval bar, the FEN boxes and the analysis controls are the Play tab's
+  // business now -- applyBoardChrome owns them, and the analysis controls live
+  // on a tab that isn't showing. The nav buttons deliberately stay live: they
+  // step through the game in progress rather than the loaded one (goToPlayPly).
+  state.board.renderFEN(state.play.chess.fen());
+  applyOrientation();
+  renderPlayMoveTable();
 }
 
+/** Leaving the Play tab. Whichever tab we're going to puts the board back the
+    way it wants it, so this only tears the session down. */
 function exitPlayMode() {
   state.playMode = false;
   if (state.play) {
     clearInterval(state.play.tick);
     if (state.play.ws) state.play.ws.close();
     state.play.ws = null;
+    state.play.viewPly = null;
   }
-  document.getElementById('p-exit').classList.add('hidden');
-  document.getElementById('eval-bar').classList.remove('hidden');
-  for (const el of document.querySelectorAll('.fen-row')) el.classList.remove('hidden');
   document.getElementById('p-resign').disabled = true;
   document.getElementById('p-save').disabled = true;
   document.getElementById('p-status').textContent = '';
   document.getElementById('p-notes').textContent = '';
-  if (state.play) state.play.viewPly = null;
   clearPremove();
   renderPlayReviewNote();
-  document.getElementById('quick-analysis-btn').disabled = !state.selectedGameId;
   state.flipOverride = false;
-  applyOrientation();
-  renderMoveTable();
-  syncBoardFull();
 }
 
 async function handlePlayMessage(msg) {

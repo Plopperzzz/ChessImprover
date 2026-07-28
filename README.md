@@ -19,9 +19,48 @@ saved analysis runs, batch mode, the bounded worker pool that lets both of
 you analyse at once, the trend-over-time view, and the polish pass. That is
 the whole build order from the spec.
 
-Beyond the spec: puzzles built from your own mistakes, pre-moves, looking back
-through a game while you're playing it, and separate board/piece sets. What's
-next is in [`docs/TODO.md`](docs/TODO.md).
+Beyond the spec: the page is split into four tabs rather than one long column,
+puzzles built from your own mistakes, pre-moves, looking back through a game
+while you're playing it, and separate board/piece sets. What's next is in
+[`docs/TODO.md`](docs/TODO.md).
+
+### The four tabs
+
+Everything used to sit on one page, which meant scrolling past a batch runner
+and a trend chart to reach the game you wanted to look at. It's four tabs now,
+with the board, the move list and the Settings dialog shared between them:
+
+| Tab | What lives there |
+| --- | --- |
+| **Analyse a game** | Load games, the game list, the single-game Quick/Full analysis, batch analysis, and the per-game Elo sweep. Everything that runs an engine over games you already have. |
+| **Progress** | Your pooled strength across all games, and the trend over time. No board — these are aggregates, so the panels take the full width in columns. |
+| **Play** | Play vs Maia3. |
+| **Puzzles** | Your own mistakes, handed back (below). |
+
+Batch analysis stays beside the board rather than moving to Progress: it drives
+the same two passes as the single-game panel and steps the board through each
+game as it goes. What it produces is what Progress reads.
+
+Switching tabs is the only thing that hands the board between its three modes,
+so what's on the board can't disagree with what the panels say, and it's also
+the one place that decides which of the board's neighbours make sense — the
+eval bar and the whole-game plot would be cheating during a game and would be
+the answer during a puzzle, so they're analysis-only. This replaces the old
+"Back to analysis" / "Puzzle board" / "Game board" buttons. The step buttons
+stay live while playing, because they walk the game in progress; a puzzle is one
+position, so there they go rather than sit greyed out.
+
+Which tab you were on is remembered across reloads. Leaving Play with a game in
+progress asks first — the session lives on the server only as long as the socket
+does. Analysis jobs keep running while you're on another tab (a batch finishes
+whether or not you watch it) but no longer animate over a board someone else is
+using; the move list still follows along, so coming back to **Analyse a game**
+lands wherever the job got to.
+
+The **Games** list is collapsible and remembers whether you left it open.
+Folded, its header still says which game is loaded, which is all you want from
+it once a game is on the board. **Load games** is collapsible too, and starts
+open only while your library is empty.
 
 ### Sharing the machine (worker pool)
 
@@ -241,10 +280,11 @@ slots between games -- see above.
 
 ### Puzzles from your own games
 
-Every position where you gave something away, handed back as a puzzle. The
-board switches to a third mode — game board, play board, puzzle board — and
-gives you the position you faced, oriented to the side you had, with the
-opponent's name and the date, and asks for the move you should have played.
+Every position where you gave something away, handed back as a puzzle. Opening
+the tab hands the board to its puzzle mode and asks for one straight away —
+there's nothing to set up first — giving you the position you faced, oriented to
+the side you had, with the opponent's name and the date, and asking for the move
+you should have played.
 
 Four decisions, all of them the difference between a useful set and a pile of
 positions:
@@ -269,8 +309,8 @@ positions:
 
 Blunders only by default, or blunders and mistakes; random order or worst
 first. Show me plays the answer on the board and leaves the puzzle unsolved —
-a revealed answer isn't one you found, so it comes round again. The eval bar
-is hidden for the duration, for the obvious reason.
+a revealed answer isn't one you found, so it comes round again. The eval bar is
+hidden for the duration, for the obvious reason.
 
 ### Saved analyses
 
