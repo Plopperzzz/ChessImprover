@@ -154,14 +154,15 @@ column are the first thing to fall past the fold on a short screen.
 
 Once a game has been analysed, the move that produced the position on the board
 carries its **classification badge** on the corner of the square it landed on,
-and the same badge sits beside the move in the move table. Stepping through the
-game plays the sound for whatever the move was judged to be. The badges are
-`assets/icons/classification/<name>.svg` and the sounds
-`assets/audio/classification/<name>.mp3`, both reached by the classifier's own
-name for the move -- so a sound is swapped by dropping a file in, and until one
-is there the nearest stock sound stands in. Four of the ten (`best`,
-`excellent`, `book`, `miss`) have their art ready but nothing awarding them
-yet; the classifier produces the other six.
+and the same badge sits beside the move in the move table. They live in
+`assets/icons/classification/<name>.svg`, reached by the classifier's own name
+for the move. Four of the ten (`best`, `excellent`, `book`, `miss`) have their
+art ready but nothing awarding them yet; the classifier produces the other six.
+
+Only **brilliant** gets a sound of its own. Every move already says what it did
+-- a capture, a check, a castle -- and a second noise stacked on every one of
+them turns stepping through a game into a slot machine; a brilliancy is rare
+enough to be worth interrupting for.
 
 On a wide screen the layout is three columns -- board, move table, then
 everything else -- putting the move table beside the board as section 5 asks.

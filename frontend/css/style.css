@@ -261,8 +261,8 @@ input[type="text"], input[type="number"], textarea, select {
    centres it there. */
 .sq-mark {
   position: absolute;
-  width: 24px;
-  height: 24px;
+  width: 35px;
+  height: 35px;
   transform: translate(-55%, -45%);
 }
 /* A queued pre-move: a different colour from the last move, because it is a
