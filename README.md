@@ -21,8 +21,9 @@ the whole build order from the spec.
 
 Beyond the spec: the page is split into four tabs rather than one long column,
 puzzles built from your own mistakes, pre-moves, looking back through a game
-while you're playing it, separate board/piece sets, and an opening database
-built from a PGN library that answers the board as you move. What's next is in
+while you're playing it, separate board/piece sets, an opening database
+built from a PGN library that answers the board as you move, and downloading
+your library straight from chess.com with the clocks intact. What's next is in
 [`docs/TODO.md`](docs/TODO.md).
 
 ### The four tabs
@@ -200,6 +201,27 @@ anything: the live-eval process has been running on the position in front of
 you the whole time (spec section 3), and this asks that same process for more
 ranked lines. Switching it off asks for one line again, which is what the bar
 needed anyway.
+
+**Downloading from chess.com** is the other half of **Load games**, for when
+you'd rather not export a PGN by hand. Type your chess.com handle (a profile
+URL works too), press **Find months**, and it lists every month that account
+has games in — newest first, each marked with how many of its games you
+already hold. Tick the ones you want and press **Download selected**.
+
+* It pulls the *monthly PGN archives*, which is deliberate: they carry the
+  `%clk` comments, so an imported library arrives with per-move think times
+  and the Elo fit's instant-move filter (below) works on it. The summary line
+  says how many of the games came with clocks, because a library without them
+  means something different.
+* Re-downloading a month costs nothing but the download. chess.com gives every
+  game a permanent link and the importer remembers it, so importing the
+  current month again — the normal way to pick up the last few days — adds
+  only what's new. Games you had already uploaded by hand are recognised too.
+* Months are fetched a few at a time with a progress line, rather than one
+  long request. chess.com rate-limits, and a five-year account is sixty
+  archives; stopping halfway keeps everything that already landed.
+* Only public, finished games are available, which is all the API offers. No
+  password is involved and nothing is sent to chess.com but the username.
 
 **Pasting a FEN** lives in **Load games** and does exactly one thing: it puts
 that position on the board. It doesn't load a game, doesn't clear the one you
@@ -689,7 +711,9 @@ would be unrecoverable — and stored against each swept position. A move played
 in under two seconds (configurable) is a premove or an automatic recapture and
 says nothing about how well you play, so it doesn't go into the fit. Positions
 with no clock recorded are always kept: unknown is not instant, and every game
-uploaded before this existed has no clock at all.
+uploaded before this existed has no clock at all. Games downloaded through
+**Load games → download from chess.com** come in this way, which is the main
+reason to prefer it over a hand-made export.
 
 The filter refuses to run when it would remove more than 60% of your timed
 moves, and says so — point it at a bullet library and it would leave you a
@@ -815,6 +839,10 @@ $env:STOCKFISH_PATH = "C:\path\to\stockfish.exe"
 
 Setting `STOCKFISH_PATH` is optional -- it's simpler to drop the engines into
 `assets/Engines/` (see below) and pick them in Settings.
+
+Re-run the `pip install -r requirements.txt` line after a `git pull` that adds
+a dependency. Downloading games from chess.com added `httpx`, and the server
+won't start without it.
 
 The stack is plain Python/FastAPI/SQLite plus vanilla JS in the browser, so
 Windows works the same way as Linux -- this has been exercised against a real

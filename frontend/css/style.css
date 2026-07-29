@@ -491,6 +491,45 @@ input[type="text"], input[type="number"], textarea, select {
 #plate-bottom { margin-top: -4px; }
 /* In the board dialog and the Load games panel now, so it takes the width
    of whatever it is in rather than the board's. */
+/* ---------- Download from chess.com ----------
+   Sits under the file picker in the Load games panel, separated by a rule
+   because it is the same job done a different way, not a further step. */
+.cc-import { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 10px; }
+.cc-import h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.cc-row { display: flex; gap: 8px; align-items: center; }
+.cc-row input { flex: 1; }
+.cc-actions { margin-top: 8px; flex-wrap: wrap; }
+.cc-actions button { font-size: 12px; padding: 6px 10px; }
+.cc-actions .cc-go { border-color: var(--accent); }
+/* A five-year account is sixty months; the list scrolls rather than pushing
+   the download button off the panel. */
+#cc-months {
+  max-height: 200px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+}
+#cc-months:empty { display: none; }
+.cc-month {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cc-month:hover { border-color: var(--border); }
+.cc-month input { width: auto; flex: none; }
+/* Months already in the library are quiet: the point of the mark is that
+   re-downloading them is a no-op, not that they're unavailable. */
+.cc-month .cc-have { color: var(--muted); font-size: 10px; }
+.cc-month.done { color: var(--muted); }
+#cc-status.error { color: #e05050; }
+
 .fen-row { display: flex; gap: 8px; width: 100%; margin-top: 6px; }
 .fen-row input { flex: 1; font-family: monospace; }
 

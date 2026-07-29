@@ -40,6 +40,22 @@ def account_names(user) -> list[str]:
     return names
 
 
+def external_game_id(headers: dict) -> str | None:
+    """A stable identity for a game on the site it came from, or None.
+
+    chess.com and lichess both put a permanent per-game URL in the export --
+    `Link` on chess.com, `Site` on lichess -- and that is what lets a repeat
+    import of the current month add only the games played since the last one.
+    A PGN with neither returns None, which callers must read as "can't tell",
+    not as "not a duplicate of anything".
+    """
+    for key in ("Link", "Site"):
+        value = (headers.get(key) or "").strip()
+        if value.lower().startswith(("http://", "https://")):
+            return value
+    return None
+
+
 def match_color(headers: dict, names) -> str:
     """Which side the account played, by matching any of its names against the
     White/Black headers (case-insensitive, trimmed). Returns 'unassigned'

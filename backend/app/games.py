@@ -1,9 +1,16 @@
+import json
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .auth import require_user
 from .db import db_cursor
-from .pgn_parse import account_names, parse_games_from_text, reassign_your_colors
+from .pgn_parse import (
+    account_names,
+    external_game_id,
+    parse_games_from_text,
+    reassign_your_colors,
+)
 from .runs import analyzed_game_ids
 
 router = APIRouter(prefix="/api/games", tags=["games"])
@@ -38,17 +45,22 @@ async def upload_games(
             if not games:
                 continue
             for g in games:
+                # Recorded on hand-uploaded games too, even though this path
+                # never dedupes: a chess.com import run afterwards can then
+                # tell that a month you already uploaded by hand is the same
+                # set of games, and skip it.
                 cur = conn.execute(
                     """INSERT INTO games (
                         user_id, upload_id, batch_index, source_name, game_index_in_source,
                         white, black, result, event, date_header, utc_date_header,
-                        year, month, your_color, pgn_text, headers_json, clocks_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        year, month, your_color, pgn_text, headers_json, clocks_json,
+                        external_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         user["id"], upload_id, batch_index, g["source_name"], g["game_index_in_source"],
                         g["white"], g["black"], g["result"], g["event"], g["date_header"], g["utc_date_header"],
                         g["year"], g["month"], g["your_color"], g["pgn_text"], g["headers_json"],
-                        g.get("clocks_json"),
+                        g.get("clocks_json"), external_game_id(json.loads(g["headers_json"])),
                     ),
                 )
                 created.append({"id": cur.lastrowid, "batch_index": batch_index, **g})

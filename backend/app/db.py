@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -124,6 +125,12 @@ CREATE TABLE IF NOT EXISTS games (
     -- at upload because pgn_text is stored without comments -- once a game is
     -- in, its clocks are unrecoverable. NULL when the export carried none.
     clocks_json TEXT,
+    -- The game's permanent URL on the site it came from (chess.com's `Link`
+    -- header, lichess's `Site`), so re-downloading a month adds only what is
+    -- new. NULL whenever the export carries no such header, and deliberately
+    -- not UNIQUE: uploading the same file twice by hand is the user saying
+    -- "yes, again", and only the importers dedupe on this.
+    external_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -321,6 +328,34 @@ def _backfill_model_size(conn):
         conn.executemany("UPDATE run_games SET maia_model_size = ? WHERE id = ?", updates)
 
 
+def _backfill_external_ids(conn):
+    """Fill `games.external_id` for games uploaded before the column existed.
+
+    Without this the first chess.com import would re-add every game already in
+    the library by hand, since a NULL id is "can't tell", not "not seen". The
+    `Link`/`Site` header it reads is already stored on every row, so this
+    costs one pass over `headers_json` and no network at all. Once, so a row
+    whose id is deliberately cleared later isn't refilled.
+    """
+    if _applied(conn, "backfill_external_ids"):
+        return
+    from .pgn_parse import external_game_id
+
+    rows = conn.execute(
+        "SELECT id, headers_json FROM games WHERE external_id IS NULL"
+    ).fetchall()
+    updates = []
+    for row in rows:
+        try:
+            headers = json.loads(row["headers_json"])
+        except (ValueError, TypeError):
+            continue
+        if external_id := external_game_id(headers):
+            updates.append((external_id, row["id"]))
+    if updates:
+        conn.executemany("UPDATE games SET external_id = ? WHERE id = ?", updates)
+
+
 def init_db():
     conn = get_conn()
     try:
@@ -343,6 +378,11 @@ def init_db():
         _ensure_column(conn, "engine_settings", "min_think_ms", "INTEGER NOT NULL DEFAULT 2000")
         _ensure_column(conn, "games", "clocks_json", "TEXT")
         _ensure_column(conn, "games", "your_color_locked", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "games", "external_id", "TEXT")
+        # After the column is guaranteed to exist, so a database created by an
+        # earlier version can be indexed on the same run that adds it.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_games_external ON games(user_id, external_id)")
+        _backfill_external_ids(conn)
         _ensure_column(conn, "sweep_positions", "think_ms", "INTEGER")
         _ensure_column(conn, "sweep_positions", "policies", "TEXT")
         _ensure_column(conn, "run_games", "maia_model_size", "TEXT")

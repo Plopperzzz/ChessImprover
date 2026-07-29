@@ -152,6 +152,24 @@
             <textarea id="pgn-paste" placeholder="...or paste PGN text here"></textarea>
             <button id="pgn-upload-btn">Upload</button>
             <div id="upload-status"></div>
+
+            <!-- Straight from chess.com instead of exporting by hand. The
+                 monthly archives carry the clock comments, which is what the
+                 Elo fit needs to tell a considered move from a premove. -->
+            <div class="cc-import">
+              <h4>...or download from chess.com</h4>
+              <div class="cc-row">
+                <input type="text" id="cc-username" placeholder="chess.com username" />
+                <button id="cc-find-btn">Find months</button>
+              </div>
+              <div id="cc-status" class="hint"></div>
+              <div id="cc-months"></div>
+              <div class="cc-row cc-actions hidden" id="cc-actions">
+                <button type="button" id="cc-select-new">Select months I don't have</button>
+                <button type="button" id="cc-clear">Clear</button>
+                <button type="button" id="cc-import-btn" class="cc-go">Download selected</button>
+              </div>
+            </div>
             <!-- Sets the board and nothing else: no game is loaded, and the
                  library selection is left where it was. -->
             <div class="fen-row">

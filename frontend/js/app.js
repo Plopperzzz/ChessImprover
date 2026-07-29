@@ -1207,6 +1207,8 @@ function wirePgnUpload() {
     }
   });
 
+  wireChesscomImport();
+
   document.getElementById('rematch-colors-btn').addEventListener('click', async () => {
     const status = document.getElementById('rematch-status');
     status.textContent = 'Checking...';
@@ -1225,6 +1227,140 @@ function wirePgnUpload() {
 async function refreshGameList() {
   state.games = await api('/api/games');
   renderGamePicker();
+}
+
+/* ---------------- Download from chess.com ----------------
+   The months are listed first and picked by hand rather than "import
+   everything": an account with five years on it is sixty downloads, and the
+   months you actually want to study are usually the recent ones.
+
+   Downloading runs a few months per request in a loop, not one big request.
+   chess.com rate-limits, an archive can be slow, and a single call covering
+   five years would sit past any sane HTTP timeout with nothing to show for
+   it -- this way there's a progress line and stopping halfway keeps whatever
+   already landed. */
+
+// Matches the server's per-request cap (chesscom.MAX_MONTHS_PER_REQUEST).
+const CC_MONTHS_PER_REQUEST = 6;
+
+function ccStatus(text, isError) {
+  const el = document.getElementById('cc-status');
+  el.textContent = text;
+  el.classList.toggle('error', !!isError);
+}
+
+function ccSelected() {
+  return [...document.querySelectorAll('#cc-months input:checked')].map((i) => i.value);
+}
+
+function renderCcMonths(months) {
+  const wrap = document.getElementById('cc-months');
+  wrap.innerHTML = '';
+  for (const m of months) {
+    const label = document.createElement('label');
+    label.className = 'cc-month' + (m.imported ? ' done' : '');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = m.label;
+    box.dataset.imported = m.imported;
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(m.label));
+    if (m.imported) {
+      const have = document.createElement('span');
+      have.className = 'cc-have';
+      have.textContent = `${m.imported} held`;
+      have.title = 'already in your library — downloading again adds only new games';
+      label.appendChild(have);
+    }
+    wrap.appendChild(label);
+  }
+  document.getElementById('cc-actions').classList.toggle('hidden', months.length === 0);
+}
+
+function wireChesscomImport() {
+  const usernameBox = document.getElementById('cc-username');
+  // The handle that decides which side of a game was yours is the best guess
+  // at the chess.com account too, so it's filled in rather than asked for.
+  usernameBox.value = localStorage.getItem('cc:username')
+    || state.user?.display_name || state.user?.username || '';
+
+  /** Fetches the month list and paints it. Returns the months, or null if the
+      lookup failed (having said why). Silent about its own progress when
+      called to repaint after an import, so the "added N games" line it was
+      called from is what stays on screen. */
+  const loadMonths = async (quiet) => {
+    const username = usernameBox.value.trim();
+    if (!username) { ccStatus('Type your chess.com username first.', true); return null; }
+    if (!quiet) {
+      ccStatus('Asking chess.com which months you have games in...');
+      document.getElementById('cc-months').innerHTML = '';
+      document.getElementById('cc-actions').classList.add('hidden');
+    }
+    try {
+      const res = await api('/api/games/chesscom/archives', {
+        method: 'POST', body: JSON.stringify({ username }),
+      });
+      usernameBox.value = res.username;
+      localStorage.setItem('cc:username', res.username);
+      renderCcMonths(res.months);
+      if (!quiet) {
+        ccStatus(res.months.length
+          ? `${res.months.length} month(s) of games. Pick the ones to download.`
+          : `chess.com has no games for '${res.username}'.`);
+      }
+      return res.months;
+    } catch (e) {
+      if (!quiet) ccStatus(e.message, true);
+      return null;
+    }
+  };
+  const find = () => loadMonths(false);
+
+  document.getElementById('cc-find-btn').addEventListener('click', find);
+  usernameBox.addEventListener('keydown', (e) => { if (e.key === 'Enter') find(); });
+
+  document.getElementById('cc-select-new').addEventListener('click', () => {
+    for (const box of document.querySelectorAll('#cc-months input')) {
+      box.checked = box.dataset.imported === '0';
+    }
+  });
+  document.getElementById('cc-clear').addEventListener('click', () => {
+    for (const box of document.querySelectorAll('#cc-months input')) box.checked = false;
+  });
+
+  document.getElementById('cc-import-btn').addEventListener('click', async () => {
+    const username = usernameBox.value.trim();
+    const months = ccSelected();
+    if (months.length === 0) { ccStatus('Tick at least one month.', true); return; }
+    const button = document.getElementById('cc-import-btn');
+    button.disabled = true;
+    let added = 0, skipped = 0, clocked = 0, done = 0;
+    try {
+      for (let i = 0; i < months.length; i += CC_MONTHS_PER_REQUEST) {
+        const chunk = months.slice(i, i + CC_MONTHS_PER_REQUEST);
+        ccStatus(`Downloading ${done + 1}-${done + chunk.length} of ${months.length} month(s)...`);
+        const res = await api('/api/games/chesscom/import', {
+          method: 'POST', body: JSON.stringify({ username, months: chunk }),
+        });
+        added += res.added; skipped += res.skipped; clocked += res.with_clocks;
+        done += chunk.length;
+        // After every chunk, so a long import fills the library as it goes
+        // rather than all at the end.
+        await refreshGameList();
+      }
+      await loadMonths(true);   // repaint the "held" counts against the new library
+      // Clocks are called out because they're the reason to import this way:
+      // without them the Elo fit can't drop moves played instantly.
+      ccStatus(`Added ${added} game(s)${clocked ? `, ${clocked} with clock times` : ''}`
+        + `${skipped ? `; skipped ${skipped} already in your library` : ''}.`);
+    } catch (e) {
+      ccStatus(`Stopped after ${done} of ${months.length} month(s): ${e.message}`
+        + (added ? ` ${added} game(s) were saved.` : ''), true);
+      await refreshGameList();
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
 /** One line of prose for a game: the picker rows and the collapsed Games
