@@ -37,6 +37,7 @@ from . import elo_sweep, maia_accuracy
 from .auth import require_user
 from .db import db_cursor
 from .engine_settings import get_effective_settings
+from .games import LibraryFilter, library_filter
 
 router = APIRouter(prefix="/api/strength", tags=["strength"])
 
@@ -56,13 +57,24 @@ def _header_elo(headers_json: str, side: str):
     return value if 100 <= value <= 4000 else None
 
 
-def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
+def collect(user_id: int, run_id: int | None = None,
+            library: LibraryFilter | None = None) -> tuple[list[dict], dict]:
     """One entry per analysed game, carrying both sides' score rows.
 
     Only the latest analysis of each game is used: a game re-analysed, or
     appended into a second run, would otherwise contribute its positions twice
     and tighten every interval for free.
+
+    `library` narrows the pool to a slice of the games -- a speed, an exact
+    time control, a group -- using the same fragment the Games picker and the
+    batch runner filter by. It belongs here rather than in each caller because
+    both the pooled estimate and the trend have to pool exactly the same rows
+    to stay comparable, and because the "no sweep yet" count below has to be
+    counted over the same slice or it reports the whole library's backlog
+    against a filtered fit.
     """
+    library = library or LibraryFilter()
+    slice_where, slice_params = library.where(user_id)
     skipped = {"no_full_analysis": 0, "unassigned_color": 0,
                "no_sweep_positions": 0, "no_header_elo": 0}
     params: list = [user_id]
@@ -79,12 +91,12 @@ def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
 
     with db_cursor() as conn:
         skipped["no_full_analysis"] = conn.execute(
-            """SELECT COUNT(*) AS n FROM games g
-               WHERE g.user_id = ? AND NOT EXISTS (
+            f"""SELECT COUNT(*) AS n FROM games g
+               WHERE {slice_where} AND NOT EXISTS (
                  SELECT 1 FROM run_games rg
                  WHERE rg.game_id = g.id AND rg.user_id = g.user_id
                    AND rg.mode IN ('full', 'sweep'))""",
-            (user_id,),
+            slice_params,
         ).fetchone()["n"]
 
         rows = conn.execute(
@@ -95,8 +107,9 @@ def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
                 FROM run_games rg
                 JOIN games g ON g.id = rg.game_id
                 WHERE rg.user_id = ? AND rg.mode IN (?, ?){run_clause}
+                  AND {slice_where}
                 ORDER BY g.id, (rg.mode = 'full') DESC, rg.analyzed_at DESC""",
-            [user_id, *swept_modes] + params[1:],
+            [user_id, *swept_modes] + params[1:] + slice_params,
         ).fetchall()
 
         seen: set[int] = set()
@@ -445,8 +458,10 @@ def _predictability(you: dict, think: dict, top_n: int) -> dict:
 
 def build(user_id: int, run_id: int | None = None, top_n: int = 1,
           min_think_ms: int | None = None,
-          objective: str = elo_sweep.DEFAULT_OBJECTIVE) -> dict:
-    entries, skipped = collect(user_id, run_id)
+          objective: str = elo_sweep.DEFAULT_OBJECTIVE,
+          library: LibraryFilter | None = None) -> dict:
+    library = library or LibraryFilter()
+    entries, skipped = collect(user_id, run_id, library)
     if objective not in elo_sweep.OBJECTIVES:
         objective = elo_sweep.DEFAULT_OBJECTIVE
     top_n = max(1, min(int(top_n), elo_sweep.MAX_TOP_N))
@@ -475,6 +490,10 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1,
         "your_rating_mean": round(float(np.mean(your_ratings)), 1) if your_ratings else None,
         "your_rating_n": len(your_ratings),
         "games": len(entries),
+        # Echoed so the panel can say which slice produced the number: a
+        # filtered fit and the all-games one are different measurements and
+        # must never be shown as though they were the same one.
+        "library_filter": library.as_dict(),
         "top_n": top_n,
         "objective": objective,
         "policy_source": you.get("policy_source"),
@@ -494,9 +513,15 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1,
 def get_strength(run_id: int | None = None, top_n: int = 1,
                  min_think_ms: int | None = None,
                  objective: str = elo_sweep.DEFAULT_OBJECTIVE,
+                 filters: LibraryFilter = Depends(library_filter),
                  user: dict = Depends(require_user)):
     """Pooled estimate over every game with a stored sweep. Pure re-fit of
     cached scores -- no engine runs -- so it is safe to call on every load,
     and so `objective` can be switched from the UI to compare the likelihood
-    fit against the top-1 one on exactly the same games."""
-    return build(user["id"], run_id, top_n, min_think_ms, objective)
+    fit against the top-1 one on exactly the same games.
+
+    `speed`, `time_control` and `collection_id` narrow it to a slice of the
+    library, spelled exactly as the Games list spells them. Filtering to rapid
+    and running a batch used to give you rapid-only analyses that this number
+    then averaged straight back together with your bullet games."""
+    return build(user["id"], run_id, top_n, min_think_ms, objective, filters)

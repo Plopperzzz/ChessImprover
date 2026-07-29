@@ -7,34 +7,7 @@ Anything already built lives in the README; this file is only what isn't.
 
 ---
 
-## 0. Carry the library filter into Progress
-
-**Why:** the Games panel can now narrow the library to a speed, an exact time
-control or a group, and the batch runner honours it — but **Progress does
-not**. The strength estimate and the trend still pool every analysed game in
-the run, so filtering to rapid and running a batch gives you rapid-only
-*analyses* that are then averaged back together with your bullet games the
-moment you look at the number.
-
-**What:** the same filter controls on Progress, applied to which `run_games`
-the fit pools. A speed selector is the minimum; the group selector is the same
-query and comes free with it.
-
-**Data:** all present. `games.speed`, `games.time_control` and
-`game_collections` are already joined to `run_games` by `game_id`, and
-`app/games.py:game_filter_sql` is the fragment to reuse — it is what the
-picker and the batch already share, and a third caller is exactly what it was
-factored out for.
-
-**Watch out for:** the interval widens as the pool shrinks, and a per-speed fit
-on a library that is 90% blitz will give a rapid estimate off twenty games.
-Report the count and the interval the way the trend view already does for
-sparse buckets, and don't let a filtered view quietly present a much weaker
-estimate in the same typeface as a strong one.
-
----
-
-## 1. Opening repertoire report
+## 0. Opening repertoire report
 
 **Why:** the app can already say *that* you lost the game and *where*. It
 can't say "you lose the Caro-Kann and you're fine in everything else", which
@@ -58,7 +31,7 @@ different repertoires.
 
 ---
 
-## 2. When do you play best? (time-of-day bins)
+## 1. When do you play best? (time-of-day bins)
 
 **Why:** the plausible answer ("I'm worse after 11pm") is worth knowing and
 nobody's memory is reliable about it.
@@ -99,7 +72,7 @@ isn't.
 
 ---
 
-## 3. Time spent vs quality
+## 2. Time spent vs quality
 
 **Why:** most players have a sharp cliff below about five seconds a move, and
 seeing your own is more convincing than being told.
@@ -117,7 +90,7 @@ version reports the association without claiming the direction.
 
 ---
 
-## 4. Batches don't survive a restart of the *server*
+## 3. Batches don't survive a restart of the *server*
 
 Running jobs live in the process, so `Ctrl-C`, a crash or a reboot ends the
 run. Every game it had finished is already saved, and re-running with "Not yet
@@ -130,7 +103,7 @@ the phone and switching apps are all fine already.
 
 ---
 
-## 5. Phase breakdown
+## 4. Phase breakdown
 
 Opening / middlegame / endgame accuracy separately, and — since the sweep
 stores per-position scores — three separate Elo fits rather than one. "Your
@@ -143,7 +116,7 @@ side), and whatever is picked should be written down where the fit is.
 
 ---
 
-## 6. Drag-and-drop pieces
+## 5. Drag-and-drop pieces
 
 Click-click works everywhere and is what the board does now. Dragging is the
 expected gesture on a phone, and it pairs naturally with pre-moves. Pointer
@@ -152,7 +125,7 @@ must not become the only way to move.
 
 ---
 
-## 7. Jump between mistakes in an analysed game
+## 6. Jump between mistakes in an analysed game
 
 `n` / `p` to step from one mistake or blunder to the next, instead of
 scrubbing the eval plot for the cliffs. Small, and it is what you actually do
@@ -160,7 +133,7 @@ after an analysis finishes.
 
 ---
 
-## 8. Puzzle scheduling
+## 7. Puzzle scheduling
 
 The puzzle set has no notion of *when* to show you one again. Right now a
 solved puzzle drops to the back and a revealed one stays unsolved, which is

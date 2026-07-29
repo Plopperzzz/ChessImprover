@@ -36,7 +36,7 @@ with the board, the move list and the Settings dialog shared between them:
 | Tab | What lives there |
 | --- | --- |
 | **Analyse a game** | Load games, the game list, the single-game Quick/Full analysis, batch analysis, and the per-game Elo sweep. Everything that runs an engine over games you already have. |
-| **Progress** | Your pooled strength across all games, and the trend over time. No board — these are aggregates, so the panels take the full width in columns. |
+| **Progress** | Your pooled strength and the trend over time, over whichever slice of the library you pick at the top of the tab. No board — these are aggregates, so the panels take the full width in columns. |
 | **Play** | Play vs Maia3. |
 | **Puzzles** | Your own mistakes, handed back (below). |
 
@@ -308,11 +308,17 @@ top bar mutes them, and the choice survives a reload.
 
 Estimated Elo per date bucket, plotted against the rating in your PGN
 headers, bucketed by ISO week, month or year, optionally scoped to one run,
-and optionally narrowed to a **timespan** -- the last 4 weeks, 6 months,
-year, or any count and unit you type. Switching any of those **re-fits the
-cached per-position sweep scores and never touches an engine** -- that is the
-whole reason section 13 stores the score matrices rather than just the final
-numbers.
+optionally narrowed to a **timespan** -- the last 4 weeks, 6 months, year, or
+any count and unit you type -- and optionally to one **slice of the library**
+(a speed, an exact time control, a group; see *Filtering the library* above).
+Switching any of those **re-fits the cached per-position sweep scores and
+never touches an engine** -- that is the whole reason section 13 stores the
+score matrices rather than just the final numbers.
+
+Filtering by speed matters more here than the timespan does. Bullet and rapid
+measure two different abilities, and drawn as one line a change of *habit*
+reads as a change of *strength*: a month you happened to play mostly bullet
+dips the curve without anything about your chess having moved.
 
 The timespan ends at your **most recent analysed game, not at today**. A
 stretch where you didn't play is not a decline, and anchoring to today would
@@ -536,6 +542,22 @@ that makes a bulk delete a mistake.
 what a batch covers, and the batch panel says so before you start it. That is
 what makes grouping worth doing: "analyse just my rapid games" gives a strength
 estimate for a player who exists, rather than an average of two of them.
+
+**So does Progress**, with its own copy of the same controls at the top of that
+tab — speed chips, the exact controls inside a speed, and the group selector.
+Both panels below them fit only what is picked, so filtering to rapid and
+running a batch no longer produces rapid-only *analyses* that the number above
+then averages straight back together with your bullet games. The two filters
+are deliberately separate: which games you are looking at and which games you
+want measured are different questions, and tying them together would re-fit
+both panels every time you scrolled the library looking for a game.
+
+A narrowed fit is a **different measurement, not a better one** — fewer games
+is a wider interval, and the panels say which slice they are fitting, how many
+games it has, and (under twenty) that the result isn't comparable with the
+all-games number. The "left out" counts narrow with it, so "3 × no Elo sweep
+yet" under a rapid filter means three unanalysed *rapid* games, not the whole
+library's backlog.
 
 ### Analysis modes
 
