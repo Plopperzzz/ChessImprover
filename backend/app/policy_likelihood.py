@@ -13,22 +13,28 @@ This asks the question Maia's own tooling asks:
 
 and takes the answer straight out of the log-likelihood:
 
-* **The peak is the estimate.** A local quadratic through the grid points near
-  the maximum, and its vertex. No bump to fit, because there is no baseline to
-  separate out -- an obvious move that every rating plays contributes the same
-  log probability at every rating and drops out of the *differences* by itself,
-  which is exactly what the old code had to identify a "baseline" parameter to
-  do.
-* **The curvature is the standard error.** For a one-parameter likelihood the
-  observed information is -L''(peak), and the error on the peak is its inverse
-  square root. No bootstrap: several hundred refits per estimate bought an
-  interval that this reads off the same quadratic for nothing.
-* **Moves within a game are not independent**, so the reported error is a
-  *cluster-robust sandwich*: the model-based information in the denominator,
-  and the variance of the per-game score sums in the numerator. That is the
-  same correction the cluster bootstrap was making, done in closed form, and
-  it degrades honestly to the independent-moves form when there is only one
-  game to resample.
+* **The peak is the estimate.** The vertex of a quadratic fitted to the
+  log-likelihood, with the grid points weighted smoothly by how close they are
+  to the maximum (see PEAK_TAU -- weighting rather than choosing a window is
+  load-bearing, and the note there says why). No bump to fit, because there is
+  no baseline to separate out: an obvious move that every rating plays
+  contributes the same log probability at every rating and drops out of the
+  *differences* by itself, which is exactly what the old code had to identify a
+  "baseline" parameter to do.
+* **The interval comes out of the same fit.** A delete-one jackknife over the
+  independent unit -- games when several are pooled, moves otherwise, since
+  moves in one game share an opponent, an opening and a sitting. Dropping a
+  unit subtracts its own coefficients from the summed quadratic, so every
+  leave-one-out peak is closed-form and the whole thing is one vectorised
+  expression. That replaced a 400-sample bootstrap, and it is not only cheaper:
+  the bootstrap was resampling an estimator that moved discontinuously with its
+  own data.
+* **What the curvature alone would claim is reported beside it**, as
+  `se_curvature`. That is the textbook one-parameter answer -- inverse root of
+  the observed information -- and it assumes both that the player really is a
+  Maia at some rating and that their moves are independent. Reporting the ratio
+  measures what those assumptions were worth on this player's own moves instead
+  of asserting it.
 * **The scale is absolute.** Mean log probability per move is comparable
   across players, games and grids without calibrating against a published
   accuracy curve: a player Maia predicts as well as it predicts anyone scores
@@ -175,8 +181,8 @@ UNPREDICTABLE_LOGP = float(-np.log(TYPICAL_LEGAL_MOVES))
 # average the jaggedness out, too large and it reaches into the tails of the
 # curve where a quadratic no longer describes it and drags the peak toward the
 # middle of the grid -- the exact failure the old smoothing spline was replaced
-# for. Between 1200 and 1800 on the default grid, tau 4 holds the bias under 15
-# Elo and coverage between 96% and 97%.
+# for. Between 1200 and 2000 on the default grid, tau 4 holds the bias inside
+# 15 Elo and coverage between 95% and 97%.
 PEAK_TAU = 4.0
 # Weights this concentrated leave nothing to fit a curve through. A large
 # library makes the likelihood so sharp that only one or two grid points carry
@@ -463,12 +469,12 @@ def _confidence(*, result, elos, peak, raw_peak, ci_low, ci_high, n_total,
            "; scored from Maia's ranking of your move, not its raw policy"))
     # Sample size counts for much less here than it did under the top-1
     # objective, and deliberately. There, the number of positions was the only
-    # handle on precision. Here the interval is read from the curvature of the
-    # likelihood itself, so it already knows how much those positions were
-    # worth -- a game of sharp, discriminating positions and a game of book
-    # moves have different curvatures at the same count. Counting both would
-    # be counting the same evidence twice, so the width below carries the
-    # weight and this only flags a sample too small to trust either way.
+    # handle on precision available. Here the interval is jackknifed from the
+    # positions themselves, so it already knows what they were worth -- a game
+    # of sharp, discriminating positions and a game of book moves get different
+    # intervals at the same count. Scoring both would be counting the same
+    # evidence twice, so the width below carries the weight and this only flags
+    # a sample too small to trust either way.
     if n_fit >= 100:
         score += 1
     elif n_fit < 10:

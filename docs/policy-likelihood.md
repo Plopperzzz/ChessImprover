@@ -140,8 +140,8 @@ So every grid point gets weight `exp((L - Lmax) / tau)`, with `tau = 4` nats.
 average out the jaggedness that rank flips produce, too large and it reaches
 into the tails where a quadratic no longer describes the curve and drags the
 peak toward the middle of the grid — the exact failure the old smoothing spline
-was replaced for. Between 1200 and 1800 on the default grid, `tau = 4` holds
-the bias under 15 Elo and coverage between 96% and 97%.
+was replaced for. Between 1200 and 2000 on the default grid, `tau = 4` holds
+the bias inside 15 Elo and coverage between 95% and 97%.
 
 A related trap: the window must be *centred* on the maximum, not merely contain
 it. An early version took "points within 2 nats of the best", which can put the
@@ -170,12 +170,17 @@ player's, form varying by 120 Elo.
 
 | | true spread | resample games | resample moves |
 |---|---|---|---|
-| no form variation | 34 | covers 92%, width 123 | covers 95%, width 128 |
-| form varies by 120 | 49 | **covers 94%**, width 190 | **covers 87%**, width 136 |
+| no form variation | 34 | covers 91%, width 124 | covers 95%, width 127 |
+| form varies by 120 | 51 | **covers 92%**, width 196 | **covers 85%**, width 137 |
 
-With nothing to cluster over the two agree, as they should. With realistic
-between-game variation the move-level interval is 28% too narrow and covers
-87% of the time, and the game-level one stays honest.
+With nothing to cluster over the two agree to within a couple of points, as
+they should — and the game-level interval is fractionally the worse of the two,
+which is the price of estimating a variance from 12 clusters instead of 360
+moves. With realistic between-game variation that reverses and the gap is much
+larger: the move-level interval is 30% too narrow and covers 85% of the time
+where the game-level one holds 92%. Paying two points in the case where
+clustering is unnecessary to gain seven where it is necessary is the trade
+worth making, because real games do differ.
 
 For a **single game** the jackknife is over moves, because there is nothing
 else to resample — which treats them as independent when they share an
@@ -259,7 +264,7 @@ not have and would flatter every interval here.
 whole run of results. With a single shared centre, the coupled draw makes the
 score matrix an exact function of `|r - R|` — perfectly symmetric about the
 truth. Every position's likelihood then peaks at exactly `R`, the peak is
-noise-free, and the sandwich correctly reports a standard error of zero. The
+noise-free, and the fit correctly reports a standard error of zero. The
 first version of this simulation did that, and reported a suspiciously perfect
 100% coverage with intervals of width 0 at every rating. The move you played is
 sometimes more typical of a 1200 and sometimes of an 1800; that scatter is the

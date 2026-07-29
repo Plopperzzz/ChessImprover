@@ -41,7 +41,7 @@ information the sweep does not have and would flatter every interval here.
 whole exercise is worthless: with a single shared centre, the coupled draw
 makes the score matrix an exact function of `|r - R|`, symmetric about the
 truth, so every position's likelihood peaks at exactly `R`, the peak is noise-
-free, and the sandwich correctly reports a standard error of zero. The move you
+free, and the fit correctly reports a standard error of zero. The move you
 played is sometimes more typical of a 1200 and sometimes of an 1800; that
 scatter is the entire reason the peak of a finite sample is uncertain, and so
 it is the thing the interval has to get right.
