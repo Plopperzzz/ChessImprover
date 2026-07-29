@@ -147,6 +147,13 @@ def normalise_time_control(raw) -> str | None:
 # length* -- see time_control_speed for why that isn't just the base time.
 SPEED_THRESHOLDS = (("bullet", 180), ("blitz", 600))
 
+# Every speed a game can be classified as, fastest first, and then the name
+# the filters give to a game that couldn't be classified at all (`speed IS
+# NULL`). 'unknown' is a real choice in a picker, not a missing one, so it
+# belongs in the same list -- but it is never returned by time_control_speed.
+SPEEDS = ("bullet", "blitz", "rapid", "daily")
+FILTER_SPEEDS = (*SPEEDS, "unknown")
+
 
 def time_control_speed(raw: str) -> str | None:
     """'bullet' | 'blitz' | 'rapid' | 'daily', or None when it can't be told.

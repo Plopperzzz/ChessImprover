@@ -38,6 +38,11 @@ const state = {
   // applied here, so the picker, the bulk actions and a batch run all agree
   // on what "these games" means.
   filter: { speed: null, timeControl: null, collectionId: null },
+  // The same choice for the Progress tab, kept separate on purpose: which
+  // games you are *looking at* and which games you want *measured* are
+  // different questions, and tying them together would re-fit both panels
+  // every time you scrolled the library looking for a game.
+  progressFilter: { speed: null, timeControl: null, collectionId: null },
   collections: [],
   facets: { speeds: [], total: 0 },
   // Ticked games, by id. Survives a re-render of the list; cleared when the
@@ -1251,13 +1256,14 @@ async function refreshGameList() {
   renderBulkTools();
 }
 
-/** The current filter as query parameters, shared by the game list, the
-    bulk actions and the batch preview so they can't drift apart. */
-function filterQuery() {
+/** A filter as query parameters, shared by the game list, the bulk actions,
+    the batch preview and the Progress fits so they can't drift apart. The
+    server spells these three the same way at every endpoint that takes them. */
+function filterQuery(filter = state.filter) {
   const p = new URLSearchParams();
-  if (state.filter.speed) p.set('speed', state.filter.speed);
-  if (state.filter.timeControl) p.set('time_control', state.filter.timeControl);
-  if (state.filter.collectionId) p.set('collection_id', state.filter.collectionId);
+  if (filter.speed) p.set('speed', filter.speed);
+  if (filter.timeControl) p.set('time_control', filter.timeControl);
+  if (filter.collectionId) p.set('collection_id', filter.collectionId);
   return p.toString();
 }
 
@@ -1301,6 +1307,9 @@ function formatTimeControl(raw) {
 async function refreshCollections() {
   state.collections = await api('/api/collections');
   renderCollectionControls();
+  // Progress filters by the same groups, so a group renamed or deleted has to
+  // reach both pickers or the second one keeps offering a name that's gone.
+  renderProgressFilter();
   // Making the first group has to reveal the actions that need one to exist.
   renderBulkTools();
 }
@@ -1309,6 +1318,7 @@ async function refreshFacets() {
   state.facets = await api('/api/games/facets');
   renderSpeedChips();
   renderControlChips();
+  renderProgressFilter();
 }
 
 /** Everything about the library at once: what buckets exist, what groups
@@ -1347,20 +1357,25 @@ async function setFilter(patch) {
   refreshBatchScopeNote();
 }
 
-function renderSpeedChips() {
-  const wrap = document.getElementById('speed-chips');
+/** The speed row and the exact-control row, for whichever filter is asking.
+
+    The Games list and the Progress fits offer the same choice over the same
+    facets and differ only in what a click does, so the chips are defined once
+    here: two rows that looked the same but drifted apart would be worse than
+    either. `apply` takes the patch and is responsible for refetching. */
+function renderSpeedChipRow(wrap, filter, apply) {
   wrap.replaceChildren();
   const speeds = state.facets.speeds || [];
   // With one bucket there is nothing to choose between, so the row would be
   // a filter that can only be switched off.
   if (speeds.length < 2) return;
-  wrap.appendChild(chip('All', state.facets.total, !state.filter.speed,
-    () => setFilter({ speed: null, timeControl: null })));
+  wrap.appendChild(chip('All', state.facets.total, !filter.speed,
+    () => apply({ speed: null, timeControl: null })));
   for (const s of speeds) {
     wrap.appendChild(chip(
       `${SPEED_ICONS[s.speed] || ''} ${s.speed}`.trim(), s.games,
-      state.filter.speed === s.speed,
-      () => setFilter({ speed: s.speed, timeControl: null }),
+      filter.speed === s.speed,
+      () => apply({ speed: s.speed, timeControl: null }),
       s.speed === 'unknown'
         ? 'Games whose export carried no usable TimeControl header'
         : null,
@@ -1371,18 +1386,25 @@ function renderSpeedChips() {
 /** The exact controls inside the chosen speed. Only shown once a speed is
     picked and there is more than one control in it -- the point is telling
     10+5 from 15+10, not listing every control you own. */
-function renderControlChips() {
-  const wrap = document.getElementById('control-chips');
+function renderControlChipRow(wrap, filter, apply) {
   wrap.replaceChildren();
-  const bucket = (state.facets.speeds || []).find((s) => s.speed === state.filter.speed);
+  const bucket = (state.facets.speeds || []).find((s) => s.speed === filter.speed);
   if (!bucket || bucket.controls.length < 2) return;
-  wrap.appendChild(chip(`Any ${bucket.speed}`, bucket.games, !state.filter.timeControl,
-    () => setFilter({ timeControl: null })));
+  wrap.appendChild(chip(`Any ${bucket.speed}`, bucket.games, !filter.timeControl,
+    () => apply({ timeControl: null })));
   for (const c of bucket.controls) {
     wrap.appendChild(chip(formatTimeControl(c.time_control), c.games,
-      state.filter.timeControl === c.time_control,
-      () => setFilter({ timeControl: c.time_control }), c.time_control));
+      filter.timeControl === c.time_control,
+      () => apply({ timeControl: c.time_control }), c.time_control));
   }
+}
+
+function renderSpeedChips() {
+  renderSpeedChipRow(document.getElementById('speed-chips'), state.filter, setFilter);
+}
+
+function renderControlChips() {
+  renderControlChipRow(document.getElementById('control-chips'), state.filter, setFilter);
 }
 
 function renderCollectionControls() {
@@ -2955,6 +2977,92 @@ function sweepChart(res) {
   return svg;
 }
 
+/* ---------------- The Progress filter ----------------
+   One choice of games for both panels on the tab. The batch runner can already
+   analyse just your rapid games; without this, the number those analyses feed
+   pooled them straight back together with everything else. */
+
+// Below this many analysed games, a filtered fit gets a warning rather than
+// being shown in the same typeface as one built from the whole library. It is
+// a rule of thumb, not a threshold in the statistics: the interval is the real
+// answer, and this only decides when to point at it.
+const THIN_POOL_GAMES = 20;
+
+async function setProgressFilter(patch) {
+  Object.assign(state.progressFilter, patch);
+  renderProgressFilter();
+  await Promise.all([refreshStrength(), refreshTrend()]);
+}
+
+function renderProgressFilter() {
+  const speeds = document.getElementById('progress-speed-chips');
+  if (!speeds) return;
+  renderSpeedChipRow(speeds, state.progressFilter, setProgressFilter);
+  renderControlChipRow(document.getElementById('progress-control-chips'),
+    state.progressFilter, setProgressFilter);
+
+  const select = document.getElementById('progress-collection');
+  const current = state.progressFilter.collectionId;
+  select.replaceChildren();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = state.collections.length ? 'All groups' : 'No groups yet';
+  select.appendChild(all);
+  for (const c of state.collections) {
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = `${c.name} (${c.game_count})`;
+    select.appendChild(o);
+  }
+  select.value = current ? String(current) : '';
+  // A group that has been deleted can't stay selected: the fits would keep
+  // filtering by an id nothing is in and both panels would sit empty.
+  if (current && select.value !== String(current)) {
+    state.progressFilter.collectionId = null;
+    select.value = '';
+  }
+}
+
+/** What the Progress fits are running over, as a noun phrase: 'game(s)',
+    'rapid game(s)', '10 + 5 game(s) in “Tournament prep”'. Every status line
+    on the tab is built from this one, so they can't describe the same slice
+    two different ways. */
+function progressGamesPhrase(filter = state.progressFilter) {
+  const speed = filter.timeControl ? formatTimeControl(filter.timeControl) : filter.speed;
+  const group = filter.collectionId
+    && state.collections.find((c) => c.id === Number(filter.collectionId));
+  return `${speed ? `${speed} ` : ''}game(s)${group ? ` in “${group.name}”` : ''}`;
+}
+
+/** Whether any of it is narrowed at all -- the difference between "you have
+    analysed nothing" and "you have analysed nothing *of this*". */
+function progressFiltered(filter = state.progressFilter) {
+  return Boolean(filter.speed || filter.timeControl || filter.collectionId);
+}
+
+/** The line under the filter, and the same sentence both panels lean on: what
+    is being fitted, and — when the pool is thin — that this is a narrower
+    measurement than the all-games one rather than a correction to it. */
+function renderProgressFilterNote(games) {
+  const note = document.getElementById('progress-filter-note');
+  if (!note) return;
+  if (!progressFiltered()) {
+    note.textContent = '';
+    note.className = 'filter-note';
+    return;
+  }
+  const phrase = progressGamesPhrase();
+  const thin = games != null && games < THIN_POOL_GAMES;
+  note.className = 'filter-note' + (thin ? ' filter-note-warn' : '');
+  note.textContent = games == null
+    ? `Fitting your ${phrase} only.`
+    : thin
+      ? `Only ${games} analysed ${phrase} — wide intervals, and not comparable with the `
+        + 'all-games number. Analyse more of this slice, or widen the filter.'
+      : `Fitting ${games} analysed ${phrase}. A filtered estimate is a different `
+        + 'measurement from the all-games one, not a more accurate version of it.';
+}
+
 /* ---------------- Pooled strength estimate (spec section 9) ----------------
    The per-game number is far too noisy to act on; this is the one that pools
    every stored sweep into a single fit. It also reports the opposition field,
@@ -2968,6 +3076,9 @@ function wireStrength() {
   document.getElementById('strength-run').addEventListener('change', refreshStrength);
   document.getElementById('strength-topn').addEventListener('change', refreshStrength);
   document.getElementById('strength-objective').addEventListener('change', refreshStrength);
+  document.getElementById('progress-collection').addEventListener('change', (e) => {
+    setProgressFilter({ collectionId: e.target.value ? Number(e.target.value) : null });
+  });
   refreshStrength();
 }
 
@@ -2980,10 +3091,11 @@ async function refreshStrength() {
   document.getElementById('strength-topn-label').hidden = objective !== 'top1';
   const status = document.getElementById('strength-status');
   const body = document.getElementById('strength-body');
+  const slice = filterQuery(state.progressFilter);
   status.textContent = 'Fitting...';
   try {
     const d = await api(`/api/strength?top_n=${topN}&objective=${objective}`
-      + (runId ? `&run_id=${runId}` : ''));
+      + (runId ? `&run_id=${runId}` : '') + (slice ? `&${slice}` : ''));
     renderStrength(d, status, body);
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
@@ -2993,8 +3105,13 @@ async function refreshStrength() {
 
 function renderStrength(d, status, body) {
   body.innerHTML = '';
+  renderProgressFilterNote(d.you ? d.you.games : d.games);
   if (!d.you || d.you.estimate == null) {
-    status.textContent = 'Nothing to fit yet — run a Full analysis (or a Full batch) first.';
+    status.textContent = progressFiltered()
+      ? `Nothing to fit from your ${progressGamesPhrase()} — analyse some (the Games list `
+        + 'filters to the same slice, and a Full batch will sweep them), or widen the '
+        + 'filter above.'
+      : 'Nothing to fit yet — run a Full analysis (or a Full batch) first.';
     renderTrendSkipped(body, d);
     return;
   }
@@ -3019,7 +3136,8 @@ function renderStrength(d, status, body) {
         + ' these sweeps carry no policy from the engine.';
   }
   status.textContent =
-    `${d.you.games} game(s), ${d.you.n_discriminative} usable of ${d.you.n_positions} positions`
+    `${d.you.games} ${progressGamesPhrase()}, `
+    + `${d.you.n_discriminative} usable of ${d.you.n_positions} positions`
     + describe;
 
   const card = document.createElement('div');
@@ -3253,12 +3371,13 @@ async function refreshTrend() {
   const granularity = document.getElementById('trend-granularity').value;
   const runId = document.getElementById('trend-run').value;
   const status = document.getElementById('trend-status');
+  const slice = filterQuery(state.progressFilter);
   const seq = ++trendSeq;
   status.textContent = 'Loading...';
   try {
     const data = await api(`/api/trend?granularity=${granularity}`
       + `&window=${encodeURIComponent(trendWindow())}`
-      + (runId ? `&run_id=${runId}` : ''));
+      + (runId ? `&run_id=${runId}` : '') + (slice ? `&${slice}` : ''));
     if (seq !== trendSeq) return;
     renderTrend(data);
   } catch (e) {
@@ -3274,21 +3393,25 @@ function renderTrend(data) {
   const table = document.getElementById('trend-table');
   chart.innerHTML = ''; verdict.innerHTML = ''; table.innerHTML = '';
 
+  const phrase = progressGamesPhrase();
   const plotted = data.buckets.filter((b) => b.estimate != null || b.actual_elo != null);
   if (!plotted.length) {
     const w = data.window || {};
     status.textContent = w.applied && w.excluded
       // Distinguish "you have no data" from "your window hid it all", which
       // are the same empty chart and completely different problems.
-      ? `Nothing to plot in the last ${w.requested} — ${w.excluded} analysed game(s) `
+      ? `Nothing to plot in the last ${w.requested} — ${w.excluded} analysed ${phrase} `
         + 'fall outside that window. Widen the timespan to see them.'
-      : 'Nothing to plot yet — this needs games with a Full analysis (the Maia Elo sweep), '
-        + 'a date in the PGN headers, and your name matching White or Black.';
+      : progressFiltered()
+        ? `Nothing to plot from your ${phrase} — analyse some, or widen the filter above.`
+        : 'Nothing to plot yet — this needs games with a Full analysis (the Maia Elo sweep), '
+          + 'a date in the PGN headers, and your name matching White or Black.';
     renderTrendSkipped(verdict, data);
     return;
   }
   status.textContent =
-    `${data.total_games} analysed game(s) across ${data.buckets.length} ${data.granularity} bucket(s)`
+    `${data.total_games} analysed ${phrase} across `
+    + `${data.buckets.length} ${data.granularity} bucket(s)`
     + `${trendRangeText(data.window)}.`;
 
   chart.appendChild(trendChart(plotted));

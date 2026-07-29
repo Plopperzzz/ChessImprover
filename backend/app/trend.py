@@ -8,7 +8,7 @@ this view re-buckets without touching an engine: switching from month to week
 re-pools the same cached (position x Elo) match matrices and re-fits. Nothing
 here starts a job, and there is no engine code in this module at all.
 
-Two things get more care than the plot itself:
+Three things get more care than the plot itself:
 
 * **Buckets are estimated from pooled positions, not averaged estimates.** A
   month's estimate is one fit over every position played that month, so a
@@ -19,6 +19,11 @@ Two things get more care than the plot itself:
   the noise in each bucket, so the slope is a weighted fit whose weights come
   from those intervals, and it is reported with its own interval and a plain
   statement of whether it is distinguishable from noise.
+* **Speeds can be kept apart.** Bullet and rapid measure two different
+  abilities; pooled into one line, a change of habit reads as a change of
+  strength. The view takes the same library filter the Games picker and the
+  batch runner use, so "the last three months of rapid" is one selection
+  rather than three panels that disagree about what they're showing.
 """
 
 import calendar
@@ -31,6 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from . import elo_sweep, maia_accuracy, strength
 from .auth import require_user
+from .games import LibraryFilter, library_filter
 
 router = APIRouter(prefix="/api/trend", tags=["trend"])
 
@@ -289,14 +295,19 @@ def _apply_window(entries: list[dict], window: tuple[int, str] | None) -> dict:
 def build(user_id: int, granularity: str, run_id: int | None = None,
           top_n: int = 1, min_think_ms: int | None = None,
           window: tuple[int, str] | None = None,
-          objective: str = elo_sweep.DEFAULT_OBJECTIVE) -> dict:
+          objective: str = elo_sweep.DEFAULT_OBJECTIVE,
+          library: LibraryFilter | None = None) -> dict:
     # Same collection the pooled estimate uses, so a bucket and the overall
     # number are always built from exactly the same rows -- and the same
     # fallback for an unrecognised objective, so a bucket can never end up
-    # fitted differently from the number above it.
+    # fitted differently from the number above it. The library filter goes
+    # through the same door for the same reason: a line drawn through bullet
+    # and rapid games together mostly tracks which sort of chess you happened
+    # to play that month, not how well you played it.
     if objective not in elo_sweep.OBJECTIVES:
         objective = elo_sweep.DEFAULT_OBJECTIVE
-    entries, skipped = strength.collect(user_id, run_id)
+    library = library or LibraryFilter()
+    entries, skipped = strength.collect(user_id, run_id, library)
     settings = strength.get_effective_settings(user_id)
     # Same think-time rule as the pooled estimate, so a bucket and the overall
     # number are never built from different sets of moves.
@@ -391,6 +402,7 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
         "granularity": granularity,
         "objective": objective,
         "window": window_info,
+        "library_filter": library.as_dict(),
         "buckets": buckets,
         "trend": _slope(estimated_points, granularity),
         "actual_trend": _slope(actual_points, granularity),
@@ -407,17 +419,20 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
 def get_trend(granularity: str = "month", run_id: int | None = None, top_n: int = 1,
               min_think_ms: int | None = None, window: str = "all",
               objective: str = elo_sweep.DEFAULT_OBJECTIVE,
+              filters: LibraryFilter = Depends(library_filter),
               user: dict = Depends(require_user)):
     """Re-bucketing is a pure re-fit of cached per-position scores, so changing
-    granularity or the window never re-runs an engine (section 15). Defined
-    `def` rather than `async def` on purpose: the bootstrap is CPU work and
-    belongs on the threadpool, not on the event loop that the live engines run
-    on.
+    granularity, the window or the time control never re-runs an engine
+    (section 15). Defined `def` rather than `async def` on purpose: the
+    bootstrap is CPU work and belongs on the threadpool, not on the event loop
+    that the live engines run on.
 
     `window` restricts the view to the last stretch of play -- 'all', or a
-    count and a unit like '8w', '6m', '2y'.
+    count and a unit like '8w', '6m', '2y'. `speed`, `time_control` and
+    `collection_id` restrict it to a slice of the library, spelled exactly as
+    the Games list spells them.
     """
     if granularity not in GRANULARITIES:
         raise HTTPException(400, f"granularity must be one of {', '.join(GRANULARITIES)}")
     return build(user["id"], granularity, run_id, top_n, min_think_ms,
-                 _parse_window(window), objective)
+                 _parse_window(window), objective, filters)

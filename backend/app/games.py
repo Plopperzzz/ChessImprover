@@ -1,9 +1,12 @@
+from typing import NamedTuple
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .auth import require_user
 from .db import db_cursor
 from .pgn_parse import (
+    FILTER_SPEEDS,
     account_names,
     insert_parsed_games,
     parse_games_from_text,
@@ -104,16 +107,55 @@ def game_filter_sql(user_id: int, speed: str | None = None,
     return " AND ".join(where), params
 
 
+class LibraryFilter(NamedTuple):
+    """A slice of the library, as a value that can be passed around.
+
+    The fragment above is the shared *SQL*; this is the shared *choice*, for
+    the callers that have to carry it through several layers before it reaches
+    a query -- the Progress fits pass one down from the endpoint into the
+    pooled collect. Bundling the three fields keeps that from turning every
+    signature on the way into three more optional arguments.
+    """
+    speed: str | None = None
+    time_control: str | None = None
+    collection_id: int | None = None
+
+    @property
+    def active(self) -> bool:
+        return any(v is not None for v in self)
+
+    def where(self, user_id: int) -> tuple[str, list]:
+        return game_filter_sql(user_id, self.speed, self.time_control, self.collection_id)
+
+    def as_dict(self) -> dict:
+        return self._asdict()
+
+
+def library_filter(speed: str | None = None, time_control: str | None = None,
+                   collection_id: int | None = None) -> LibraryFilter:
+    """FastAPI dependency: the same three query parameters everywhere the
+    library can be sliced, so the Games list and the Progress fits can't end up
+    spelling them differently.
+
+    A speed outside the known set is rejected rather than quietly matching no
+    games: an empty panel that should have been full is a much harder thing to
+    diagnose than a 400.
+    """
+    if speed is not None and speed not in FILTER_SPEEDS:
+        raise HTTPException(400, f"speed must be one of {', '.join(FILTER_SPEEDS)}")
+    return LibraryFilter(speed, time_control, collection_id)
+
+
 @router.get("")
-def list_games(speed: str | None = None, time_control: str | None = None,
-               collection_id: int | None = None, user: dict = Depends(require_user)):
+def list_games(filters: LibraryFilter = Depends(library_filter),
+               user: dict = Depends(require_user)):
     """The library, optionally filtered.
 
     Filtering happens here rather than in the browser so that the counts the
     picker shows, the ids a bulk action applies to and the games a batch runs
     over are all the same set, decided once.
     """
-    where, params = game_filter_sql(user["id"], speed, time_control, collection_id)
+    where, params = filters.where(user["id"])
     with db_cursor() as conn:
         rows = conn.execute(
             f"""SELECT g.id, g.batch_index, g.source_name, g.white, g.black, g.result,
@@ -164,7 +206,7 @@ def game_facets(user: dict = Depends(require_user)):
                                        "games": row["games"]})
     # Fastest first, matching the picker people are used to, with anything
     # unclassifiable last rather than mixed in.
-    order = ["bullet", "blitz", "rapid", "daily", "unknown"]
+    order = FILTER_SPEEDS
     for bucket in speeds.values():
         # Within a speed, the control you played most is the one you want
         # first -- an alphabetical list of '1200' and '600+5' helps nobody.

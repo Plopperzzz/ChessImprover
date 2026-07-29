@@ -150,6 +150,9 @@ input[type="text"], input[type="number"], textarea, select {
   grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
   align-items: start;
 }
+/* The filter decides what every panel below it is fitted over, so it runs
+   across the top of them instead of taking a column to itself. */
+#side-col.full-width #progress-filter-panel { grid-column: 1 / -1; }
 
 /* ---------- Collapsible panel ---------- */
 .panel.collapsible { padding: 0; }
@@ -807,7 +810,12 @@ input[type="text"], input[type="number"], textarea, select {
 .color-choice.current { color: var(--text); border-color: var(--accent); }
 /* ---------- Library filters, selection and bulk actions ---------- */
 
-#game-filters { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+#game-filters, #progress-filters { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+/* The Progress copy runs the full width of the tab rather than sitting in the
+   narrow side column, so its rows sit side by side instead of stacking into a
+   tall banner over the panels they govern. */
+#progress-filters { flex-flow: row wrap; align-items: center; gap: 6px 16px; }
+#progress-filters .filter-row select { flex: 0 0 auto; max-width: 220px; }
 .filter-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .filter-row:empty { display: none; }
 /* Wide enough that a group name plus its count stays readable; the row wraps
@@ -830,7 +838,15 @@ input[type="text"], input[type="number"], textarea, select {
 .filter-chip.on { color: var(--text); border-color: var(--accent); background: #24314a; }
 .filter-chip .chip-count { opacity: 0.65; margin-left: 5px; font-size: 11px; }
 /* The exact-control row is a second rank under the speeds it belongs to. */
-#control-chips .filter-chip { font-size: 11px; padding: 3px 8px; }
+#control-chips .filter-chip,
+#progress-control-chips .filter-chip { font-size: 11px; padding: 3px 8px; }
+
+/* What the Progress fits are actually being run over. It goes amber, not red,
+   when the slice is thin: a narrow fit isn't an error, it is a weaker
+   measurement, and it must not be readable as though it were the strong one. */
+.filter-note { font-size: 11px; color: var(--muted); }
+.filter-note:empty { display: none; }
+.filter-note-warn { color: #e0a13a; }
 
 #bulk-tools { margin-top: 0; margin-bottom: 6px; }
 .bulk-all { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }

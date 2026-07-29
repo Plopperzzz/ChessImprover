@@ -314,13 +314,38 @@
       <!-- ============ Progress -- the long view ============ -->
       <div class="tab-panels" id="panels-progress" role="tabpanel"
            aria-labelledby="tab-btn-progress">
-        <div class="panel">
-          <h3>Your strength (all games)</h3>
+        <!-- One filter for the whole tab, and the same one the Games list and
+             the batch runner use: analysing only your rapid games and then
+             reading a number that pooled them back together with your bullet
+             ones is the trap this exists to close. -->
+        <div class="panel" id="progress-filter-panel">
+          <h3>Which games</h3>
           <p class="panel-note">
-            One fit over every position from every game with a stored sweep. A
-            single game is only ~25 of your moves and lands within about ±180
-            Elo of the truth, so this is still the number to act on. Re-fits
-            cached scores, so it never runs an engine.
+            Bullet and rapid measure different things, so both panels below fit
+            only what you pick here. Narrowing re-fits the cached sweep scores —
+            no engine runs — but a smaller pool means a wider interval, which
+            the panels say plainly rather than leaving you to notice.
+          </p>
+          <div id="progress-filters">
+            <div class="filter-row" id="progress-speed-chips"></div>
+            <div class="filter-row" id="progress-control-chips"></div>
+            <div class="filter-row">
+              <select id="progress-collection" title="Fit only games in one group">
+                <option value="">All groups</option>
+              </select>
+            </div>
+          </div>
+          <div id="progress-filter-note" class="filter-note"></div>
+        </div>
+
+        <div class="panel">
+          <h3 id="strength-heading">Your strength</h3>
+          <p class="panel-note">
+            One fit over every position from every game with a stored sweep, in
+            whatever slice of the library is picked above. A single game is only
+            ~25 of your moves and lands within about ±180 Elo of the truth, so
+            this is still the number to act on. Re-fits cached scores, so it
+            never runs an engine.
           </p>
           <div class="play-buttons">
             <button id="strength-refresh">Refresh</button>
