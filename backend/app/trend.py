@@ -288,9 +288,14 @@ def _apply_window(entries: list[dict], window: tuple[int, str] | None) -> dict:
 
 def build(user_id: int, granularity: str, run_id: int | None = None,
           top_n: int = 1, min_think_ms: int | None = None,
-          window: tuple[int, str] | None = None) -> dict:
+          window: tuple[int, str] | None = None,
+          objective: str = elo_sweep.DEFAULT_OBJECTIVE) -> dict:
     # Same collection the pooled estimate uses, so a bucket and the overall
-    # number are always built from exactly the same rows.
+    # number are always built from exactly the same rows -- and the same
+    # fallback for an unrecognised objective, so a bucket can never end up
+    # fitted differently from the number above it.
+    if objective not in elo_sweep.OBJECTIVES:
+        objective = elo_sweep.DEFAULT_OBJECTIVE
     entries, skipped = strength.collect(user_id, run_id)
     settings = strength.get_effective_settings(user_id)
     # Same think-time rule as the pooled estimate, so a bucket and the overall
@@ -333,18 +338,19 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
     for key in sorted(grouped):
         bucket = grouped[key]
         grid, usable, excluded = strength.common_grid(bucket["entries"])
-        ranks, groups = strength.matrix(usable, grid)
-        matrix = elo_sweep.hits(ranks, top_n)
+        ranks, groups, log_policies = strength.matrix(usable, grid)
         # Anchored per bucket, from the models that swept that bucket's games:
         # someone who switched model size mid-library would otherwise see the
         # switch show up as a change in their consistency.
         accuracy = maia_accuracy.blend(strength.model_counts(usable, "you"), accuracy_offset)
-        result = (elo_sweep.estimate(grid, matrix, groups=groups,
-                                     accuracy=accuracy, top_n=top_n)
-                  if matrix.shape[0] and len(grid) >= 2
+        result = (elo_sweep.estimate_from_ranks(grid, ranks, groups=groups,
+                                                accuracy=accuracy, top_n=top_n,
+                                                objective=objective,
+                                                log_policies=log_policies)
+                  if ranks.shape[0] and len(grid) >= 2
                   else {"estimate": None, "confidence": "low",
                         "reasons": ["not enough comparable sweep data in this bucket"],
-                        "n_positions": int(matrix.shape[0]), "n_discriminative": 0})
+                        "n_positions": int(ranks.shape[0]), "n_discriminative": 0})
         actuals = [e["your_elo"] for e in usable if e["your_elo"] is not None]
         buckets.append({
             "key": key,
@@ -383,6 +389,7 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
 
     return {
         "granularity": granularity,
+        "objective": objective,
         "window": window_info,
         "buckets": buckets,
         "trend": _slope(estimated_points, granularity),
@@ -399,6 +406,7 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
 @router.get("")
 def get_trend(granularity: str = "month", run_id: int | None = None, top_n: int = 1,
               min_think_ms: int | None = None, window: str = "all",
+              objective: str = elo_sweep.DEFAULT_OBJECTIVE,
               user: dict = Depends(require_user)):
     """Re-bucketing is a pure re-fit of cached per-position scores, so changing
     granularity or the window never re-runs an engine (section 15). Defined
@@ -412,4 +420,4 @@ def get_trend(granularity: str = "month", run_id: int | None = None, top_n: int 
     if granularity not in GRANULARITIES:
         raise HTTPException(400, f"granularity must be one of {', '.join(GRANULARITIES)}")
     return build(user["id"], granularity, run_id, top_n, min_think_ms,
-                 _parse_window(window))
+                 _parse_window(window), objective)

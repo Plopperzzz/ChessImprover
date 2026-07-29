@@ -11,6 +11,7 @@ view can be recomputed or re-bucketed later without re-running any engine.
 
 import json
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -97,20 +98,25 @@ def save_analysis(user_id: int, game_id: int, mode: str, payload: dict, run_id: 
                 per_ply = []
             rows = []
             for side, block in (sweep.get("players") or {}).items():
+                policy_rows = block.get("policy")
                 for i, position in enumerate(block.get("positions", [])):
                     # One digit per grid point: the rank the played move got
                     # in Maia's ordering, 0 for "not a candidate". '1'/'0' is
                     # exactly what the old top-1-only sweeps wrote.
                     scores = "".join(str(min(int(v), 9)) if v else "0"
                                      for v in block["matrix"][i])
+                    # And, when the engine reported one, the probability it
+                    # gave that move at each grid point.
+                    policies = (elo_sweep.encode_policies(policy_rows[i])
+                                if policy_rows and i < len(policy_rows) else None)
                     ply = position["ply"]
                     think_ms = per_ply[ply - 1] if 0 < ply <= len(per_ply) else None
                     rows.append((run_game_id, side, ply, position["fen"],
-                                 position["uci"], scores, think_ms))
+                                 position["uci"], scores, policies, think_ms))
             conn.executemany(
                 """INSERT INTO sweep_positions
-                   (run_game_id, side, ply, fen, uci, scores, think_ms)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (run_game_id, side, ply, fen, uci, scores, policies, think_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 rows,
             )
 
@@ -318,7 +324,24 @@ def append_to_run(run_id: int, body: AppendIn, user: dict = Depends(require_user
 def _regroup(rows) -> dict:
     players: dict[str, dict] = {}
     for r in rows:
-        block = players.setdefault(r["side"], {"positions": [], "matrix": []})
+        block = players.setdefault(r["side"], {"positions": [], "matrix": [], "policy": []})
         block["positions"].append({"ply": r["ply"], "fen": r["fen"], "uci": r["uci"]})
         block["matrix"].append(elo_sweep.decode_scores(r["scores"]))
+        logs = elo_sweep.decode_policies(_column(r, "policies"))
+        block["policy"].append([float(np.exp(v)) for v in logs] if logs else None)
+    for block in players.values():
+        # All or nothing: a copy that carried policy for some positions and not
+        # others would fit part of a game on one scale and the rest on another.
+        if any(p is None for p in block["policy"]):
+            block.pop("policy")
     return players
+
+
+def _column(row, name: str):
+    """A column that may predate this version of the schema. `sqlite3.Row`
+    raises rather than returning None for a name it doesn't have, and a
+    database written before the migration ran has no `policies`."""
+    try:
+        return row[name]
+    except (IndexError, KeyError):
+        return None

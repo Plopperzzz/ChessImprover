@@ -2346,7 +2346,7 @@ function renderSweepResults(msg) {
     head.append(who, elo, ci, badge);
     card.appendChild(head);
 
-    card.appendChild(sweepChart(res));
+    card.appendChild(sweepChartBlock(res));
 
     // The number on its own invites more trust than it deserves, so the
     // reasons behind the confidence label are always shown (section 9).
@@ -2362,13 +2362,47 @@ function renderSweepResults(msg) {
   }
 }
 
-/** Observed match rate per swept Elo, with the fitted curve over it and the
-    peak marked -- so the estimate can be eyeballed, not just trusted. */
+/** The sweep chart plus a note saying what its y axis is. Both the per-game
+    and the pooled views use this, so neither can end up showing an unlabelled
+    axis whose meaning depends on a setting elsewhere on the page. */
+function sweepChartBlock(res) {
+  const frag = document.createDocumentFragment();
+  // A fit that never ran -- no positions, or a grid of one Elo -- returns the
+  // reasons and nothing to plot. Say so rather than throwing on the missing
+  // arrays and taking the reasons down with the chart.
+  if (!res.curve_x || !res.curve_x.length) {
+    const empty = document.createElement('div');
+    empty.className = 'sweep-axis-note';
+    empty.textContent = 'Nothing to plot for this sweep.';
+    frag.appendChild(empty);
+    return frag;
+  }
+  frag.appendChild(sweepChart(res));
+  const axis = document.createElement('div');
+  axis.className = 'sweep-axis-note';
+  axis.textContent = res.curve_kind === 'mean_logp'
+    ? `${res.curve_label} against swept Elo — higher is better predicted`
+    : 'Maia match rate against swept Elo';
+  frag.appendChild(axis);
+  return frag;
+}
+
+/** What each swept Elo made of your moves, with the fitted curve over it and
+    the peak marked -- so the estimate can be eyeballed, not just trusted.
+
+    The y axis is whichever objective produced the fit, and the two are not the
+    same quantity: the top-1 fit plots a match rate (higher is more of your
+    moves guessed), the likelihood plots mean log probability per move (higher
+    is still better, but it runs negative and is not a percentage). `curve_kind`
+    says which, so a reader is never left to infer it from the numbers. */
 function sweepChart(res) {
   const W = 300, H = 110, padX = 6, padY = 10;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('class', 'sweep-chart');
+  const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+  title.textContent = res.curve_label || 'Maia match rate';
+  svg.appendChild(title);
 
   const xs = res.curve_x, ys = res.curve_y;
   const allY = ys.concat(res.match_rates);
@@ -2413,17 +2447,23 @@ function wireStrength() {
   document.getElementById('strength-refresh').addEventListener('click', refreshStrength);
   document.getElementById('strength-run').addEventListener('change', refreshStrength);
   document.getElementById('strength-topn').addEventListener('change', refreshStrength);
+  document.getElementById('strength-objective').addEventListener('change', refreshStrength);
   refreshStrength();
 }
 
 async function refreshStrength() {
   const runId = document.getElementById('strength-run').value;
   const topN = document.getElementById('strength-topn').value;
+  const objective = document.getElementById('strength-objective').value;
+  // "How many of Maia's top moves count as a match" is a top-1-objective
+  // question; the likelihood uses the whole ordering and has no N to pick.
+  document.getElementById('strength-topn-label').hidden = objective !== 'top1';
   const status = document.getElementById('strength-status');
   const body = document.getElementById('strength-body');
   status.textContent = 'Fitting...';
   try {
-    const d = await api(`/api/strength?top_n=${topN}` + (runId ? `&run_id=${runId}` : ''));
+    const d = await api(`/api/strength?top_n=${topN}&objective=${objective}`
+      + (runId ? `&run_id=${runId}` : ''));
     renderStrength(d, status, body);
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
@@ -2438,16 +2478,29 @@ function renderStrength(d, status, body) {
     renderTrendSkipped(body, d);
     return;
   }
-  const objective = d.top_n > 1 ? `your move in Maia's top ${d.top_n}` : "Maia's own first choice";
+  // The two objectives count different things, so they describe themselves
+  // differently. Under the likelihood a position is "usable" when Maia's
+  // opinion of your move changes anywhere across the grid, which is far more
+  // of them than the top-1 rate's "its favourite changed".
+  let describe;
+  if (d.objective === 'top1') {
+    const matched = d.top_n > 1 ? `your move in Maia's top ${d.top_n}` : "Maia's own first choice";
+    describe = `, matching ${matched}.`
+      // A sweep run before MultiPV was recorded only stored rank 1, so a wider
+      // objective silently collapses back to top-1. Say so rather than showing
+      // the same number under a different label.
+      + (d.top_n > 1 && d.max_rank_seen < 2
+          ? ' These sweeps recorded only Maia\'s top move, so this is the same as top-1'
+            + ' — re-run a Full analysis to record ranked candidates.' : '');
+  } else {
+    describe = d.policy_source === 'engine'
+      ? ', scored by the probability Maia gave each move you played.'
+      : ", scored by where each move you played ranked in Maia's ordering —"
+        + ' these sweeps carry no policy from the engine.';
+  }
   status.textContent =
-    `${d.you.games} game(s), ${d.you.n_discriminative} discriminative of ${d.you.n_positions} positions`
-    + `, matching ${objective}.`
-    // A sweep run before MultiPV was recorded only stored rank 1, so a wider
-    // objective silently collapses back to top-1. Say so rather than showing
-    // the same number under a different label.
-    + (d.top_n > 1 && d.max_rank_seen < 2
-        ? ' These sweeps recorded only Maia\'s top move, so this is the same as top-1'
-          + ' — re-run a Full analysis to record ranked candidates.' : '');
+    `${d.you.games} game(s), ${d.you.n_discriminative} usable of ${d.you.n_positions} positions`
+    + describe;
 
   const card = document.createElement('div');
   card.className = 'sweep-player';
@@ -2467,7 +2520,7 @@ function renderStrength(d, status, body) {
     + (bound ? `<span class="sweep-ci">outside the swept range</span>` : '')
     + `<span class="conf-badge conf-${d.you.confidence}">${d.you.confidence}</span>`;
   card.appendChild(head);
-  card.appendChild(sweepChart(d.you));
+  card.appendChild(sweepChartBlock(d.you));
   const ul = document.createElement('ul');
   ul.className = 'sweep-reasons';
   for (const reason of d.you.reasons || []) {
@@ -2508,7 +2561,28 @@ function renderStrength(d, status, body) {
   // peaks, one from how high it got -- so a wide gap is not an error, it is
   // the part of someone's play that a single strength doesn't describe.
   const pr = d.predictability || {};
-  if (pr.available) {
+  if (pr.available && pr.scale === 'logp') {
+    // The likelihood's own version, on an absolute scale: how close the model
+    // got to predicting these moves as well as it predicts anyone, where 0%
+    // would be no better than guessing among legal moves.
+    const share = Math.round((pr.reached ?? 0) * 100);
+    note.innerHTML +=
+      `<div class="cal-detail">Maia predicted your moves at <b>${pr.observed}</b> nats per `
+      + `move, against the <b>${pr.expected}</b> it manages on a player whose rating it has `
+      + `right and the ${pr.unpredictable} that guessing among legal moves scores — `
+      + `<b>${share}%</b> of the way from guessing to fully predicted. `
+      + (share >= 90
+          ? `Your play is about as consistent as the field at your level.`
+          : `Your moves are spread across a wider range of strengths than one rating `
+            + `explains, so the estimate describes a broader spread than usual.`)
+      + `</div>`
+      // Only worth saying when the filter actually removed something: it runs
+      // on every library, and most carry no move fast enough to drop.
+      + (pr.think_filtered && (d.think_filter || {}).dropped
+          ? `<div class="cal-detail">Instant moves were left out before this was measured, `
+            + `which raises it — the moves dropped are the least predictable ones.</div>` : '')
+      + `<div class="cal-detail scale-note">${pr.note}</div>`;
+  } else if (pr.available) {
     const pct = (v) => `${(v * 100).toFixed(1)}%`;
     const over = pr.observed >= pr.expected;
     note.innerHTML +=
@@ -3691,6 +3765,7 @@ function wireSettingsDialog() {
       maia_elo_step: Number(document.getElementById('s-maia-elo-step').value),
       maia_elo_step_batch: Number(document.getElementById('s-maia-elo-step-batch').value),
       maia_multipv: Number(document.getElementById('s-maia-multipv').value),
+      maia_policy: document.getElementById('s-maia-policy').value === '1',
       min_think_ms: Number(document.getElementById('s-min-think-ms').value),
       maia_accuracy_offset: Number(document.getElementById('s-maia-accuracy-offset').value),
       great_max_drop: Number(document.getElementById('s-great-drop').value),
@@ -3949,6 +4024,7 @@ async function fillSettingsForm() {
   document.getElementById('s-maia-elo-step').value = s.maia_elo_step;
   document.getElementById('s-maia-elo-step-batch').value = s.maia_elo_step_batch ?? 200;
   document.getElementById('s-maia-multipv').value = s.maia_multipv ?? 3;
+  document.getElementById('s-maia-policy').value = (s.maia_policy ?? 1) ? '1' : '0';
   document.getElementById('s-min-think-ms').value = s.min_think_ms ?? 2000;
   document.getElementById('s-maia-accuracy-offset').value = s.maia_accuracy_offset ?? 0;
   document.getElementById('s-great-drop').value = s.great_max_drop ?? 0.02;

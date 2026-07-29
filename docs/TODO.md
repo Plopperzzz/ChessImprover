@@ -7,47 +7,6 @@ Anything already built lives in the README; this file is only what isn't.
 
 ---
 
-## 0. Estimate strength from the model's *policy*, not top-1 matches
-
-**Ready to start:** [`prompts/single-game-strength.md`](prompts/single-game-strength.md)
-is a self-contained brief for this — paste it as the task.
-
-**Why:** this is the biggest single weakness in the Elo estimate. The sweep
-asks one bit per move -- "was this the model's favourite" -- and throws away
-everything else it believed. A move it ranked second at 30% probability and a
-move it never considered both score zero, so a game's worth of moves carries
-far less information than it holds, which is why the fit needs a hundred
-positions to settle and returns a number-shaped non-answer from twenty-five.
-Maia's own tooling gets a usable read from a couple of dozen moves because it
-uses the probability the model assigned to the move actually played.
-
-**What:** maximise the likelihood of the moves played over the rating grid:
-`argmax_r sum_moves log P(move | position, r)`. The peak of that curve is the
-estimate and its curvature gives the interval directly -- no bootstrap, no bump
-fit, no accuracy-curve calibration, because the likelihood is already absolute.
-
-**Two versions, in order of cost:**
-
-1. **Rank-weighted, from data already stored.** The sweep records *where* the
-   played move ranked in the model's ordering (1-9, `MAX_RANK`), not just
-   hit/miss -- `elo_sweep.hits()` is what collapses it to binary. Rank 2 at one
-   setting and rank 7 at another is real evidence about which setting fits, and
-   a rank-based pseudo-likelihood can use it with **no new engine time at all**,
-   over sweeps already in the database.
-2. **True policy likelihood.** Needs the Maia wrapper to report per-candidate
-   probabilities rather than an ordering. Check what it exposes; if it can, this
-   is strictly better than anything rank-based and probably makes the bump fit,
-   the bootstrap and the accuracy-curve check all redundant.
-
-**Watch out for:** the moves that carry no information are the ones every
-rating plays, and a likelihood weights them equally with the discriminating
-ones unless the per-rating probabilities genuinely differ (they do -- an obvious
-recapture is near-1.0 everywhere, which contributes a near-constant and
-correctly cancels). The existing `split_positions` hack exists to do by hand
-what a likelihood does for free.
-
----
-
 ## 1. Opening repertoire report
 
 **Why:** the app can already say *that* you lost the game and *where*. It

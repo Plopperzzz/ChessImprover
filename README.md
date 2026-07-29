@@ -553,52 +553,78 @@ measure and worth switching to.
 
 ### Elo estimate
 
-Maia is asked to move in each of your positions at every Elo on the grid.
-Where its choice matches the move you actually played, that Elo "explains"
-the move; the Elo where the match rate peaks is the estimate.
+Maia is asked to move in each of your positions at every Elo on the grid, and
+each Elo is scored by **how much probability it gave the move you actually
+played**. The Elo where that peaks is the estimate.
 
-**Use the "Your strength (all games)" panel, not the per-game one.** A single
-game is about 25 of your moves, half of them uninformative, and at that size
-the estimate has a standard deviation near 90 Elo — it is a coin flip with an
-Elo label. The per-game panel is there to show the shape of one game's curve;
-the pooled panel fits one curve to every position from every game with a
-stored sweep, and that is the number to act on. Both re-fit cached scores, so
-neither runs an engine.
+That is a change. It used to ask one bit per move — *was this Maia's single
+favourite at this Elo?* — which threw away almost everything: a move Maia
+ranked second and would have played 30% of the time and a move it never
+considered both scored zero. Scoring by probability instead is what makes a
+**single game usable**. Measured on the same simulated player over 300 seeds
+(`python backend/sims/policy_likelihood.py`), from one game of 30 moves:
 
-Five things about it are deliberate, and worth knowing before trusting a
-number:
+| | old: top-1 match rate | new: likelihood |
+|---|---|---|
+| bias | −32 Elo | +15 Elo |
+| spread over seeds | **275 Elo** | **80 Elo** |
+| 95% interval actually covers | 62% | 97% |
+| typical interval width | 623 Elo | 368 Elo |
 
-- **The peak comes from a parametric fit, not from smoothing.** The curve is
-  a broad hump on a baseline — some share of your moves are the obvious move
-  every Elo finds, and on top sits a bump centred on your strength — so that
-  is what gets fitted (baseline, height, centre, width) and the centre *is*
-  the estimate. This replaced a smoothing spline whose argmax was taken as
-  the peak, which was measurably biased: on a noiseless symmetric test curve
-  peaking at 1300 it returned 1288 over a 1100–1900 grid and **1211** over
-  600–2600, because smoothing drags the apex toward the flat tails, worse the
-  wider the grid. Simulated at ~1300 discriminative positions the spline gave
-  bias −61 / sd 30 Elo where the bump fit gives −1 / sd 10.
-- **Positions where Maia's choice never changes across the grid are split
-  out.** They carry no information about strength and only add noise. Both
-  counts are reported.
-- **The interval resamples games, not moves, when games are pooled.** Moves
-  from one game share an opponent, an opening and a sitting. With realistic
-  between-game variation, resampling moves reported ±18 Elo where resampling
-  games reported ±31 — the move-level figure is simply wrong.
-- **The noise test is the interval, and it is measured rather than guessed.**
-  The obvious alternative — "is the fitted bump tall enough" — is worthless:
-  a free-centre fit spikes through a single high point, so under pure noise
-  the fitted height reaches 10–90 standard errors, taller than real signal
-  ever needs. The bootstrap separates them cleanly, because noise puts the
-  peak somewhere else every resample (noise: 5th percentile 0.60 of the swept
-  range, median 0.90; real signal with 100+ positions: 95th percentile 0.12).
-  An interval covering more than 55% of the range forces Low confidence
-  however large the sample — a big sample that still can't locate the peak is
-  more evidence there is nothing to locate, not less.
-- **A match rate that barely moves across the grid is called out by name.**
+The old estimate was not merely noisy, it was *dishonest*: an interval that
+covers 62% of the time is not a 95% interval. Both numbers come from re-fitting
+the same stored scores, so this cost no engine time and nothing needed
+re-running.
+
+Pooled over a library it is not a wash either — on 400 moves the spread goes
+from 51 Elo to 30 and the interval from 312 Elo to 125. The full write-up,
+including how the fit and its interval are built and what else was tried, is
+in [`docs/policy-likelihood.md`](docs/policy-likelihood.md).
+
+**The pooled "Your strength (all games)" panel is still the one to act on.**
+One game now gives a real number, but the interval on it is ±180 Elo or so and
+it is capped at Medium confidence by design (see below). Pooling tightens it.
+
+What's deliberate about the fit:
+
+- **The peak is the likelihood's peak, and the interval is its curvature.**
+  There is no bump to fit and no baseline parameter, because an obvious move
+  that every Elo plays contributes the same log probability at every Elo and
+  cancels out of the comparison by itself. There is no bootstrap either: a
+  delete-one **jackknife over games** (over moves, for a single game) is
+  closed-form here, so the interval costs one expression instead of 400
+  refits.
+- **The fit weights grid points smoothly, and never picks a window.** Fitting
+  a curve through "the points near the maximum" makes the estimate jump when
+  the maximum moves to the next grid point, and that jumpiness is invisible to
+  any error bar computed afterwards. Measured over 500 seeds of one game: a
+  hard 5-point window gave 134 Elo of spread while claiming 76 and covering
+  78% of the time; smooth weights gave 79 Elo of spread, claimed 90, and
+  covered 97%. Smoothing and taking an argmax is worse still — it drags the
+  apex toward the flat tails, worse the wider the grid.
+- **Four times as many of your positions count.** A position was
+  "uninformative" under the old objective unless Maia's *favourite* changed
+  somewhere on the grid; now it counts unless the model's whole opinion of
+  your move stands still. Over 30-move games that is 15 positions where it
+  used to be 3.6.
+- **The scale is absolute, so "we couldn't find you" is detectable without a
+  lookup table.** Mean log probability per move is comparable across players,
+  games and grids: a player Maia predicts as well as it predicts anyone
+  scores about **−2.11** nats per move, and guessing uniformly among legal
+  moves scores **−3.43**. A beginner nothing predicts lands near the bottom
+  and is flagged in those words rather than handed a rating — in simulation,
+  100% of the time. This is what the old code needed the digitised accuracy
+  curve from a published figure to do.
+- **A likelihood that barely moves across the grid is called out by name.**
   That is what a mis-named Elo option looks like: the engine plays the same
   move at 600 and at 2600. The panel says so and names the likely cause
   instead of reporting the meaningless number that falls out.
+
+**The old top-1 objective is still there**, in the "Fit" dropdown next to the
+strength panel. Both re-fit cached scores, so switching between them runs no
+engine and you can compare them on your own games. It also remains the
+objective the Great/Brilliant rules use — "a player at this Elo would have
+played exactly this move" genuinely is a top-1 question.
 
 **A finer Elo step does not buy a better estimate.** Tempting, since the step
 is the most obvious knob, but the estimate is a *fitted* peak, not the best
@@ -623,22 +649,38 @@ control one real thing: `lowest_matching_elo` in the blunder panel ("first
 played by Maia at 1400") is reported at grid resolution, so a finer step gives
 a finer answer *there*.
 
-**What counts as a match is now a choice you can change for free.** The sweep
-records *where* your move ranked in Maia's ordering, not just whether it was
-Maia's own first pick — at `go nodes 1` the policy net has already ordered
-every legal move, so asking for several ranked candidates (MultiPV, default 3)
-costs no extra engine time. The rank goes into the same one-character-per-grid-
-point encoding the old sweeps used, so `1`/`0` still means exactly what it did
-and nothing needed migrating. The strength panel can then re-fit against "Maia's
-top move", "its top 2" or "its top 3" with no engine work at all.
+**Where the probabilities come from.** The sweep records *where* your move
+ranked in Maia's ordering, not just whether it was Maia's own first pick — at
+`go nodes 1` the policy net has already ordered every legal move, so asking
+for several ranked candidates (MultiPV, default 3) costs no extra engine time.
+The rank goes into the same one-character-per-grid-point encoding the old
+sweeps used, so `1`/`0` still means exactly what it did and **every sweep
+already in your database re-fits under the new objective with no re-run.**
 
-Top-1 stays the default and is the objective the Great/Brilliant rules use —
-"a player at this Elo would have played exactly this" is a top-1 question.
-The wider objectives are offered because they use more of the information per
-position, but they are not verified against a real Maia3 build here, so they
-are yours to try rather than the default. A sweep run before MultiPV was
-recorded only stored rank 1; the panel says so rather than showing you the
-same number under a different label.
+A rank is a good stand-in for a probability but it is not one, and Maia3 has
+the real thing. Its UCI wrapper builds a softmax over the legal moves, ranks
+by it — and then prints only `score cp` and `wdl`, which come from its
+*value* head. Those are its guess at how the game ends after a candidate move,
+not the probability it would play it; they are frequently identical across
+every candidate in the list, so scoring a likelihood with them would quietly
+produce a flat curve. They are rejected by name.
+
+The policy is one `print` away on the far side of a process boundary, so the
+app reaches across it. `assets/Engines/maia3-23m` and friends are pip console
+scripts — stubs that run one specific Python interpreter and call into the
+`maia3` package. `backend/app/maia_policy.py` recovers that interpreter from
+the stub (a `#!` line on Linux and macOS; the same string stored near the end
+of the launcher `.exe` on Windows), re-runs the same engine through it with
+the policy field added, and the sweep stores those probabilities alongside the
+ranks. If any of that fails — a different engine, an interpreter it can't find,
+a package it can't import — nothing breaks: the sweep runs the ordinary binary
+and the fit scores by rank instead, and says which it did. Turn it off with
+"Ask Maia3 for its move probabilities" in Settings.
+
+The old top-1 objective keeps its "Maia's top move / top 2 / top 3" selector
+when you switch to it. A sweep run before MultiPV was recorded only stored
+rank 1; the panel says so rather than showing you the same number under a
+different label.
 
 **Moves you didn't think about are left out.** Chess.com and lichess exports
 carry `%clk` comments, so the time spent on each move is read at upload —

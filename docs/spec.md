@@ -196,35 +196,52 @@ the estimated strength have been expected to avoid this."
 ## 9. Elo Estimation (Maia3 sweep)
 
 - For a selected game, sweep Maia3's Elo setting across a user-configured
-  min/max range and measure how often Maia's chosen move at each Elo matches
-  the move actually played, separately for each player (self vs. opponent).
-- Split positions into **discriminative** (Maia's top-1 choice changes
-  somewhere across the swept Elo grid) vs. **uninformative** (it doesn't)
-  before fitting. Only discriminative positions feed the estimator —
-  uninformative ones add binomial variance without adding signal.
-- Fit a smoothed curve (spline) over match-rate vs. Elo, weighted by each
-  point's binomial standard error. Because the same positions are scored at
-  every Elo, errors are correlated across the grid — start smoothing below
-  the naive i.i.d. heuristic and escalate only if a sanity check fails
-  (fitted curve swinging outside a few SE of the observed range, especially
-  near the boundary — a common failure mode where the peak gets hijacked by
-  boundary overshoot). Fall back to a heavily-smoothed weighted polynomial
-  if the spline can't be tamed.
-- Report the peak Elo as the estimate. Get its uncertainty by bootstrapping
-  over *positions* (the independent sampling unit, not grid points):
-  resample positions with replacement, rebuild the curve from the cached
-  score matrix, refit, record the peak; take a 95% interval from the
-  resulting distribution.
+  min/max range and record, at every Elo, what the model made of the move
+  actually played — separately for each player (self vs. opponent). Record
+  *where the move ranked* in Maia's ordering rather than only whether it was
+  the top choice: at `go nodes 1` the policy net has already ordered every
+  legal move, so several ranked candidates cost no extra engine time.
+- Split positions into **discriminative** (what the model made of the move
+  changes somewhere across the swept Elo grid) vs. **uninformative** (it
+  doesn't) before fitting. Only discriminative positions feed the estimator —
+  uninformative ones add variance without adding signal. Note this depends on
+  the objective: under top-1 a position is uninformative unless Maia's
+  *favourite* changes, under the likelihood unless its opinion of the played
+  move changes at all, which is far more of them.
+- **Objective function: the likelihood is the default**, and the top-1 match
+  rate is kept reachable beside it. Score each move by the log probability
+  Maia gave it and take `argmax_r sum log P(move | position, r)`; the peak is
+  the estimate. Probe for policy at runtime rather than assuming — some UCI
+  wrappers report value-head win/draw/loss numbers that look like
+  probabilities but aren't policy probabilities, so confirm the semantics of
+  whatever field is present before trusting it. **Maia3 is exactly this
+  case**: its wrapper prints `score cp` and `wdl` from the value head and
+  never prints the policy it computed, so those fields must be rejected, and
+  `app/maia_policy.py` runs the same engine with the policy field added.
+  Where no policy is available — every sweep already stored, and any build the
+  shim can't drive — score the move by the rank the sweep recorded instead,
+  through a fixed rank-to-probability model. The two feed the same estimator
+  and the fit reports which it used.
+- Fit the peak with **weights that fall away smoothly** from the maximum
+  (weight `exp((L - Lmax)/tau)` over every grid point), not by choosing a
+  window of points around it. A window picked from the data makes the
+  estimate a discontinuous function of the data, and the extra spread that
+  injects is invisible to any error bar computed afterwards. Do not smooth
+  and take an argmax: smoothing drags the apex toward the flat tails, worse
+  the wider the grid.
+- Get the uncertainty from the fit rather than by resampling: a **delete-one
+  jackknife over the independent unit** — games when several are pooled,
+  moves otherwise, since moves from one game share an opponent, an opening
+  and a sitting. Dropping a unit subtracts its own coefficients from the
+  summed quadratic, so every leave-one-out peak is closed-form and the whole
+  interval costs one vectorised expression.
 - Attach an explicit High/Medium/Low confidence label backed by named
-  reasons (peak prominence, sample size, interval width) — not just the
-  number.
-- Objective function: prefer a likelihood-based objective (mean log
-  probability of the played move) if the engine wrapper genuinely exposes
-  per-candidate policy probabilities; otherwise use top-1 match. Probe for
-  this at runtime rather than assuming one or the other — some UCI wrappers
-  report value-head win/draw/loss numbers that look like probabilities but
-  aren't policy probabilities, so confirm the semantics of whatever field is
-  present before trusting it.
+  reasons (sample size, interval width, whether the peak is at a grid edge)
+  — not just the number. Include the **absolute** check the likelihood makes
+  possible: mean log probability per move is comparable across players and
+  grids without any calibration, so state whether the model predicted this
+  player about as well as it predicts anyone, or no better than guessing
+  among legal moves.
 - Cache the full per-(position, Elo) score matrix so re-fitting (e.g. a
   different objective, or the trend view in §14) never requires re-running
   the engines.

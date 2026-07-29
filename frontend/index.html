@@ -255,20 +255,29 @@
         <div class="panel">
           <h3>Your strength (all games)</h3>
           <p class="panel-note">
-            One fit over every position from every game with a stored sweep. This
-            is the number to trust — a single game is only ~25 of your moves and
-            lands within about ±90 Elo of the truth. Re-fits cached scores, so it
-            never runs an engine.
+            One fit over every position from every game with a stored sweep. A
+            single game is only ~25 of your moves and lands within about ±180
+            Elo of the truth, so this is still the number to act on. Re-fits
+            cached scores, so it never runs an engine.
           </p>
           <div class="play-buttons">
             <button id="strength-refresh">Refresh</button>
             <label class="inline-label">From
               <select id="strength-run"><option value="">All runs</option></select>
             </label>
-            <!-- Re-fits cached scores, so switching costs nothing. Top-1 is the
-                 verified default; the wider objectives use the ranked candidates
-                 a sweep records when the engine supports MultiPV. -->
-            <label class="inline-label">Match
+            <!-- Both re-fit cached scores, so switching costs nothing and no
+                 engine runs. The likelihood is the default and the measured
+                 better of the two (backend/sims/policy_likelihood.py); the
+                 top-1 match rate is kept because every number this app
+                 reported before was produced by it, and the only way to
+                 compare them honestly is on the same games. -->
+            <label class="inline-label">Fit
+              <select id="strength-objective">
+                <option value="likelihood">by move probability</option>
+                <option value="top1">by top-1 match rate</option>
+              </select>
+            </label>
+            <label class="inline-label" id="strength-topn-label">Match
               <select id="strength-topn">
                 <option value="1">Maia's top move</option>
                 <option value="2">its top 2</option>
@@ -453,6 +462,10 @@
         </label>
         <label>Ranked candidates to record (MultiPV — free at 1 node)
           <input type="number" id="s-maia-multipv" min="1" max="9" />
+        </label>
+        <label>Ask Maia3 for its move probabilities (it computes them and
+               doesn't print them; off scores your moves by rank instead)
+          <select id="s-maia-policy"><option value="1">On</option><option value="0">Off</option></select>
         </label>
         <label>Ignore moves played faster than (ms; 0 = off)
           <input type="number" id="s-min-think-ms" min="0" max="120000" step="500" />

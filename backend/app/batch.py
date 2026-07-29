@@ -34,9 +34,9 @@ from .db import db_cursor
 from .engine_manager import register_job_engine, unregister_job_engine
 from .engine_settings import get_effective_settings
 from .jobqueue import pool, slots_for
-from .maia_accuracy import for_model as accuracy_for_model
 from .runs import save_analysis
-from .sweep_job import _rows_by_ply, _store_matrices, _sweep_core, build_grid, open_maia
+from .sweep_job import (_estimates, _rows_by_ply, _store_matrices, _sweep_core,
+                        build_grid, open_maia)
 
 router = APIRouter(prefix="/api/batch", tags=["batch"])
 
@@ -127,13 +127,7 @@ async def run_batch(job: AnalysisJob, games: list[dict], mode: str, settings: di
                             maia=maia, grid=batch_grid,
                         )
                         grid, by_player, matrices = sweep["grid"], sweep["by_player"], sweep["matrices"]
-                        accuracy = accuracy_for_model(
-                            sweep["model_size"], settings.get("maia_accuracy_offset", 0.0) or 0.0)
-                        results = {
-                            side: elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1),
-                                                     accuracy=accuracy)
-                            for side, matrix in matrices.items() if matrix.shape[0]
-                        }
+                        results = _estimates(sweep, settings)
                         fens = {r["ply"]: r["fen"] for rows in by_player.values() for r in rows}
                         ucis = {r["ply"]: r["uci"] for rows in by_player.values() for r in rows}
                         for side, matrix in matrices.items():
@@ -150,7 +144,7 @@ async def run_batch(job: AnalysisJob, games: list[dict], mode: str, settings: di
                                 brilliant_enabled=bool(settings.get("brilliant_enabled", 1)),
                             )
                             classify.blunder_elo_correlation(moves, sweep_rows=rows, grid=grid)
-                        _store_matrices(job, grid, by_player, matrices)
+                        _store_matrices(job, grid, by_player, matrices, sweep.get("policies"))
                         payload.update({
                             "grid": grid, "results": results,
                             "model_note": sweep["note"], "maia_model_size": sweep["model_size"],
