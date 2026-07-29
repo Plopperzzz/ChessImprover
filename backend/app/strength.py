@@ -114,12 +114,18 @@ def collect(user_id: int, run_id: int | None = None) -> tuple[list[dict], dict]:
             yours, theirs = row["your_color"], "b" if row["your_color"] == "w" else "w"
             scores = {"w": [], "b": []}
             for r in conn.execute(
-                "SELECT side, scores, think_ms FROM sweep_positions "
+                "SELECT side, scores, policies, think_ms FROM sweep_positions "
                 "WHERE run_game_id = ? ORDER BY ply",
                 (row["run_game_id"],),
             ):
                 if r["scores"] and len(r["scores"]) == len(grid):
-                    scores.setdefault(r["side"], []).append((r["scores"], r["think_ms"]))
+                    # The policy string is twice as long as the grid, so a row
+                    # whose length disagrees is from a different grid and is
+                    # dropped back to the rank surrogate rather than misread.
+                    policies = r["policies"] if (
+                        r["policies"] and len(r["policies"]) == 2 * len(grid)) else None
+                    scores.setdefault(r["side"], []).append(
+                        (r["scores"], policies, r["think_ms"]))
             if not scores[yours]:
                 skipped["no_sweep_positions"] += 1
                 continue
@@ -198,7 +204,7 @@ def apply_think_filter(entries: list[dict], key: str, min_think_ms: int) -> dict
         return info
     eligible = would_drop = 0
     for entry in entries:
-        for _scores, think in entry.get(key, []):
+        for *_row, think in entry.get(key, []):
             if think is None:
                 continue
             eligible += 1
@@ -216,28 +222,42 @@ def apply_think_filter(entries: list[dict], key: str, min_think_ms: int) -> dict
         return info
 
     for entry in entries:
-        entry[key] = [(sc, th) for sc, th in entry.get(key, [])
-                      if th is None or th >= min_think_ms]
+        entry[key] = [row for row in entry.get(key, [])
+                      if row[-1] is None or row[-1] >= min_think_ms]
     info["applied"] = True
     info["dropped"] = would_drop
     return info
 
 
 def matrix(entries: list[dict], grid: list[int], key: str = "you"):
-    """(rank rows, game_ids) -- the game id per row is what lets the bootstrap
-    resample games instead of moves. Rows carry Maia's rank for the played
-    move; `elo_sweep.hits` turns that into 0/1 under whichever objective."""
-    rows, groups = [], []
+    """(rank rows, game_ids, log policy rows) for the pooled fit.
+
+    The game id per row is what lets the interval treat a game rather than a
+    move as the independent unit. Rows carry Maia's rank for the played move,
+    which `elo_sweep.estimate_from_ranks` turns into whichever objective is
+    asked for.
+
+    The policy block comes back only when *every* pooled row has one. A library
+    part-swept by a policy-reporting build and part by a stock one would
+    otherwise be fitted with two different scales mixed down one column, and
+    the rank surrogate applied to all of it is both consistent and only a
+    little less precise.
+    """
+    rows, groups, policies = [], [], []
     for entry in entries:
         index = {elo: i for i, elo in enumerate(entry["grid"])}
         columns = [index[elo] for elo in grid]
-        for scores, _think in entry.get(key, []):
+        for scores, policy, _think in entry.get(key, []):
             decoded = elo_sweep.decode_scores(scores)
             rows.append([decoded[i] for i in columns])
+            logs = elo_sweep.decode_policies(policy)
+            policies.append([logs[i] for i in columns] if logs else None)
             groups.append(entry["game_id"])
     if not rows:
-        return np.zeros((0, len(grid))), np.zeros(0, dtype=int)
-    return np.asarray(rows, dtype=float), np.asarray(groups, dtype=int)
+        return np.zeros((0, len(grid))), np.zeros(0, dtype=int), None
+    log_policies = (np.asarray(policies, dtype=float)
+                    if policies and all(p is not None for p in policies) else None)
+    return np.asarray(rows, dtype=float), np.asarray(groups, dtype=int), log_policies
 
 
 def model_counts(entries: list[dict], key: str) -> dict:
@@ -256,21 +276,24 @@ def model_counts(entries: list[dict], key: str) -> dict:
 
 
 def _side_estimate(entries: list[dict], key: str, top_n: int = 1,
-                   accuracy_offset: float = 0.0) -> dict:
+                   accuracy_offset: float = 0.0,
+                   objective: str = elo_sweep.DEFAULT_OBJECTIVE) -> dict:
     grid, usable, excluded = common_grid(entries, key)
     if not grid or len(grid) < 2:
         return {"estimate": None, "confidence": "low", "games": 0,
                 "reasons": ["no comparable sweep data"], "grid": grid,
                 "games_excluded_grid_mismatch": excluded}
-    ranks, groups = matrix(usable, grid, key)
+    ranks, groups, log_policies = matrix(usable, grid, key)
     # One curve for the pool. The sizes differ by two or three points of match
     # rate at master level and barely at all at 800, so a library swept with a
     # mixture is anchored against the mixture rather than against whichever
     # model happened to sweep the most games.
     counts = model_counts(usable, key)
     accuracy = maia_accuracy.blend(counts, accuracy_offset)
-    result = elo_sweep.estimate(grid, elo_sweep.hits(ranks, top_n), groups=groups,
-                                accuracy=accuracy, top_n=top_n)
+    result = elo_sweep.estimate_from_ranks(grid, ranks, groups=groups,
+                                           accuracy=accuracy, top_n=top_n,
+                                           objective=objective,
+                                           log_policies=log_policies)
     result["games"] = len({int(g) for g in groups})
     result["top_n"] = top_n
     result["model_sizes"] = {(size or "unknown"): n for size, n in counts.items()}
@@ -391,8 +414,11 @@ def _predictability(you: dict, think: dict, top_n: int) -> dict:
 
 
 def build(user_id: int, run_id: int | None = None, top_n: int = 1,
-          min_think_ms: int | None = None) -> dict:
+          min_think_ms: int | None = None,
+          objective: str = elo_sweep.DEFAULT_OBJECTIVE) -> dict:
     entries, skipped = collect(user_id, run_id)
+    if objective not in elo_sweep.OBJECTIVES:
+        objective = elo_sweep.DEFAULT_OBJECTIVE
     top_n = max(1, min(int(top_n), elo_sweep.MAX_TOP_N))
     if min_think_ms is None:
         min_think_ms = get_effective_settings(user_id).get("min_think_ms", 0) or 0
@@ -401,8 +427,8 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1,
     # like with like rather than your considered moves against their premoves.
     apply_think_filter(entries, "opponent", min_think_ms)
     offset = float(get_effective_settings(user_id).get("maia_accuracy_offset", 0.0) or 0.0)
-    you = _side_estimate(entries, "you", top_n, offset)
-    field = _side_estimate(entries, "opponent", top_n, offset)
+    you = _side_estimate(entries, "you", top_n, offset, objective)
+    field = _side_estimate(entries, "opponent", top_n, offset, objective)
 
     # The field's real average rating, from the headers of the same games that
     # produced the field estimate.
@@ -420,6 +446,8 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1,
         "your_rating_n": len(your_ratings),
         "games": len(entries),
         "top_n": top_n,
+        "objective": objective,
+        "policy_source": you.get("policy_source"),
         "think_filter": think,
         "max_rank_seen": max(you.get("max_rank_seen", 0), field.get("max_rank_seen", 0)),
         "skipped": skipped,
@@ -435,7 +463,10 @@ def build(user_id: int, run_id: int | None = None, top_n: int = 1,
 @router.get("")
 def get_strength(run_id: int | None = None, top_n: int = 1,
                  min_think_ms: int | None = None,
+                 objective: str = elo_sweep.DEFAULT_OBJECTIVE,
                  user: dict = Depends(require_user)):
     """Pooled estimate over every game with a stored sweep. Pure re-fit of
-    cached scores -- no engine runs -- so it is safe to call on every load."""
-    return build(user["id"], run_id, top_n, min_think_ms)
+    cached scores -- no engine runs -- so it is safe to call on every load,
+    and so `objective` can be switched from the UI to compare the likelihood
+    fit against the top-1 one on exactly the same games."""
+    return build(user["id"], run_id, top_n, min_think_ms, objective)

@@ -181,6 +181,17 @@ CREATE TABLE IF NOT EXISTS sweep_positions (
     fen TEXT,
     uci TEXT,
     scores TEXT,
+    -- The probability Maia gave the move actually played, per grid point, when
+    -- the engine reported a policy at all. Two characters per grid point (see
+    -- `elo_sweep.encode_policies`) rather than a JSON array of floats, for the
+    -- same reason `scores` is one character: this is the largest table in the
+    -- database and a thousand-game batch has to stay a sane size.
+    --
+    -- NULL is the normal case, not an error -- no stock Maia3 build reports a
+    -- policy, and every sweep taken before this column existed has none. The
+    -- likelihood fit reads the ranks in `scores` instead when it's absent, so
+    -- an old row still re-fits under the new objective without being re-run.
+    policies TEXT,
     -- How long the player took over this move, so a re-fit can drop moves
     -- played with no thought without re-parsing any PGN. NULL means unknown,
     -- which is never treated as "instant".
@@ -328,6 +339,7 @@ def init_db():
         _ensure_column(conn, "games", "clocks_json", "TEXT")
         _ensure_column(conn, "games", "your_color_locked", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "sweep_positions", "think_ms", "INTEGER")
+        _ensure_column(conn, "sweep_positions", "policies", "TEXT")
         _ensure_column(conn, "run_games", "maia_model_size", "TEXT")
         _ensure_column(conn, "engine_settings", "maia_accuracy_offset", "REAL NOT NULL DEFAULT 0.0")
         _widen_default_elo_grid(conn)

@@ -22,7 +22,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from . import classify, elo_sweep
+from . import classify, elo_sweep, maia_policy
 from .analysis import AnalysisJob, jobs
 from .auth import SESSION_COOKIE, _user_for_token, require_user
 from .db import db_cursor
@@ -74,8 +74,48 @@ def positions_by_player(pgn_text: str) -> dict[str, list[dict]]:
 MAX_RANK = 9
 
 
-async def _ranked_moves(engine: EngineProcess, fen: str, multipv: int) -> list[str]:
-    """Maia's move ordering for a position, best first.
+# Non-standard `info` fields that carry a *policy* probability, in the order
+# they are looked for. UCI has no field for this, so builds that report it at
+# all have each invented a spelling.
+#
+# `wdl` and `score cp` are deliberately absent, and that is the whole point of
+# this list existing rather than the parser taking any number that looks like a
+# probability. Maia3's UCI wrapper emits both, and both come from its *value*
+# head -- they are its guess at the result of the game after the candidate
+# move, not the probability it would play it. They are frequently identical
+# across every candidate in the list (a value head barely distinguishes
+# early-middlegame moves), so scoring a likelihood with them would silently
+# produce a flat curve. Section 9 of the spec calls this out by name: confirm
+# the semantics of the field before trusting it.
+POLICY_FIELDS = ("policy", "policypermille", "p", "prior")
+
+
+def _policy_from_info(parts: list[str]) -> float | None:
+    """Policy probability from one `info` line, or None if it carries none.
+
+    Accepts a fraction in 0..1 or a permille integer, told apart by magnitude:
+    a policy of exactly 1.0 is the only ambiguous value and means the same
+    thing read either way.
+    """
+    for field in POLICY_FIELDS:
+        if field not in parts:
+            continue
+        try:
+            raw = float(parts[parts.index(field) + 1])
+        except (ValueError, IndexError):
+            continue
+        if raw < 0:
+            continue
+        value = raw / 1000.0 if raw > 1.0 else raw
+        if 0.0 <= value <= 1.0:
+            return value
+    return None
+
+
+async def _ranked_moves(engine: EngineProcess, fen: str,
+                        multipv: int) -> tuple[list[str], dict[str, float]]:
+    """Maia's move ordering for a position, best first, and the policy
+    probability per move when the engine reports one.
 
     At `go nodes 1` a policy net does one forward pass, so asking for several
     ranked moves instead of one costs nothing extra -- the ordering is already
@@ -83,11 +123,14 @@ async def _ranked_moves(engine: EngineProcess, fen: str, multipv: int) -> list[s
     for the same engine time.
 
     Falls back to a single-move list when the engine reports no `multipv`
-    info lines, which is what a build without MultiPV support does.
+    info lines, which is what a build without MultiPV support does. The
+    probability map is empty for the builds that report no policy, which is
+    every stock Maia3 today.
     """
     await engine.send_line(f"position fen {fen}")
     await engine.send_line(MAIA_GO_COMMAND)
     ranked: dict[int, str] = {}
+    policies: dict[str, float] = {}
     best: str | None = None
     while True:
         line = await engine.readline()
@@ -102,13 +145,16 @@ async def _ranked_moves(engine: EngineProcess, fen: str, multipv: int) -> list[s
                 continue
             if 1 <= rank <= multipv:
                 ranked[rank] = move
+                policy = _policy_from_info(parts)
+                if policy is not None:
+                    policies[move] = policy
         if line.startswith("bestmove"):
             parts = line.split()
             best = parts[1] if len(parts) >= 2 else None
             break
     if ranked:
-        return [ranked[r] for r in sorted(ranked) if ranked.get(r)]
-    return [best] if best else []
+        return [ranked[r] for r in sorted(ranked) if ranked.get(r)], policies
+    return ([best] if best else []), policies
 
 
 def rank_of(played: str, ranked: list[str]) -> int:
@@ -130,7 +176,21 @@ async def open_maia(settings: dict):
     if not path:
         raise RuntimeError(note)
 
-    engine = EngineProcess(path)
+    # Ask for the engine's own policy first. The likelihood objective wants the
+    # probability Maia gave the move you played, and Maia3 computes exactly that
+    # and then declines to print it -- `maia_policy` runs the same engine under
+    # the same interpreter with that one field added. It returns None whenever
+    # it can't (any other engine, an interpreter it can't find or that can't
+    # import maia3), and then this is an ordinary engine launch and the fit
+    # falls back to scoring moves by rank.
+    command = None
+    if settings.get("maia_policy", True):
+        command = await maia_policy.probe(path)
+    if command:
+        engine = EngineProcess(command[0], command[1:])
+        note = ((note + " ") if note else "") + "reporting per-move policy"
+    else:
+        engine = EngineProcess(path)
     await engine.start()
     await engine.send_line("uci")
     engine.advertised_options = await read_uci_options(engine)
@@ -203,6 +263,13 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
         raise RuntimeError("this game has no positions to sweep")
 
     matrices = {side: np.zeros((len(rows), len(grid))) for side, rows in by_player.items()}
+    # The probability the engine gave the move actually played, when it reports
+    # one. NaN means "not reported here", which is what every cell stays at
+    # against a build with no policy output -- and `policy_seen` is what
+    # decides whether the column is worth storing at all.
+    policies = {side: np.full((len(rows), len(grid)), np.nan)
+                for side, rows in by_player.items()}
+    policy_seen = False
     done = 0
     try:
         # Elo outermost: one setoption per grid point rather than per position.
@@ -214,10 +281,21 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
                 for pi, row in enumerate(rows):
                     if getattr(job, "cancelled", False):
                         raise asyncio.CancelledError()
-                    ranked = await _ranked_moves(engine, row["fen"], multipv)
+                    ranked, policy = await _ranked_moves(engine, row["fen"], multipv)
                     # Stored as a rank, not a yes/no: 1 is Maia's own choice,
                     # 0 means the move wasn't among its candidates at all.
                     matrices[side][pi, gi] = rank_of(row["uci"], ranked)
+                    if policy:
+                        policy_seen = True
+                        # A move the engine listed but didn't play gets the
+                        # probability it reported; one it never listed gets the
+                        # leftover mass, which is an upper bound on it and the
+                        # honest reading of "below everything shown".
+                        played = policy.get(row["uci"])
+                        if played is None:
+                            listed = sum(policy.values())
+                            played = max(1.0 - listed, 0.0) / MAX_RANK
+                        policies[side][pi, gi] = played
                     done += 1
                     if done % 10 == 0 or done == total_work:
                         await job.emit({"type": "progress", "done": done, "total": total_work,
@@ -228,7 +306,13 @@ async def _sweep_core(job, pgn_text: str, settings: dict,
             engine.terminate()
             await engine.wait_closed()
 
+    if not policy_seen:
+        note = ((note + " ") if note else "") + (
+            "this build reports no per-move policy, so the fit scores your moves "
+            "by where they ranked in Maia's ordering rather than by the "
+            "probability it gave them")
     return {"grid": grid, "by_player": by_player, "matrices": matrices,
+            "policies": policies if policy_seen else None,
             "note": note, "multipv": multipv, "model_size": maia.get("model_size")}
 
 
@@ -238,17 +322,8 @@ async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color:
         async with pool.lease(job=job, slots=slots_for(settings, "sweep"), label="sweep"):
             sweep = await _sweep_core(job, pgn_text, settings)
             grid, by_player, matrices = sweep["grid"], sweep["by_player"], sweep["matrices"]
-            accuracy = accuracy_for_model(sweep["model_size"],
-                                          settings.get("maia_accuracy_offset", 0.0) or 0.0)
-
-            results = {}
-            for side, matrix in matrices.items():
-                if matrix.shape[0] == 0:
-                    continue
-                results[side] = elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1),
-                                                   accuracy=accuracy)
-
-            _store_matrices(job, grid, by_player, matrices)
+            results = _estimates(sweep, settings)
+            _store_matrices(job, grid, by_player, matrices, sweep.get("policies"))
             # Persisted like every other analysis. A sweep on its own used to
             # be the one kind of run that vanished the moment you selected
             # another game -- and it is the expensive one, so re-running it to
@@ -271,19 +346,58 @@ async def run_sweep(job: AnalysisJob, pgn_text: str, settings: dict, your_color:
         await job.emit({"type": "error", "message": str(e)})
 
 
-def _store_matrices(job, grid, by_player, matrices):
+def _store_matrices(job, grid, by_player, matrices, policies=None):
     """Keep the raw per-(position, Elo) scores so a re-fit -- a different
-    objective, or the trend view -- never re-runs the engine (section 9)."""
+    objective, or the trend view -- never re-runs the engine (section 9).
+
+    The policy block rides alongside the ranks rather than replacing them:
+    ranks are what every stored sweep has and what the surrogate reads, and a
+    sweep with real policy should still answer a top-1 question without being
+    re-run.
+    """
     job.sweep_cache = {
         "grid": grid,
         "players": {
             side: {
                 "positions": by_player[side],
                 "matrix": matrices[side].tolist(),
+                **({"policy": policies[side].tolist()} if policies else {}),
             }
             for side in matrices
         },
     }
+
+
+def _estimates(sweep, settings) -> dict:
+    """Per-side estimate from a finished sweep, under the app's objective."""
+    accuracy = accuracy_for_model(sweep["model_size"],
+                                  settings.get("maia_accuracy_offset", 0.0) or 0.0)
+    objective = settings.get("elo_objective") or elo_sweep.DEFAULT_OBJECTIVE
+    policies = sweep.get("policies") or {}
+    results = {}
+    for side, matrix in sweep["matrices"].items():
+        if matrix.shape[0] == 0:
+            continue
+        policy = policies.get(side)
+        results[side] = elo_sweep.estimate_from_ranks(
+            sweep["grid"], matrix, accuracy=accuracy, objective=objective,
+            log_policies=_log_policy(policy),
+        )
+    return results
+
+
+def _log_policy(policy):
+    """Probabilities -> log probabilities, or None when the sweep recorded
+    none. A cell the engine never reported is left for the rank surrogate by
+    returning nothing at all: a matrix that is right in most places and
+    guessed in the rest would be worse than one that is honestly a surrogate
+    throughout."""
+    if policy is None:
+        return None
+    arr = np.asarray(policy, dtype=float)
+    if arr.size == 0 or np.isnan(arr).any():
+        return None
+    return np.log(np.clip(arr, np.exp(elo_sweep.POLICY_LOG_FLOOR), 1.0))
 
 
 class SweepIn(BaseModel):
@@ -352,15 +466,7 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
             grid = sweep["grid"]
             by_player = sweep["by_player"]
             matrices = sweep["matrices"]
-            accuracy = accuracy_for_model(sweep["model_size"],
-                                          settings.get("maia_accuracy_offset", 0.0) or 0.0)
-
-            results = {}
-            for side, matrix in matrices.items():
-                if matrix.shape[0] == 0:
-                    continue
-                results[side] = elo_sweep.estimate(grid, elo_sweep.hits(matrix, 1),
-                                                   accuracy=accuracy)
+            results = _estimates(sweep, settings)
 
             # Each side is judged against its *own* estimated strength, per
             # section 8 -- a move is Great because players of that player's
@@ -386,7 +492,7 @@ async def run_full(job, pgn_text: str, settings: dict, your_color: str):
                 )
                 classify.blunder_elo_correlation(moves, sweep_rows=rows, grid=grid)
 
-            _store_matrices(job, grid, by_player, matrices)
+            _store_matrices(job, grid, by_player, matrices, sweep.get("policies"))
             save_analysis(job.user_id, job.game_id, "full", {
                 "moves": moves, "grid": grid, "results": results,
                 "model_note": sweep["note"], "maia_model_size": sweep["model_size"],

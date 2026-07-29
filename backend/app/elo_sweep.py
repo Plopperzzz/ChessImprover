@@ -45,7 +45,17 @@ The statistics here matter more than they look:
 
 import numpy as np
 
-from . import maia_accuracy
+from . import maia_accuracy, policy_likelihood
+
+# Which objective a caller gets when it doesn't ask for one. The likelihood
+# beats the top-1 match rate on the same stored data at every sample size
+# measured -- see `backend/sims/policy_likelihood.py` and section 9 of the
+# spec -- so it is what the app fits by default. 'top1' remains reachable
+# through `estimate_from_ranks(objective='top1')`, and is still what
+# `apply_great_brilliant` asks for, since "would a player at this strength have
+# played exactly this move" really is a top-1 question.
+DEFAULT_OBJECTIVE = "likelihood"
+OBJECTIVES = ("likelihood", "top1")
 
 try:  # scipy is in requirements; the fallbacks keep this importable without it
     from scipy.optimize import curve_fit
@@ -121,6 +131,58 @@ def decode_scores(scores: str) -> list[float]:
     decode to rank 1 and rank 0 -- the same meaning, so nothing needs
     migrating."""
     return [float(c) if c.isdigit() else 0.0 for c in (scores or "")]
+
+
+# --- policy probabilities ---------------------------------------------------
+#
+# When the engine reports per-candidate policy, the probability it gave the
+# move actually played is stored alongside the rank. A float per (position,
+# Elo) would multiply the size of the largest table in the database, so it is
+# quantised the way `scores` is: fixed-width characters, no separators, decoded
+# by position.
+#
+# Two characters per grid point over the 94 printable ASCII codes gives 8836
+# levels across the log-probability range below, a resolution of about 0.001
+# nats. That is far finer than it needs to be -- but the whole point of the
+# likelihood is that differences of a tenth of a nat per move decide where the
+# peak sits, and a one-character encoding would have quantised at 0.1.
+POLICY_ALPHABET_START = 33
+POLICY_ALPHABET_SIZE = 94
+POLICY_LEVELS = POLICY_ALPHABET_SIZE * POLICY_ALPHABET_SIZE
+# Probabilities below e^-12 (about 6 in a million) are recorded as the floor.
+# Nothing downstream can tell them apart from zero and a true zero would make
+# the log-likelihood infinite, which one unlucky move would then decide.
+POLICY_LOG_FLOOR = -12.0
+
+
+def encode_policies(probabilities) -> str:
+    """Per-grid-point probabilities for one position -> the stored string."""
+    out = []
+    for p in probabilities:
+        logp = POLICY_LOG_FLOOR if not p or p <= 0 else max(float(np.log(p)), POLICY_LOG_FLOOR)
+        level = int(round((logp - POLICY_LOG_FLOOR) / -POLICY_LOG_FLOOR * (POLICY_LEVELS - 1)))
+        level = min(max(level, 0), POLICY_LEVELS - 1)
+        hi, lo = divmod(level, POLICY_ALPHABET_SIZE)
+        out.append(chr(POLICY_ALPHABET_START + hi))
+        out.append(chr(POLICY_ALPHABET_START + lo))
+    return "".join(out)
+
+
+def decode_policies(encoded: str) -> list[float]:
+    """Stored string -> log probabilities, one per grid point. Empty for a
+    sweep that recorded no policy, which is every sweep run against a build
+    that doesn't report one."""
+    if not encoded or len(encoded) % 2:
+        return []
+    out = []
+    for i in range(0, len(encoded), 2):
+        hi = ord(encoded[i]) - POLICY_ALPHABET_START
+        lo = ord(encoded[i + 1]) - POLICY_ALPHABET_START
+        if not (0 <= hi < POLICY_ALPHABET_SIZE and 0 <= lo < POLICY_ALPHABET_SIZE):
+            return []
+        level = hi * POLICY_ALPHABET_SIZE + lo
+        out.append(POLICY_LOG_FLOOR + level / (POLICY_LEVELS - 1) * -POLICY_LOG_FLOOR)
+    return out
 
 
 def split_positions(score_matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -208,11 +270,42 @@ def _peak_from(elos: np.ndarray, rates: np.ndarray, se: np.ndarray) -> float:
     return float(np.clip(params["centre"], elos.min(), elos.max()))
 
 
+def estimate_from_ranks(elos, rank_matrix, groups=None, accuracy=None,
+                        top_n: int = 1, objective: str = DEFAULT_OBJECTIVE,
+                        log_policies=None) -> dict:
+    """The one entry point that knows about objectives.
+
+    Callers hold *ranks* -- which is what the sweep stores and what every
+    re-fit reads back -- and want an estimate. Which objective turns those into
+    a fit is this function's business and nobody else's, so switching it does
+    not touch the sweep view, the trend or the pooled strength fit.
+
+    `objective`:
+      'likelihood' scores each move by the probability Maia gave it, from the
+        engine's own policy when `log_policies` carries it and from the rank
+        otherwise (`policy_likelihood`). This is the default.
+      'top1' is the original "was this Maia's single favourite" match rate,
+        with the bump fit, the bootstrap and the accuracy-curve ceiling. Kept
+        reachable because it is what every stored number was produced by, and
+        because the comparison between the two is only possible while both run.
+    """
+    if objective == "likelihood":
+        if log_policies is not None and np.asarray(log_policies).size:
+            logp = np.asarray(log_policies, dtype=float)
+            exact = True
+        else:
+            logp = policy_likelihood.logp_from_ranks(rank_matrix)
+            exact = False
+        return policy_likelihood.estimate(elos, logp, groups=groups, exact_policy=exact)
+    return estimate(elos, hits(rank_matrix, top_n), groups=groups,
+                    accuracy=accuracy, top_n=top_n)
+
+
 def estimate(elos: list[int], score_matrix: np.ndarray, rng_seed: int = 0,
              groups: np.ndarray | None = None,
              accuracy: "maia_accuracy.AccuracyCurve | None" = None,
              top_n: int = 1) -> dict:
-    """Full estimate for one player.
+    """Full estimate for one player, under the original top-1 objective.
 
     score_matrix: (n_positions, n_elos) of 1/0 match indicators.
     groups: optional per-row game id. When several games are pooled, moves

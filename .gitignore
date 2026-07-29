@@ -11,3 +11,5 @@ __pycache__/
 node_modules/
 *.tgz
 db/*
+# Local test virtualenv (torch + maia3 for driving the real engine)
+.venv/
