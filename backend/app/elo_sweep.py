@@ -501,9 +501,10 @@ def _confidence(*, n_fit, n_total, rates, params, se, ci_low, ci_high, elos, pea
     score = 0
     span = float(elos.max() - elos.min())
 
-    # A single game is ~25 of your moves, half of them uninformative. Simulated
-    # at that size the estimate has a standard deviation near 90 Elo, so it
-    # gets no credit for sample size however clean the curve looks.
+    # A single game is ~25 of your moves, and under this objective all but
+    # three or four of them are uninformative. Simulated at that size it gives
+    # a spread of 275 Elo over seeds, so it gets no credit for sample size
+    # however clean the curve looks.
     if n_fit >= 400:
         score += 2
         reasons.append(f"{n_fit} discriminative positions")

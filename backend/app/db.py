@@ -60,6 +60,10 @@ CREATE TABLE IF NOT EXISTS engine_settings (
     -- costs no extra engine time and lets the fit use a top-N objective later
     -- without re-running anything.
     maia_multipv INTEGER NOT NULL DEFAULT 3,
+    -- Whether to ask Maia3 for the policy probability behind its ordering
+    -- (see app/maia_policy.py). On by default: it costs one extra process
+    -- probe per sweep and turns the rank surrogate into the real thing.
+    maia_policy INTEGER NOT NULL DEFAULT 1,
     -- Shifts Maia's published accuracy curves before the match rate is scored
     -- against them. The curves are measured on Lichess blitz, so a library of
     -- rapid or classical games sits a little below them through no fault of
@@ -335,6 +339,7 @@ def init_db():
         _ensure_column(conn, "engine_settings", "maia_elo_step_batch", "INTEGER NOT NULL DEFAULT 200")
         _ensure_column(conn, "engine_settings", "stockfish_options_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "engine_settings", "maia_multipv", "INTEGER NOT NULL DEFAULT 3")
+        _ensure_column(conn, "engine_settings", "maia_policy", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "engine_settings", "min_think_ms", "INTEGER NOT NULL DEFAULT 2000")
         _ensure_column(conn, "games", "clocks_json", "TEXT")
         _ensure_column(conn, "games", "your_color_locked", "INTEGER NOT NULL DEFAULT 0")

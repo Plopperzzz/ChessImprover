@@ -78,11 +78,17 @@ MAX_RANK = 9
 # at 600 to the low 0.5s at master level, and `maia_accuracy` carries that
 # curve. RANK_DECAY is the Zipf exponent through the rest of the ordering.
 #
-# The estimator is not sensitive to these being exactly right: they set how
-# many nats a rank improvement is worth, and so the *scale* of the
-# log-likelihood, but the peak is where the ranks improve, which does not move.
-# Simulated across decays from 1.0 to 2.2 -- top-1 mass held at 0.45 -- the
-# fitted peak moves by under 10 Elo and coverage stays inside 93-96%.
+# The estimator is not sensitive to these being *exactly* right, because they
+# set how many nats a rank improvement is worth -- the scale of the
+# log-likelihood -- while the peak is where the ranks improve, which does not
+# move. Simulated over every combination of decay 1.0/1.5/2.2 and top-1 mass
+# 0.35/0.45/0.55, the bias stays within 14 Elo and coverage within 92-98%.
+#
+# What they do cost is precision. A decay of 1.0 spreads the mass too evenly
+# across the ranks, so a rank-1 move is worth little more than a rank-5 one and
+# the spread over seeds runs to 120-180 Elo against 77 at 1.5. The default is
+# the middle of the range where a policy net's sorted probabilities actually
+# fall, and being wrong in the flat direction is the expensive way to be wrong.
 TOP1_MASS = 0.45
 RANK_DECAY = 1.5
 # Legal moves in a typical middlegame position, which is what the mass left
@@ -318,10 +324,16 @@ def curve(elos, total: np.ndarray, n_moves: int, points: int = 400):
 # a bound.
 EXTRAPOLATION_LIMIT = 0.25
 
-# Interval width, as a fraction of the swept range, above which the fit has not
-# located anything. The likelihood interval is read from the curvature rather
-# than resampled, so this is a much smaller number than the bootstrap needed.
+# Interval width as a fraction of the swept range. Above the first of these the
+# fit has located nothing and the label is forced to Low whatever else looks
+# good; the rest grade it.
 WIDE_INTERVAL_FRACTION = 0.55
+# A wide-but-real interval: worth showing, worth arguing down a grade.
+LOOSE_INTERVAL_FRACTION = 0.30
+# What one game of 20-40 moves typically manages on the default 600-2600 grid
+# -- around 300-400 Elo, or 15-20% of the swept range. Enough to be worth
+# showing, which is the whole claim being made for this objective.
+USABLE_INTERVAL_FRACTION = 0.20
 TIGHT_INTERVAL_FRACTION = 0.10
 
 
@@ -331,9 +343,11 @@ def informative(logp_matrix) -> tuple[np.ndarray, np.ndarray]:
 
     Same split as the top-1 objective made, and for the same reason -- but
     where a binary hit was uninformative whenever Maia's *first* choice never
-    changed, a log probability is uninformative only when the whole ordering
-    stands still. Far fewer positions are thrown away, which is a good part of
-    where the extra precision comes from.
+    changed, a log probability is uninformative only when its whole opinion of
+    the move stands still. That is a much weaker condition: over 30-move games
+    the top-1 objective keeps 3.6 positions on average and this keeps 15.0,
+    and the four-fold difference is a good part of where the extra precision
+    comes from.
     """
     m = np.asarray(logp_matrix, dtype=float)
     if m.size == 0:
@@ -441,16 +455,23 @@ def _confidence(*, result, elos, peak, raw_peak, ci_low, ci_high, n_total,
     score = 0
     span = float(elos.max() - elos.min())
     n_fit = result["n_moves"]
+    cap_medium = False
 
     reasons.append(
         f"{n_fit} of {n_total} positions carry rating information"
         + ("" if exact_policy else
            "; scored from Maia's ranking of your move, not its raw policy"))
-    if n_fit >= 200:
-        score += 2
-    elif n_fit >= 60:
+    # Sample size counts for much less here than it did under the top-1
+    # objective, and deliberately. There, the number of positions was the only
+    # handle on precision. Here the interval is read from the curvature of the
+    # likelihood itself, so it already knows how much those positions were
+    # worth -- a game of sharp, discriminating positions and a game of book
+    # moves have different curvatures at the same count. Counting both would
+    # be counting the same evidence twice, so the width below carries the
+    # weight and this only flags a sample too small to trust either way.
+    if n_fit >= 100:
         score += 1
-    elif n_fit < 15:
+    elif n_fit < 10:
         score -= 1
         reasons.append(f"very few usable positions ({n_fit})")
 
@@ -458,10 +479,18 @@ def _confidence(*, result, elos, peak, raw_peak, ci_low, ci_high, n_total,
         reasons.append(f"pooled over {result['clusters']} game(s); the interval "
                        f"accounts for moves within a game not being independent")
     elif n_fit:
-        score -= 1
-        reasons.append("a single game -- the interval treats your moves as independent "
-                       "when they share an opponent, an opening and a sitting, so the "
-                       "real uncertainty is a little wider still")
+        # Not a score penalty but a ceiling, which is the honest shape of this
+        # objection. One game now produces a genuinely usable number -- 80 Elo
+        # of spread over seeds against the old objective's 275, covering at
+        # 97% -- so scoring it down to Low would be as wrong as the old code
+        # calling it High. But the interval is jackknifed over *moves*, and
+        # moves in one game share an opponent, an opening and a sitting, so it
+        # is optimistic by an amount this cannot measure from one game. Medium
+        # is exactly what that deserves.
+        cap_medium = True
+        reasons.append("a single game -- the interval jackknifes over your moves, which "
+                       "treats them as independent when they share an opponent, an "
+                       "opening and a sitting, so the real uncertainty is a little wider")
 
     unusable = False
     if not result["curved"]:
@@ -475,6 +504,8 @@ def _confidence(*, result, elos, peak, raw_peak, ci_low, ci_high, n_total,
             f"well ({result['span_nats']:.1f} nats apart over the whole sweep) -- check "
             f"that the engine's Elo option is actually taking effect")
 
+    # The interval is the main evidence, since it is the one quantity that
+    # already accounts for how informative these particular positions were.
     if ci_low is not None and ci_high is not None:
         width = ci_high - ci_low
         if width >= WIDE_INTERVAL_FRACTION * span:
@@ -482,8 +513,15 @@ def _confidence(*, result, elos, peak, raw_peak, ci_low, ci_high, n_total,
             reasons.append(f"95% interval {ci_low:.0f}-{ci_high:.0f} spans "
                            f"{width / span:.0%} of the swept range")
         elif width <= TIGHT_INTERVAL_FRACTION * span:
-            score += 1
+            score += 2
             reasons.append(f"95% interval {ci_low:.0f}-{ci_high:.0f} is tight")
+        elif width <= USABLE_INTERVAL_FRACTION * span:
+            score += 1
+            reasons.append(f"95% interval {ci_low:.0f}-{ci_high:.0f}")
+        elif width >= LOOSE_INTERVAL_FRACTION * span:
+            score -= 1
+            reasons.append(f"95% interval {ci_low:.0f}-{ci_high:.0f} is wide -- "
+                           f"{width / span:.0%} of the swept range")
         else:
             reasons.append(f"95% interval {ci_low:.0f}-{ci_high:.0f}")
 
@@ -520,8 +558,8 @@ def _confidence(*, result, elos, peak, raw_peak, ci_low, ci_high, n_total,
                        f"so this player is {side} it -- treat the number as a bound and "
                        f"widen the Elo range")
 
-    confidence = "high" if score >= 2 else "medium" if score >= 0 else "low"
-    if edged and confidence == "high":
+    confidence = "high" if score >= 3 else "medium" if score >= 1 else "low"
+    if (edged or cap_medium) and confidence == "high":
         confidence = "medium"
     if unusable:
         confidence = "low"

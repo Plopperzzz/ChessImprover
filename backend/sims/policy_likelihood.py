@@ -59,7 +59,9 @@ Bias and standard deviation over seeds, and interval coverage, for:
      confidently wrong;
   D  sensitivity to the rank-mass constants, which are assumed rather than
      measured, so the estimator has to survive getting them wrong;
-  E  the score equation, as an arithmetic check on the fit.
+  E  the score equation, as an arithmetic check on the fit;
+  F  pooling, where the interval has to resample games rather than moves --
+     which only matters when games genuinely differ, so they are made to.
 """
 
 import os
@@ -226,6 +228,49 @@ def experiment_e():
           f"{clustered['confidence']} confidence")
 
 
+def experiment_f(trials=200, games=12, per_game=30, form=120.0):
+    """Pooling: does resampling *games* rather than moves buy an honest interval?
+
+    Clustering only matters when games genuinely differ, so each game here is
+    played at its own rating drawn around the player's -- form varies, and the
+    opponent and opening are shared within a game and not across. `form` is
+    that between-game spread. With it set to zero the two intervals should
+    agree; with it realistic, the move-level one should be too narrow and the
+    game-level one should still cover.
+    """
+    print(f"\nF. Pooling {games} games, between-game form spread {form:.0f} Elo")
+    for label, spread in (("no form variation", 0.0), (f"form varies by {form:.0f}", form)):
+        clustered_hits = move_hits = 0
+        clustered_w, move_w, peaks = [], [], []
+        for trial in range(trials):
+            rng = np.random.default_rng(10_000 + trial)
+            centres = 1500 + rng.normal(0.0, spread, games)
+            ranks = np.vstack([simulate(centres[g], per_game,
+                                        np.random.default_rng(trial * 97 + g))
+                               for g in range(games)])
+            logp = pl.logp_from_ranks(ranks)
+            groups = np.repeat(np.arange(games), per_game)
+            with_clusters = pl.estimate(GRID, logp, groups=groups)
+            without = pl.estimate(GRID, logp)
+            for result, hits, widths in ((with_clusters, "c", clustered_w),
+                                         (without, "m", move_w)):
+                if result.get("ci_low") is None:
+                    continue
+                covered = result["ci_low"] <= 1500 <= result["ci_high"]
+                widths.append(result["ci_high"] - result["ci_low"])
+                if hits == "c":
+                    clustered_hits += covered
+                else:
+                    move_hits += covered
+            if with_clusters["estimate"] is not None:
+                peaks.append(with_clusters["estimate"])
+        print(f"   {label:<22} true spread of the estimate {np.std(peaks):6.1f}")
+        print(f"     resampling games: covers {clustered_hits / trials:5.1%}  "
+              f"median width {np.median(clustered_w):6.0f}")
+        print(f"     resampling moves: covers {move_hits / trials:5.1%}  "
+              f"median width {np.median(move_w):6.0f}")
+
+
 def main():
     np.seterr(all="ignore")
     print(__doc__.split("\n")[0])
@@ -237,6 +282,7 @@ def main():
     experiment_c()
     experiment_d()
     experiment_e()
+    experiment_f()
 
 
 if __name__ == "__main__":

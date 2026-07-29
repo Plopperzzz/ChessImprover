@@ -81,9 +81,10 @@ def interpreter_for(path: str) -> str | None:
 def model_argument(path: str) -> str | None:
     """The `--model` a preset console script hardcodes, read off its name.
 
-    `maia3-uci` takes the model as an argument and has no size in its name, so
-    it returns None and the caller passes nothing -- the shim then needs the
-    user's own arguments, exactly as the plain binary would.
+    Only the presets can be driven. `maia3-uci` takes its model as a
+    command-line argument, and this app launches engines bare -- there is
+    nowhere for a user to have supplied one -- so there is no model to pass on
+    and this returns None.
     """
     stem = os.path.splitext(os.path.basename(path))[0].lower()
     match = re.match(r"^maia3[-_](\d+m(?:-ablation)?)$", stem)
@@ -91,17 +92,21 @@ def model_argument(path: str) -> str | None:
 
 
 def shim_command(path: str) -> list[str] | None:
-    """The argv that runs this file as a policy-reporting Maia3, or None."""
+    """The argv that runs this file as a policy-reporting Maia3, or None.
+
+    None whenever anything is missing, including the model: running the shim
+    without one would start a process that exits on its own argument parsing.
+    The plain binary is no more usable in that case, but substituting a second
+    broken launch for the first would only make the failure harder to read.
+    """
     interpreter = interpreter_for(path)
-    if not interpreter:
-        return None
-    argv = [interpreter, os.path.abspath(__file__)]
     model = model_argument(path)
-    if model:
-        # The preset scripts pin temperature 0 as well; matched here so the
-        # shim and the plain binary answer `bestmove` identically.
-        argv += ["--model", model, "--temperature", "0"]
-    return argv
+    if not interpreter or not model:
+        return None
+    # The preset scripts pin temperature 0 as well; matched here so the shim
+    # and the plain binary answer `bestmove` identically.
+    return [interpreter, os.path.abspath(__file__),
+            "--model", model, "--temperature", "0"]
 
 
 async def probe(path: str, timeout: float = 120.0) -> list[str] | None:

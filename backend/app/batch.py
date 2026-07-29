@@ -34,7 +34,6 @@ from .db import db_cursor
 from .engine_manager import register_job_engine, unregister_job_engine
 from .engine_settings import get_effective_settings
 from .jobqueue import pool, slots_for
-from .maia_accuracy import for_model as accuracy_for_model
 from .runs import save_analysis
 from .sweep_job import (_estimates, _rows_by_ply, _store_matrices, _sweep_core,
                         build_grid, open_maia)

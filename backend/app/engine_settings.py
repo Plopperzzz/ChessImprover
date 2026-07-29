@@ -28,6 +28,11 @@ class EngineSettings(BaseModel):
     maia_elo_step: int = 100
     maia_elo_step_batch: int = 200
     maia_multipv: int = Field(default=3, ge=1, le=9)
+    # Ask Maia3 for the policy probability behind its ordering, by running the
+    # same engine through `maia_policy`'s shim. Off means the fit scores moves
+    # by rank instead, which is what happens anyway on any engine the shim
+    # can't drive -- so this is an escape hatch, not a feature switch.
+    maia_policy: bool = True
     min_think_ms: int = Field(default=2000, ge=0, le=120000)
     # Maia's published accuracy curves are measured on Lichess blitz. Slower
     # games sit a little below them, so a rapid or classical library can shift
@@ -103,7 +108,7 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
             """UPDATE engine_settings SET
                 stockfish_path=?, stockfish_threads=?, stockfish_hash_mb=?,
                 sf_limit_type=?, sf_limit_value=?, sf_skill_level=?,
-                maia_path=?, maia_model_size=?, maia_elo_min=?, maia_elo_max=?, maia_elo_step=?, maia_elo_step_batch=?, maia_multipv=?, min_think_ms=?,
+                maia_path=?, maia_model_size=?, maia_elo_min=?, maia_elo_max=?, maia_elo_step=?, maia_elo_step_batch=?, maia_multipv=?, maia_policy=?, min_think_ms=?,
                 maia_options_json=?, stockfish_options_json=?,
                 great_max_drop=?, great_max_match_rate=?, brilliant_enabled=?,
                 maia_accuracy_offset=?,
@@ -112,7 +117,7 @@ def update_settings(body: EngineSettings, user: dict = Depends(require_user)):
             (
                 body.stockfish_path, body.stockfish_threads, body.stockfish_hash_mb,
                 body.sf_limit_type, body.sf_limit_value, body.sf_skill_level,
-                body.maia_path, body.maia_model_size, body.maia_elo_min, body.maia_elo_max, body.maia_elo_step, body.maia_elo_step_batch, body.maia_multipv, body.min_think_ms,
+                body.maia_path, body.maia_model_size, body.maia_elo_min, body.maia_elo_max, body.maia_elo_step, body.maia_elo_step_batch, body.maia_multipv, int(body.maia_policy), body.min_think_ms,
                 json.dumps(body.maia_options or {}), json.dumps(body.stockfish_options or {}),
                 body.great_max_drop, body.great_max_match_rate, int(body.brilliant_enabled),
                 body.maia_accuracy_offset,

@@ -291,7 +291,11 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
           window: tuple[int, str] | None = None,
           objective: str = elo_sweep.DEFAULT_OBJECTIVE) -> dict:
     # Same collection the pooled estimate uses, so a bucket and the overall
-    # number are always built from exactly the same rows.
+    # number are always built from exactly the same rows -- and the same
+    # fallback for an unrecognised objective, so a bucket can never end up
+    # fitted differently from the number above it.
+    if objective not in elo_sweep.OBJECTIVES:
+        objective = elo_sweep.DEFAULT_OBJECTIVE
     entries, skipped = strength.collect(user_id, run_id)
     settings = strength.get_effective_settings(user_id)
     # Same think-time rule as the pooled estimate, so a bucket and the overall
@@ -385,6 +389,7 @@ def build(user_id: int, granularity: str, run_id: int | None = None,
 
     return {
         "granularity": granularity,
+        "objective": objective,
         "window": window_info,
         "buckets": buckets,
         "trend": _slope(estimated_points, granularity),

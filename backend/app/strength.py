@@ -1,10 +1,14 @@
 """Pooled strength estimate across a whole library of games (spec section 9).
 
-The per-game Elo estimate is honest but nearly useless on its own: one game is
-about 25 of your moves, half of them uninformative, and simulated at that size
-the estimate has a standard deviation near 90 Elo even with the current fit.
-The signal is there, it is just spread across your games -- so this pools every
-position from every game that has a stored sweep and fits one curve to the lot.
+One game is about 25 of your moves, and under the top-1 objective that was not
+enough to estimate anything: simulated at that size it gave a spread of 275 Elo
+over seeds and an interval that covered the truth 62% of the time. The
+likelihood objective (`policy_likelihood`) brings that to 80 Elo and 97%, so a
+single game is now worth showing -- but the interval is still around +-180 Elo
+and rests on treating one game's moves as independent, which they are not.
+
+So pooling is still where the number to act on comes from. This fits one curve
+to every position from every game that has a stored sweep.
 
 Two things fall out of pooling that a single game can't give you:
 
