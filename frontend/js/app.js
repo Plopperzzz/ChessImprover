@@ -2561,7 +2561,28 @@ function renderStrength(d, status, body) {
   // peaks, one from how high it got -- so a wide gap is not an error, it is
   // the part of someone's play that a single strength doesn't describe.
   const pr = d.predictability || {};
-  if (pr.available) {
+  if (pr.available && pr.scale === 'logp') {
+    // The likelihood's own version, on an absolute scale: how close the model
+    // got to predicting these moves as well as it predicts anyone, where 0%
+    // would be no better than guessing among legal moves.
+    const share = Math.round((pr.reached ?? 0) * 100);
+    note.innerHTML +=
+      `<div class="cal-detail">Maia predicted your moves at <b>${pr.observed}</b> nats per `
+      + `move, against the <b>${pr.expected}</b> it manages on a player whose rating it has `
+      + `right and the ${pr.unpredictable} that guessing among legal moves scores — `
+      + `<b>${share}%</b> of the way from guessing to fully predicted. `
+      + (share >= 90
+          ? `Your play is about as consistent as the field at your level.`
+          : `Your moves are spread across a wider range of strengths than one rating `
+            + `explains, so the estimate describes a broader spread than usual.`)
+      + `</div>`
+      // Only worth saying when the filter actually removed something: it runs
+      // on every library, and most carry no move fast enough to drop.
+      + (pr.think_filtered && (d.think_filter || {}).dropped
+          ? `<div class="cal-detail">Instant moves were left out before this was measured, `
+            + `which raises it — the moves dropped are the least predictable ones.</div>` : '')
+      + `<div class="cal-detail scale-note">${pr.note}</div>`;
+  } else if (pr.available) {
     const pct = (v) => `${(v * 100).toFixed(1)}%`;
     const over = pr.observed >= pr.expected;
     note.innerHTML +=

@@ -373,6 +373,32 @@ def _predictability(you: dict, think: dict, top_n: int) -> dict:
     error bar -- it is the part of someone's play that strength alone doesn't
     describe.
     """
+    # Under the likelihood objective this comes out of the fit itself. Mean log
+    # probability per move sits between two fixed points -- what the model
+    # manages on a player whose rating it has right, and what guessing among
+    # legal moves scores -- so "how predictable is this player" needs no
+    # published curve, no model-size anchor and no blitz caveat. It is the same
+    # quantity the top-1 branch below approximates with a match rate, measured
+    # better.
+    if (you or {}).get("mean_logp") is not None and you.get("well_predicted_logp"):
+        best = max(you.get("full_match_rates") or [you["mean_logp"]])
+        expected, floor = you["well_predicted_logp"], you["unpredictable_logp"]
+        reached = (best - floor) / (expected - floor) if expected != floor else None
+        return {
+            "available": True,
+            "scale": "logp",
+            "observed": round(best, 3),
+            "expected": round(expected, 3),
+            "unpredictable": round(floor, 3),
+            # 1.0 means "as predictable as the population Maia was measured on",
+            # 0.0 means "no better than guessing".
+            "reached": round(reached, 3) if reached is not None else None,
+            "think_filtered": bool(think.get("applied")),
+            "note": ("Measured on an absolute scale -- log probability per move -- so it is "
+                     "comparable across your games and grids without the blitz correction the "
+                     "top-1 match rate needs."),
+        }
+
     ceiling = (you or {}).get("ceiling")
     if not ceiling:
         return {
