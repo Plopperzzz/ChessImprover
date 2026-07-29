@@ -7,6 +7,33 @@ Anything already built lives in the README; this file is only what isn't.
 
 ---
 
+## 0. Carry the library filter into Progress
+
+**Why:** the Games panel can now narrow the library to a speed, an exact time
+control or a group, and the batch runner honours it — but **Progress does
+not**. The strength estimate and the trend still pool every analysed game in
+the run, so filtering to rapid and running a batch gives you rapid-only
+*analyses* that are then averaged back together with your bullet games the
+moment you look at the number.
+
+**What:** the same filter controls on Progress, applied to which `run_games`
+the fit pools. A speed selector is the minimum; the group selector is the same
+query and comes free with it.
+
+**Data:** all present. `games.speed`, `games.time_control` and
+`game_collections` are already joined to `run_games` by `game_id`, and
+`app/games.py:game_filter_sql` is the fragment to reuse — it is what the
+picker and the batch already share, and a third caller is exactly what it was
+factored out for.
+
+**Watch out for:** the interval widens as the pool shrinks, and a per-speed fit
+on a library that is 90% blitz will give a rapid estimate off twenty games.
+Report the count and the interval the way the trend view already does for
+sparse buckets, and don't let a filtered view quietly present a much weaker
+estimate in the same typeface as a strong one.
+
+---
+
 ## 1. Opening repertoire report
 
 **Why:** the app can already say *that* you lost the game and *where*. It

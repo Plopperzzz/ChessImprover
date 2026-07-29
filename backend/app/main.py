@@ -8,6 +8,8 @@ from starlette.types import Scope
 
 from .analysis import router as analysis_router
 from .batch import router as batch_router
+from .chesscom import router as chesscom_router
+from .collections import router as collections_router
 from .analysis import ws_router as analysis_ws_router
 from .auth import require_user
 from .auth import router as auth_router
@@ -50,7 +52,12 @@ async def on_shutdown():
 
 app.include_router(auth_router)
 app.include_router(settings_router)
+# Before the games router: its '/{game_id}' route is a single segment and
+# can't swallow these, but keeping the more specific prefix first makes that
+# independent of how the other router's paths evolve.
+app.include_router(chesscom_router)
 app.include_router(games_router)
+app.include_router(collections_router)
 app.include_router(ws_router)
 app.include_router(analysis_router)
 app.include_router(analysis_ws_router)

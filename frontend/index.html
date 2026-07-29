@@ -152,6 +152,30 @@
             <textarea id="pgn-paste" placeholder="...or paste PGN text here"></textarea>
             <button id="pgn-upload-btn">Upload</button>
             <div id="upload-status"></div>
+
+            <!-- Straight from chess.com instead of exporting by hand. The
+                 monthly archives carry the clock comments, which is what the
+                 Elo fit needs to tell a considered move from a premove. -->
+            <div class="cc-import">
+              <h4>...or download from chess.com</h4>
+              <div class="cc-row">
+                <input type="text" id="cc-username" placeholder="chess.com username" />
+                <button id="cc-find-btn">Find months</button>
+              </div>
+              <div id="cc-status" class="hint"></div>
+              <div id="cc-months"></div>
+              <div class="cc-row cc-actions hidden" id="cc-actions">
+                <button type="button" id="cc-select-new">Select months I don't have</button>
+                <button type="button" id="cc-clear">Clear</button>
+                <button type="button" id="cc-import-btn" class="cc-go">Download selected</button>
+              </div>
+              <!-- Filing the download straight into a group, so a tournament
+                   month doesn't have to be found again afterwards. -->
+              <div class="cc-row cc-actions hidden" id="cc-group-row">
+                <label for="cc-collection">Add to group</label>
+                <select id="cc-collection"><option value="">none</option></select>
+              </div>
+            </div>
             <!-- Sets the board and nothing else: no game is loaded, and the
                  library selection is left where it was. -->
             <div class="fen-row">
@@ -167,6 +191,39 @@
         <details class="panel collapsible" id="games-panel" open>
           <summary><h3>Games</h3><span class="panel-summary" id="games-summary"></span></summary>
           <div class="collapsible-body">
+            <!-- Narrowing the library comes before the list of it: the speed
+                 row is built from the time controls you have actually played,
+                 so it says nothing about buckets you have no games in. -->
+            <div id="game-filters">
+              <div class="filter-row" id="speed-chips"></div>
+              <div class="filter-row" id="control-chips"></div>
+              <div class="filter-row">
+                <select id="collection-filter" title="Show only games in one group">
+                  <option value="">All groups</option>
+                </select>
+                <button type="button" id="collection-new" title="Make a new group">+ Group</button>
+                <button type="button" id="collection-rename" class="hidden">Rename</button>
+                <button type="button" id="collection-delete" class="hidden">Delete group</button>
+              </div>
+            </div>
+
+            <!-- Bulk actions act on the ticked games, or -- when nothing is
+                 ticked -- on nothing at all. "Everything matching the filter"
+                 is reachable through Select all, which says how many that is
+                 before you press anything destructive. -->
+            <div class="games-tools" id="bulk-tools">
+              <label class="bulk-all">
+                <input type="checkbox" id="select-all" />
+                <span id="select-all-label">Select all</span>
+              </label>
+              <span id="selection-count" class="muted-note"></span>
+              <span class="spacer"></span>
+              <select id="bulk-group-target" class="hidden"></select>
+              <button type="button" id="bulk-add" class="hidden">Add to group</button>
+              <button type="button" id="bulk-remove" class="hidden">Remove from group</button>
+              <button type="button" id="bulk-delete" class="hidden danger">Delete selected</button>
+            </div>
+
             <div id="game-picker"></div>
             <!-- A game is "unassigned" when neither PGN header matched your
                  names. Re-checking is the one-click fix after a rename; the
@@ -216,6 +273,11 @@
               </select>
             </label>
           </div>
+          <!-- Says which games the run will actually cover. The batch honours
+               the Games panel's filter, and a run over "rapid only" against a
+               run over everything are different enough numbers that it has to
+               be visible before you start, not after. -->
+          <div id="batch-scope-note" class="muted-note"></div>
           <div class="play-buttons">
             <button id="batch-start">Start batch</button>
             <button id="batch-cancel" class="hidden">Cancel</button>
