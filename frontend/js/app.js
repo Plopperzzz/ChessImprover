@@ -34,6 +34,16 @@ const state = {
   // flipped. The nav flip button sets this override for the current game;
   // selecting another game clears it.
   flipOverride: false,
+  // Which slice of the library is on show. Sent to the server rather than
+  // applied here, so the picker, the bulk actions and a batch run all agree
+  // on what "these games" means.
+  filter: { speed: null, timeControl: null, collectionId: null },
+  collections: [],
+  facets: { speeds: [], total: 0 },
+  // Ticked games, by id. Survives a re-render of the list; cleared when the
+  // filter changes, because a selection you can no longer see is a selection
+  // you can't check before deleting.
+  selectedIds: new Set(),
 };
 
 async function api(path, opts = {}) {
@@ -293,6 +303,7 @@ async function initApp() {
   wireFenBox();
   wireLiveLines();
   wirePgnUpload();
+  wireLibraryTools();
   wireSettingsDialog();
   wireAnalysis();
   wireSweep();
@@ -308,7 +319,7 @@ async function initApp() {
   connectLiveEval();
 
   await refreshRunPicker();
-  await refreshGameList();
+  await refreshLibrary();
   syncBoardFull();
   await reattachRunningJobs();
 }
@@ -425,15 +436,20 @@ function wireCollapsibles() {
     also hide which game is loaded. */
 function refreshPanelSummaries() {
   const selected = state.games.find((g) => g.id === state.selectedGameId);
+  const shown = state.games.length;
+  // The whole library, not the filtered slice: "no games yet" and "no games
+  // matching this filter" are different states and must not read the same.
+  const total = state.facets.total;
+  const filtered = shown !== total;
   document.getElementById('games-summary').textContent = selected
     ? gameLabel(selected)
-    : `${state.games.length} game${state.games.length === 1 ? '' : 's'}`;
+    : filtered ? `${shown} of ${total} games` : `${total} game${total === 1 ? '' : 's'}`;
   document.getElementById('upload-summary').textContent =
-    state.games.length ? '' : 'no games yet — start here';
+    total ? '' : 'no games yet — start here';
   // A first-time visitor needs the upload box open; once there are games it's
   // in the way. Decided once, and after that the panel remembers.
   if (localStorage.getItem('open:upload-panel') === null) {
-    document.getElementById('upload-panel').open = state.games.length === 0;
+    document.getElementById('upload-panel').open = total === 0;
   }
 }
 
@@ -1201,7 +1217,7 @@ function wirePgnUpload() {
       status.textContent = `Parsed ${result.created} game(s).`;
       document.getElementById('pgn-files').value = '';
       document.getElementById('pgn-paste').value = '';
-      await refreshGameList();
+      await refreshLibrary();
     } catch (e) {
       status.textContent = 'Error: ' + e.message;
     }
@@ -1225,8 +1241,321 @@ function wirePgnUpload() {
 }
 
 async function refreshGameList() {
-  state.games = await api('/api/games');
+  const query = filterQuery();
+  state.games = await api('/api/games' + (query ? `?${query}` : ''));
+  // A game that has left the filter (or the library) must not stay ticked:
+  // "delete selected" has to mean the rows in front of you.
+  const visible = new Set(state.games.map((g) => g.id));
+  for (const id of [...state.selectedIds]) if (!visible.has(id)) state.selectedIds.delete(id);
   renderGamePicker();
+  renderBulkTools();
+}
+
+/** The current filter as query parameters, shared by the game list, the
+    bulk actions and the batch preview so they can't drift apart. */
+function filterQuery() {
+  const p = new URLSearchParams();
+  if (state.filter.speed) p.set('speed', state.filter.speed);
+  if (state.filter.timeControl) p.set('time_control', state.filter.timeControl);
+  if (state.filter.collectionId) p.set('collection_id', state.filter.collectionId);
+  return p.toString();
+}
+
+/** The same thing as a JSON body, for the endpoints that take one. */
+function filterBody() {
+  const body = {};
+  if (state.filter.speed) body.speed = state.filter.speed;
+  if (state.filter.timeControl) body.time_control = state.filter.timeControl;
+  if (state.filter.collectionId) body.collection_id = state.filter.collectionId;
+  return body;
+}
+
+/* ---------------- Time controls, groups and the library filter ----------------
+   The speed buckets are chess.com's, because the games come from there: a
+   library that called 3+2 something other than blitz would be useless for
+   comparing against the rating the site gives you. */
+
+const SPEED_ICONS = { bullet: '🚀', blitz: '⚡', rapid: '⏱', daily: '📆', unknown: '?' };
+
+/** '600+5' as the label chess.com would put on it ('10 + 5'). Seconds under a
+    minute stay seconds, because "0.5 min" helps nobody. */
+function formatTimeControl(raw) {
+  if (!raw) return 'no clock';
+  const [movesPart, slash, rest] = raw.includes('/')
+    ? [raw.split('/')[0], true, raw.split('/').slice(1).join('/')] : [null, false, raw];
+  const [baseStr, incStr] = rest.split('+');
+  const base = Number(baseStr);
+  if (!Number.isFinite(base)) return raw;
+  if (slash && Number(movesPart) === 1 && base >= 86400) {
+    const days = Math.round(base / 86400);
+    return `${days} day${days === 1 ? '' : 's'}`;
+  }
+  const inc = Number(incStr);
+  const minutes = base % 60 === 0 ? base / 60 : null;
+  // chess.com's own convention: the unit is dropped once an increment is
+  // shown ('10 + 5', not '10 min + 5'), and sub-minute bases keep 'sec'.
+  if (inc) return minutes ? `${minutes} + ${inc}` : `${base} sec + ${inc}`;
+  return minutes ? `${minutes} min` : `${base} sec`;
+}
+
+async function refreshCollections() {
+  state.collections = await api('/api/collections');
+  renderCollectionControls();
+  // Making the first group has to reveal the actions that need one to exist.
+  renderBulkTools();
+}
+
+async function refreshFacets() {
+  state.facets = await api('/api/games/facets');
+  renderSpeedChips();
+  renderControlChips();
+}
+
+/** Everything about the library at once: what buckets exist, what groups
+    exist, and the games themselves under the current filter. */
+async function refreshLibrary() {
+  await Promise.all([refreshFacets(), refreshCollections()]);
+  await refreshGameList();
+  refreshBatchScopeNote();
+}
+
+function chip(label, count, on, onClick, title) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'filter-chip' + (on ? ' on' : '');
+  b.textContent = label;
+  if (title) b.title = title;
+  if (count !== null && count !== undefined) {
+    const n = document.createElement('span');
+    n.className = 'chip-count';
+    n.textContent = count;
+    b.appendChild(n);
+  }
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+/** Changing what you're looking at drops the selection: a tick you can no
+    longer see is exactly the tick that makes a bulk delete a mistake. */
+async function setFilter(patch) {
+  Object.assign(state.filter, patch);
+  state.selectedIds.clear();
+  renderSpeedChips();
+  renderControlChips();
+  renderCollectionControls();
+  await refreshGameList();
+  refreshBatchScopeNote();
+}
+
+function renderSpeedChips() {
+  const wrap = document.getElementById('speed-chips');
+  wrap.replaceChildren();
+  const speeds = state.facets.speeds || [];
+  // With one bucket there is nothing to choose between, so the row would be
+  // a filter that can only be switched off.
+  if (speeds.length < 2) return;
+  wrap.appendChild(chip('All', state.facets.total, !state.filter.speed,
+    () => setFilter({ speed: null, timeControl: null })));
+  for (const s of speeds) {
+    wrap.appendChild(chip(
+      `${SPEED_ICONS[s.speed] || ''} ${s.speed}`.trim(), s.games,
+      state.filter.speed === s.speed,
+      () => setFilter({ speed: s.speed, timeControl: null }),
+      s.speed === 'unknown'
+        ? 'Games whose export carried no usable TimeControl header'
+        : null,
+    ));
+  }
+}
+
+/** The exact controls inside the chosen speed. Only shown once a speed is
+    picked and there is more than one control in it -- the point is telling
+    10+5 from 15+10, not listing every control you own. */
+function renderControlChips() {
+  const wrap = document.getElementById('control-chips');
+  wrap.replaceChildren();
+  const bucket = (state.facets.speeds || []).find((s) => s.speed === state.filter.speed);
+  if (!bucket || bucket.controls.length < 2) return;
+  wrap.appendChild(chip(`Any ${bucket.speed}`, bucket.games, !state.filter.timeControl,
+    () => setFilter({ timeControl: null })));
+  for (const c of bucket.controls) {
+    wrap.appendChild(chip(formatTimeControl(c.time_control), c.games,
+      state.filter.timeControl === c.time_control,
+      () => setFilter({ timeControl: c.time_control }), c.time_control));
+  }
+}
+
+function renderCollectionControls() {
+  const select = document.getElementById('collection-filter');
+  const current = state.filter.collectionId;
+  select.replaceChildren();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = state.collections.length ? 'All groups' : 'No groups yet';
+  select.appendChild(all);
+  for (const c of state.collections) {
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = `${c.name} (${c.game_count})`;
+    select.appendChild(o);
+  }
+  select.value = current ? String(current) : '';
+  // Rename/delete apply to the group being shown, so they only exist when
+  // one is.
+  document.getElementById('collection-rename').classList.toggle('hidden', !current);
+  document.getElementById('collection-delete').classList.toggle('hidden', !current);
+
+  // The two other places a group can be chosen: the bulk-action target and
+  // the chess.com importer.
+  for (const id of ['bulk-group-target', 'cc-collection']) {
+    const box = document.getElementById(id);
+    if (!box) continue;
+    const keep = box.value;
+    box.replaceChildren();
+    if (id === 'cc-collection') {
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'none';
+      box.appendChild(none);
+    }
+    for (const c of state.collections) {
+      const o = document.createElement('option');
+      o.value = c.id;
+      o.textContent = c.name;
+      box.appendChild(o);
+    }
+    // Default the bulk target to the group on show: "add these to the group
+    // I'm looking at" is not the common case, but "remove them from it" is.
+    box.value = [...box.options].some((o) => o.value === keep) ? keep
+      : (id === 'bulk-group-target' && current ? String(current) : '');
+  }
+  const ccRow = document.getElementById('cc-group-row');
+  if (ccRow) ccRow.classList.toggle('hidden', state.collections.length === 0);
+}
+
+function renderBulkTools() {
+  const n = state.selectedIds.size;
+  const shown = state.games.length;
+  const anySelected = n > 0;
+  document.getElementById('selection-count').textContent =
+    anySelected ? `${n} of ${shown} selected` : '';
+  const all = document.getElementById('select-all');
+  all.checked = shown > 0 && n === shown;
+  all.indeterminate = anySelected && n < shown;
+  all.disabled = shown === 0;
+  document.getElementById('select-all-label').textContent =
+    shown === 0 ? 'Select all' : `Select all ${shown}`;
+  document.getElementById('bulk-delete').classList.toggle('hidden', !anySelected);
+  document.getElementById('bulk-add').classList.toggle('hidden',
+    !anySelected || state.collections.length === 0);
+  // Removing from a group is only meaningful while one is on show.
+  document.getElementById('bulk-remove').classList.toggle('hidden',
+    !anySelected || !state.filter.collectionId);
+  document.getElementById('bulk-group-target').classList.toggle('hidden',
+    !anySelected || state.collections.length === 0);
+}
+
+function wireLibraryTools() {
+  document.getElementById('collection-filter').addEventListener('change', (e) => {
+    setFilter({ collectionId: e.target.value ? Number(e.target.value) : null });
+  });
+
+  document.getElementById('collection-new').addEventListener('click', async () => {
+    const name = prompt('Name for the new group:');
+    if (name === null || !name.trim()) return;
+    try {
+      const made = await api('/api/collections', {
+        method: 'POST', body: JSON.stringify({ name }),
+      });
+      await refreshCollections();
+      // Straight into it: making a group is nearly always followed by
+      // putting something in it.
+      document.getElementById('bulk-group-target').value = String(made.id);
+    } catch (e) { alert(e.message); }
+  });
+
+  document.getElementById('collection-rename').addEventListener('click', async () => {
+    const id = state.filter.collectionId;
+    const current = state.collections.find((c) => c.id === id);
+    if (!current) return;
+    const name = prompt('New name for this group:', current.name);
+    if (name === null || !name.trim() || name === current.name) return;
+    try {
+      await api(`/api/collections/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+      await refreshCollections();
+    } catch (e) { alert(e.message); }
+  });
+
+  document.getElementById('collection-delete').addEventListener('click', async () => {
+    const id = state.filter.collectionId;
+    const current = state.collections.find((c) => c.id === id);
+    if (!current) return;
+    // Worth being explicit: "delete group" beside a list of games reads like
+    // it deletes the games, and it does not.
+    if (!confirm(`Delete the group "${current.name}"?\n\n`
+      + `The ${current.game_count} game(s) in it stay in your library — only the group goes.`)) return;
+    await api(`/api/collections/${id}`, { method: 'DELETE' });
+    await setFilter({ collectionId: null });
+    await refreshCollections();
+  });
+
+  document.getElementById('select-all').addEventListener('change', (e) => {
+    state.selectedIds = e.target.checked ? new Set(state.games.map((g) => g.id)) : new Set();
+    renderGamePicker();
+    renderBulkTools();
+  });
+
+  document.getElementById('bulk-add').addEventListener('click', async () => {
+    const target = document.getElementById('bulk-group-target').value;
+    if (!target) return;
+    const res = await api(`/api/collections/${target}/games`, {
+      method: 'POST', body: JSON.stringify({ game_ids: [...state.selectedIds] }),
+    });
+    await refreshCollections();
+    await refreshGameList();
+    const name = state.collections.find((c) => c.id === Number(target))?.name || 'the group';
+    setRematchNote(res.added
+      ? `Added ${res.added} game(s) to "${name}".`
+      : `Those ${res.already_in} game(s) were already in "${name}".`);
+  });
+
+  document.getElementById('bulk-remove').addEventListener('click', async () => {
+    const id = state.filter.collectionId;
+    if (!id) return;
+    const res = await api(`/api/collections/${id}/games/remove`, {
+      method: 'POST', body: JSON.stringify({ game_ids: [...state.selectedIds] }),
+    });
+    state.selectedIds.clear();
+    await refreshCollections();
+    await refreshGameList();
+    setRematchNote(`Removed ${res.removed} game(s) from the group. They are still in your library.`);
+  });
+
+  document.getElementById('bulk-delete').addEventListener('click', async () => {
+    const ids = [...state.selectedIds];
+    if (!ids.length) return;
+    const analysed = state.games.filter((g) => ids.includes(g.id) && g.analyzed).length;
+    const extra = analysed ? `\n\n${analysed} of them have a saved analysis, which goes too.` : '';
+    if (!confirm(`Delete ${ids.length} game(s)?${extra}\n\nThis cannot be undone.`)) return;
+    const res = await api('/api/games/bulk-delete', {
+      method: 'POST', body: JSON.stringify({ game_ids: ids }),
+    });
+    // The loaded game may have been one of them.
+    if (state.selectedGameId && ids.includes(state.selectedGameId)) {
+      state.selectedGameId = null;
+      resetAnalysisState();
+    }
+    state.selectedIds.clear();
+    await refreshLibrary();
+    setRematchNote(`Deleted ${res.deleted} game(s).`);
+  });
+}
+
+/** The status line under the game list, reused by the bulk actions -- they
+    happen right above it and it is where the outcome of the last thing you
+    pressed already appears. */
+function setRematchNote(text) {
+  document.getElementById('rematch-status').textContent = text;
 }
 
 /* ---------------- Download from chess.com ----------------
@@ -1339,14 +1668,19 @@ function wireChesscomImport() {
       for (let i = 0; i < months.length; i += CC_MONTHS_PER_REQUEST) {
         const chunk = months.slice(i, i + CC_MONTHS_PER_REQUEST);
         ccStatus(`Downloading ${done + 1}-${done + chunk.length} of ${months.length} month(s)...`);
+        const target = document.getElementById('cc-collection').value;
         const res = await api('/api/games/chesscom/import', {
-          method: 'POST', body: JSON.stringify({ username, months: chunk }),
+          method: 'POST', body: JSON.stringify({
+            username, months: chunk,
+            collection_id: target ? Number(target) : null,
+          }),
         });
         added += res.added; skipped += res.skipped; clocked += res.with_clocks;
         done += chunk.length;
         // After every chunk, so a long import fills the library as it goes
-        // rather than all at the end.
-        await refreshGameList();
+        // rather than all at the end. The whole library, not just the list:
+        // new games change the speed counts and the group sizes too.
+        await refreshLibrary();
       }
       await loadMonths(true);   // repaint the "held" counts against the new library
       // Clocks are called out because they're the reason to import this way:
@@ -1356,7 +1690,7 @@ function wireChesscomImport() {
     } catch (e) {
       ccStatus(`Stopped after ${done} of ${months.length} month(s): ${e.message}`
         + (added ? ` ${added} game(s) were saved.` : ''), true);
-      await refreshGameList();
+      await refreshLibrary();
     } finally {
       button.disabled = false;
     }
@@ -1376,15 +1710,44 @@ function renderGamePicker() {
   wrap.innerHTML = '';
   refreshPanelSummaries();
   if (state.games.length === 0) {
-    wrap.innerHTML = '<p style="color:var(--muted);font-size:13px;">No games loaded yet.</p>';
+    const filtered = state.filter.speed || state.filter.timeControl || state.filter.collectionId;
+    wrap.innerHTML = filtered
+      ? '<p style="color:var(--muted);font-size:13px;">No games match this filter.</p>'
+      : '<p style="color:var(--muted);font-size:13px;">No games loaded yet.</p>';
     return;
   }
   for (const g of state.games) {
     const row = document.createElement('div');
     row.className = 'game-row' + (g.id === state.selectedGameId ? ' active' : '');
+
+    const tick = document.createElement('input');
+    tick.type = 'checkbox';
+    tick.className = 'game-select';
+    tick.checked = state.selectedIds.has(g.id);
+    tick.title = 'Select for a bulk action';
+    tick.addEventListener('click', (ev) => ev.stopPropagation());  // not also load it
+    tick.addEventListener('change', () => {
+      if (tick.checked) state.selectedIds.add(g.id); else state.selectedIds.delete(g.id);
+      renderBulkTools();
+    });
+    row.appendChild(tick);
+
     const left = document.createElement('span');
+    left.className = 'game-label';
     left.textContent = gameLabel(g);
     row.appendChild(left);
+
+    // What the filter decided about this game, so the buckets are checkable
+    // rather than taken on trust. Dimmed when the game carries no clocks,
+    // which is what the Elo fit's instant-move filter needs.
+    const tc = document.createElement('span');
+    tc.className = 'game-tc' + (g.has_clocks ? '' : ' no-clock');
+    tc.textContent = formatTimeControl(g.time_control);
+    tc.title = g.has_clocks
+      ? `${g.speed || 'unknown speed'} — has clock times`
+      : `${g.speed || 'unknown speed'} — no clock times in this export`;
+    row.appendChild(tc);
+
     row.appendChild(colorControl(g));
     if (g.analyzed) {
       const mark = document.createElement('span');
@@ -1407,7 +1770,7 @@ function renderGamePicker() {
         state.selectedGameId = null;
         resetAnalysisState();
       }
-      await refreshGameList();
+      await refreshLibrary();
     });
     row.appendChild(del);
     row.addEventListener('click', () => selectGame(g.id));
@@ -2173,12 +2536,33 @@ function wireBatch() {
 
 /** Says how many games a batch would cover before committing to what may be
     a very long run. */
+/** Names the slice of the library a batch would run over, in the batch panel
+    -- the filter that decides it lives in another panel, and a run over your
+    rapid games only is a different number from a run over everything. */
+function refreshBatchScopeNote() {
+  const note = document.getElementById('batch-scope-note');
+  if (!note) return;
+  const bits = [];
+  if (state.filter.timeControl) bits.push(formatTimeControl(state.filter.timeControl));
+  else if (state.filter.speed) bits.push(state.filter.speed);
+  if (state.filter.collectionId) {
+    const group = state.collections.find((c) => c.id === state.filter.collectionId);
+    if (group) bits.push(`group "${group.name}"`);
+  }
+  note.textContent = bits.length
+    ? `Limited to ${bits.join(', ')} — the filter set in Games. Clear it there to run over everything.`
+    : '';
+  refreshBatchPreview();
+}
+
 async function refreshBatchPreview() {
   if (state.batchJobId) return; // mid-run, the status line is more useful
   const mode = document.getElementById('batch-mode').value;
   const scope = document.getElementById('batch-scope').value;
+  const filter = filterQuery();
   try {
-    const info = await api(`/api/batch/preview?mode=${mode}&scope=${scope}`);
+    const info = await api(`/api/batch/preview?mode=${mode}&scope=${scope}`
+      + (filter ? `&${filter}` : ''));
     if (state.batchJobId) return;   // reattached while this was in flight
     document.getElementById('batch-status').textContent =
       info.count ? `${info.count} game(s) would be analysed.` : 'Nothing to analyse for that selection.';
@@ -2196,7 +2580,7 @@ async function startBatch() {
   document.getElementById('batch-status').textContent = 'Starting...';
   try {
     const res = await api('/api/batch', { method: 'POST', body: JSON.stringify({
-      mode, scope, run_id: runId ? Number(runId) : null,
+      mode, scope, run_id: runId ? Number(runId) : null, ...filterBody(),
     }) });
     attachBatch(res);
     if (res.attached) {

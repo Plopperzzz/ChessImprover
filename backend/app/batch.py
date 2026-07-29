@@ -33,6 +33,7 @@ from .auth import require_user
 from .db import db_cursor
 from .engine_manager import register_job_engine, unregister_job_engine
 from .engine_settings import get_effective_settings
+from .games import game_filter_sql
 from .jobqueue import pool, slots_for
 from .runs import save_analysis
 from .sweep_job import (_estimates, _rows_by_ply, _store_matrices, _sweep_core,
@@ -41,30 +42,34 @@ from .sweep_job import (_estimates, _rows_by_ply, _store_matrices, _sweep_core,
 router = APIRouter(prefix="/api/batch", tags=["batch"])
 
 
-def _select_games(user_id: int, scope: str, mode: str) -> list[dict]:
-    """Which games the batch will cover. 'unanalyzed' skips games that already
-    have a result for this mode, so a re-run after a cancel picks up where it
-    left off rather than redoing everything."""
+def _select_games(user_id: int, scope: str, mode: str, speed: str | None = None,
+                  time_control: str | None = None,
+                  collection_id: int | None = None) -> list[dict]:
+    """Which games the batch will cover.
+
+    'unanalyzed' skips games that already have a result for this mode, so a
+    re-run after a cancel picks up where it left off rather than redoing
+    everything.
+
+    The speed/group filters are the same ones the picker uses -- deliberately,
+    so "analyse just my rapid games" or "just this group" means exactly the
+    set of games you were looking at when you pressed the button. That is the
+    point of being able to group games at all: the strength estimate on
+    Progress is a different number for bullet than for rapid, and pooling them
+    answers a question nobody asked.
+    """
+    where, params = game_filter_sql(user_id, speed, time_control, collection_id)
+    if scope == "unanalyzed":
+        where += (" AND NOT EXISTS (SELECT 1 FROM run_games rg "
+                  "WHERE rg.game_id = g.id AND rg.user_id = g.user_id AND rg.mode = ?)")
+        params = [*params, mode]
     with db_cursor() as conn:
-        if scope == "unanalyzed":
-            rows = conn.execute(
-                """SELECT g.id, g.white, g.black, g.result, g.utc_date_header,
-                          g.your_color, g.pgn_text
-                   FROM games g
-                   WHERE g.user_id = ?
-                     AND NOT EXISTS (
-                       SELECT 1 FROM run_games rg
-                       WHERE rg.game_id = g.id AND rg.user_id = g.user_id AND rg.mode = ?
-                     )
-                   ORDER BY g.id""",
-                (user_id, mode),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """SELECT id, white, black, result, utc_date_header, your_color, pgn_text
-                   FROM games WHERE user_id = ? ORDER BY id""",
-                (user_id,),
-            ).fetchall()
+        rows = conn.execute(
+            f"""SELECT g.id, g.white, g.black, g.result, g.utc_date_header,
+                       g.your_color, g.pgn_text
+                FROM games g WHERE {where} ORDER BY g.id""",
+            params,
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -196,6 +201,11 @@ class BatchIn(BaseModel):
     mode: str = "quick"          # 'quick' | 'full'
     scope: str = "unanalyzed"    # 'unanalyzed' | 'all'
     run_id: int | None = None
+    # The library filter the picker was showing when Start was pressed, so a
+    # batch covers the games you were looking at and not the whole library.
+    speed: str | None = None
+    time_control: str | None = None
+    collection_id: int | None = None
 
 
 def active_batch(user_id: int) -> AnalysisJob | None:
@@ -222,7 +232,8 @@ async def start_batch(body: BatchIn, user: dict = Depends(require_user)):
             raise HTTPException(409, "the previous batch is still stopping -- try again in a moment")
         return {"job_id": running.job_id, "total": running.total, "attached": True}
 
-    games = _select_games(user["id"], body.scope, body.mode)
+    games = _select_games(user["id"], body.scope, body.mode, body.speed,
+                          body.time_control, body.collection_id)
     if not games:
         raise HTTPException(400, "no games to analyse for that selection")
     settings = get_effective_settings(user["id"])
@@ -236,10 +247,14 @@ async def start_batch(body: BatchIn, user: dict = Depends(require_user)):
 
 
 @router.get("/preview")
-def preview_batch(mode: str = "quick", scope: str = "unanalyzed", user: dict = Depends(require_user)):
+def preview_batch(mode: str = "quick", scope: str = "unanalyzed",
+                  speed: str | None = None, time_control: str | None = None,
+                  collection_id: int | None = None,
+                  user: dict = Depends(require_user)):
     """How many games a batch would cover, so the button can say so before
     committing to a long run."""
-    return {"count": len(_select_games(user["id"], scope, mode))}
+    return {"count": len(_select_games(user["id"], scope, mode, speed,
+                                       time_control, collection_id))}
 
 
 @router.post("/{job_id}/cancel")

@@ -22,8 +22,9 @@ the whole build order from the spec.
 Beyond the spec: the page is split into four tabs rather than one long column,
 puzzles built from your own mistakes, pre-moves, looking back through a game
 while you're playing it, separate board/piece sets, an opening database
-built from a PGN library that answers the board as you move, and downloading
-your library straight from chess.com with the clocks intact. What's next is in
+built from a PGN library that answers the board as you move, downloading
+your library straight from chess.com with the clocks intact, and filtering it
+by time control into groups you can analyse or delete in bulk. What's next is in
 [`docs/TODO.md`](docs/TODO.md).
 
 ### The four tabs
@@ -61,7 +62,8 @@ lands wherever the job got to.
 
 The **Games** list is collapsible and remembers whether you left it open.
 Folded, its header still says which game is loaded, which is all you want from
-it once a game is on the board. **Load games** is collapsible too, and starts
+it once a game is on the board — or, while a filter is on, how much of the
+library you are looking at ("14 of 312 games"). **Load games** is collapsible too, and starts
 open only while your library is empty.
 
 ### Sharing the machine (worker pool)
@@ -489,9 +491,51 @@ analysis that goes, so a run swept with settings you've since changed can be
 redone rather than lived with. The default run is emptied rather than removed,
 since something has to catch the next analysis and most work lands there.
 
-Games can be deleted from the picker. Deleting cascades to any saved
-analysis of that game, and drops the uploaded PGN blob once its last game is
-gone.
+Games can be deleted from the picker, one at a time or in bulk (below).
+Deleting cascades to any saved analysis of that game, and drops the uploaded
+PGN blob once its last game is gone.
+
+### Filtering the library, and groups
+
+A library downloaded from chess.com is a mixture of speeds, and pooling it is
+what makes the strength estimate hard to read: your bullet games and your
+rapid games are not evidence about the same player. The **Games** panel filters
+by time control, and the filter reaches everything that acts on a set of games.
+
+**Speed chips** — Bullet / Blitz / Rapid / Daily, each with how many games you
+have in it, plus **unknown** for exports that carried no usable `TimeControl`
+header. Pick a speed and a second row appears with the exact controls inside
+it (10 min, 10 + 5, 15 + 10), so 10+5 and 15+10 can be told apart and not just
+lumped together as rapid.
+
+These are **chess.com's buckets and chess.com's rule**, deliberately. A control
+is scored by how long a game under it is expected to last — the base plus
+forty moves' worth of increment — which is why 2+1 is bullet and 3+2 is blitz.
+Every control in chess.com's own picker lands where chess.com files it. There
+is no *classical*: chess.com has no such class and calls its 60-minute games
+rapid, so a 90+30 game from elsewhere comes out rapid here too. Disagreeing
+with the site the games came from would make the numbers useless for comparing
+against the rating it gives you, which is the whole point of having them.
+
+**Groups** are named sets of games — "September tournament", "the games I lost
+to the Caro-Kann". A game can be in any number of them and in none, which is
+the normal state. They are labels, not folders: putting a game in a group
+changes nothing about the game, and **deleting a group deletes no games** (the
+confirmation says so, because a Delete button beside a list of games is worth
+being explicit about). Games can be filed into one as they are downloaded, via
+the group selector in the chess.com importer.
+
+**Bulk actions** work on the ticked games: add to a group, remove from the
+group being shown, or delete. **Select all** ticks everything the filter is
+currently showing and says how many that is, so "delete all 340 of my bullet
+games" is two clicks and a confirmation that names the number. Changing the
+filter clears the selection — a tick you can no longer see is exactly the tick
+that makes a bulk delete a mistake.
+
+**The batch runner honours the filter.** Whatever the Games panel is showing is
+what a batch covers, and the batch panel says so before you start it. That is
+what makes grouping worth doing: "analyse just my rapid games" gives a strength
+estimate for a player who exists, rather than an average of two of them.
 
 ### Analysis modes
 

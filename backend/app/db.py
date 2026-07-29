@@ -131,11 +131,41 @@ CREATE TABLE IF NOT EXISTS games (
     -- not UNIQUE: uploading the same file twice by hand is the user saying
     -- "yes, again", and only the importers dedupe on this.
     external_id TEXT,
+    -- The TimeControl header as written ('600+5'), and the speed bucket it
+    -- falls in ('bullet' | 'blitz' | 'rapid' | 'daily'). Derived at ingest and
+    -- stored rather than computed per query, because filtering the library by
+    -- them is a per-keystroke operation. Both NULL when the export carries no
+    -- usable TimeControl, which the filters treat as "unknown", never as a
+    -- bucket of its own to hide games in.
+    time_control TEXT,
+    speed TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_games_user ON games(user_id);
 CREATE INDEX IF NOT EXISTS idx_games_upload ON games(upload_id);
+
+-- A named group of games -- "my Caro-Kanns", "September tournament". A game
+-- can be in any number of them, and being in none is the normal state, so
+-- this is a tagging relation and not a folder tree.
+CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, name)
+);
+
+-- Membership. Both cascades matter: deleting a group must not delete the
+-- games in it, and deleting a game must not leave it a member of anything.
+CREATE TABLE IF NOT EXISTS game_collections (
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    added_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (collection_id, game_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_collections_game ON game_collections(game_id);
 
 -- A saved analysis run: a named container that games get appended to, so a
 -- batch (section 12) and a one-off single-game analysis are the same shape.
@@ -356,6 +386,38 @@ def _backfill_external_ids(conn):
         conn.executemany("UPDATE games SET external_id = ? WHERE id = ?", updates)
 
 
+def _backfill_time_controls(conn):
+    """Fill `games.time_control`/`games.speed` for games stored before the
+    columns existed, from the `TimeControl` header already on every row.
+
+    Without it the speed filter would show an existing library as entirely
+    "unknown" until every game was re-imported. Runs once; a game whose
+    headers carry no usable control stays NULL, which is what the filters
+    read as unknown.
+    """
+    if _applied(conn, "backfill_time_controls"):
+        return
+    from .pgn_parse import normalise_time_control, time_control_speed
+
+    rows = conn.execute(
+        "SELECT id, headers_json FROM games WHERE time_control IS NULL AND speed IS NULL"
+    ).fetchall()
+    updates = []
+    for row in rows:
+        try:
+            headers = json.loads(row["headers_json"])
+        except (ValueError, TypeError):
+            continue
+        raw = headers.get("TimeControl")
+        if normalise_time_control(raw) or time_control_speed(raw or ""):
+            updates.append((normalise_time_control(raw), time_control_speed(raw or ""),
+                            row["id"]))
+    if updates:
+        conn.executemany(
+            "UPDATE games SET time_control = ?, speed = ? WHERE id = ?", updates
+        )
+
+
 def init_db():
     conn = get_conn()
     try:
@@ -379,10 +441,13 @@ def init_db():
         _ensure_column(conn, "games", "clocks_json", "TEXT")
         _ensure_column(conn, "games", "your_color_locked", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "games", "external_id", "TEXT")
+        _ensure_column(conn, "games", "time_control", "TEXT")
+        _ensure_column(conn, "games", "speed", "TEXT")
         # After the column is guaranteed to exist, so a database created by an
         # earlier version can be indexed on the same run that adds it.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_external ON games(user_id, external_id)")
         _backfill_external_ids(conn)
+        _backfill_time_controls(conn)
         _ensure_column(conn, "sweep_positions", "think_ms", "INTEGER")
         _ensure_column(conn, "sweep_positions", "policies", "TEXT")
         _ensure_column(conn, "run_games", "maia_model_size", "TEXT")

@@ -23,7 +23,6 @@ Two things about the API that are easy to get wrong and expensive to debug:
   short calls with a progress line rather than one request that times out.
 """
 
-import json
 import re
 
 import httpx
@@ -32,7 +31,7 @@ from pydantic import BaseModel
 
 from .auth import require_user
 from .db import db_cursor
-from .pgn_parse import account_names, external_game_id, parse_games_from_text
+from .pgn_parse import account_names, insert_parsed_games, parse_games_from_text
 
 router = APIRouter(prefix="/api/games/chesscom", tags=["games"])
 
@@ -171,6 +170,10 @@ class ImportIn(BaseModel):
     username: str
     # 'YYYY-MM' labels, exactly as /archives returned them.
     months: list[str]
+    # Optional group to file the new games into as they land, so "download my
+    # tournament month into its own group" is one action rather than an
+    # import followed by hunting the same games back down in the picker.
+    collection_id: int | None = None
 
 
 def _parse_label(label: str) -> tuple[int, int]:
@@ -205,6 +208,17 @@ async def import_months(body: ImportIn, user: dict = Depends(require_user)):
         )
     wanted = [_parse_label(label) for label in body.months]
 
+    # Checked before anything is downloaded: failing after a five-minute
+    # import because the group was deleted in another tab would be rude.
+    collection_id = body.collection_id
+    if collection_id is not None:
+        with db_cursor() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM collections WHERE id = ? AND user_id = ?",
+                (collection_id, user["id"]),
+            ).fetchone():
+                raise HTTPException(404, "no such group")
+
     names = account_names(user)
     # Downloading happens outside the database transaction: a slow month
     # shouldn't hold a write lock, and nothing is inserted until its text is
@@ -232,13 +246,13 @@ async def import_months(body: ImportIn, user: dict = Depends(require_user)):
             fresh = []
             skipped = 0
             for g in games:
-                external_id = external_game_id(json.loads(g["headers_json"]))
+                external_id = g.get("external_id")
                 if external_id and external_id in seen:
                     skipped += 1
                     continue
                 if external_id:
                     seen.add(external_id)
-                fresh.append((g, external_id))
+                fresh.append(g)
             if not fresh:
                 months_out.append({"month": label, "added": 0, "skipped": skipped,
                                    "with_clocks": 0})
@@ -250,26 +264,14 @@ async def import_months(body: ImportIn, user: dict = Depends(require_user)):
                 (user["id"], source_name, raw_text),
             )
             upload_id = cur.lastrowid
-            clocked = 0
-            for g, external_id in fresh:
-                conn.execute(
-                    """INSERT INTO games (
-                        user_id, upload_id, batch_index, source_name, game_index_in_source,
-                        white, black, result, event, date_header, utc_date_header,
-                        year, month, your_color, pgn_text, headers_json, clocks_json,
-                        external_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        user["id"], upload_id, batch_index, g["source_name"],
-                        g["game_index_in_source"], g["white"], g["black"], g["result"],
-                        g["event"], g["date_header"], g["utc_date_header"], g["year"],
-                        g["month"], g["your_color"], g["pgn_text"], g["headers_json"],
-                        g.get("clocks_json"), external_id,
-                    ),
+            ids = insert_parsed_games(conn, user["id"], upload_id, fresh, batch_index)
+            batch_index += len(ids)
+            clocked = sum(1 for g in fresh if g.get("clocks_json"))
+            if collection_id:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO game_collections (collection_id, game_id) VALUES (?, ?)",
+                    [(collection_id, game_id) for game_id in ids],
                 )
-                if g.get("clocks_json"):
-                    clocked += 1
-                batch_index += 1
             months_out.append({"month": label, "added": len(fresh), "skipped": skipped,
                                "with_clocks": clocked})
             total_added += len(fresh)
