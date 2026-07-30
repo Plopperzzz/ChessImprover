@@ -141,3 +141,30 @@ enough to be useful but isn't spaced repetition. If the puzzles get used
 enough to want it, the columns to add are a next-due date and an ease factor,
 and the thing to avoid is a scheduler so eager that it shows you the same
 position every day until you resent it.
+
+Now that there's a rating (`puzzle_ratings`) and an attempt history
+(`puzzle_attempts`) with the puzzle's difficulty on every row, the scheduler
+has more to go on than "solved / not solved": the interesting signal is a
+theme whose rating is *below* your overall one, which is the honest answer to
+what to practise next. A Lichess puzzle you have attempted is currently gone
+for good — a scheduler is what would bring the ones you failed back.
+
+---
+
+## 8. Themes the tagger can't see
+
+`app/puzzle_themes.derive_themes` labels puzzles from your own games off the
+position, the solution move and the stored evaluation. Seven Lichess themes
+are out of reach that way and are never applied to a home-grown puzzle:
+`deflection`, `attraction`, `interference`, `clearance`, `zugzwang`,
+`intermezzo` and `xRayAttack`. Each needs to know *why the alternatives fail*,
+which means engine lines, not one move.
+
+The material is already there to do it: the solution is computed and stored
+per puzzle anyway, and asking Stockfish for a few plies of PV at the same time
+would cost nothing extra. The reason not to do it yet is that a
+half-implemented motif detector is worse than none — the theme picker would
+offer `deflection` and hand back a pile of positions that aren't. Whatever
+does this should be driven over known positions in
+`backend/sims/puzzle_themes_check.py`, where every case asserts what must
+*not* be tagged as well as what must.

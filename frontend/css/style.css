@@ -665,6 +665,122 @@ input[type="text"], input[type="number"], textarea, select {
 .pz-wrong { color: #e08080; }
 .pz-shown { color: #5b8dee; }
 .pz-note { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.45; }
+/* One step of a multi-move Lichess line: the move landed, the opponent
+   answered, keep going. Distinct from the plain right/wrong pair because
+   "correct so far" is a third state and reading it as a solve is the whole
+   confusion a two-move puzzle can cause. */
+.pz-onward { color: #7db37d; }
+.pz-onward .pz-step { color: var(--muted); font-size: 12px; margin-left: 6px; }
+
+/* Which set the puzzles come from. A segmented control rather than a select:
+   there are two, and which one you are on changes the whole panel. */
+.pz-sources { display: flex; gap: 0; margin-bottom: 4px; }
+.pz-source {
+  flex: 1;
+  border-radius: 0;
+  font-size: 13px;
+  color: var(--muted);
+  background: none;
+}
+.pz-source:first-child { border-radius: 6px 0 0 6px; }
+.pz-source:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.pz-source.active { color: var(--text); background: #24314a; border-color: var(--accent); z-index: 1; }
+
+/* The rating, given the room it deserves -- it is the number you come back
+   for. The deviation sits next to it rather than being hidden, because a
+   1500 that has seen three puzzles is not the same claim as a settled one. */
+.pz-rating-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.pz-rating-main { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; }
+.pz-rating-value { font-size: 22px; font-weight: bold; font-variant-numeric: tabular-nums; }
+.pz-rating-meta { font-size: 11px; color: var(--muted); }
+.pz-rating-delta { font-size: 13px; font-variant-numeric: tabular-nums; }
+.pz-rating-delta.up { color: #7db37d; }
+.pz-rating-delta.down { color: #e08080; }
+
+.pz-block { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
+.pz-block > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  list-style: none;
+}
+.pz-block > summary::-webkit-details-marker { display: none; }
+.pz-block > summary::before { content: "▸ "; display: inline-block; transition: transform .12s; }
+.pz-block[open] > summary::before { transform: rotate(90deg); }
+.pz-block > summary:hover { color: var(--text); }
+.pz-chip-count { opacity: .7; }
+
+.pz-theme-actions { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; }
+.pz-hint { font-size: 11px; color: var(--muted); }
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+.link-btn:hover { text-decoration: underline; }
+
+.pz-theme-group { margin-top: 8px; }
+.pz-theme-group-name {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.pz-theme-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+/* The same chip the library filters use, so "pick some of these" looks the
+   same everywhere in the app. */
+.pz-theme { font-size: 11px; padding: 3px 8px; }
+/* A theme you have a rating in is worth spotting in a list of sixty. */
+.pz-theme .pz-theme-rating { opacity: .8; margin-left: 5px; color: var(--accent); }
+
+/* Per-theme progress. A bar per theme, sorted strongest first, so the answer
+   to "what am I bad at" is the bottom of the list rather than arithmetic. */
+.pz-progress-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.pz-progress-row:last-child { border-bottom: none; }
+.pz-progress-name { font-size: 12px; }
+.pz-progress-rating { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: bold; }
+.pz-progress-detail { font-size: 11px; color: var(--muted); }
+.pz-progress-bar { grid-column: 1 / -1; height: 3px; background: var(--border); border-radius: 2px; }
+.pz-progress-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+.pz-progress-empty { font-size: 12px; color: var(--muted); }
+/* Provisional numbers are marked, not hidden: the honest reading of a rating
+   with three attempts behind it is "we don't know yet". */
+.pz-provisional { color: var(--muted); font-weight: normal; }
+
+.pz-import-status { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.pz-import-status b { color: var(--text); }
+.pz-inline-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+.pz-inline-check input { width: auto; }
+#pz-import-progress { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.pz-import-bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; }
+.pz-import-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .3s; }
+.pz-import-error { color: #e08080; }
 
 .panel-note { font-size: 11px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
 

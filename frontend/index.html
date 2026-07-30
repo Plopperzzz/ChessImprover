@@ -460,14 +460,30 @@
       <div class="tab-panels" id="panels-puzzles" role="tabpanel"
            aria-labelledby="tab-btn-puzzles">
         <div class="panel" id="puzzle-panel">
-          <h3>Puzzles from your games</h3>
-          <p class="panel-note">
-            Every position where you gave something away, as a puzzle. The
-            positions come from your own games — no engine runs to build them,
-            only to check an answer. The move you played is hidden until you've
-            tried, and anything as good as the engine's best counts.
-          </p>
-          <div class="play-grid">
+          <h3>Puzzles</h3>
+
+          <!-- Two sources, one trainer. They answer different questions:
+               your own games are the mistakes you actually make, and the
+               Lichess set has difficulty measured against real solvers. -->
+          <div class="pz-sources" role="tablist" aria-label="Puzzle source">
+            <button class="pz-source active" data-source="own" role="tab"
+                    aria-selected="true">From your games</button>
+            <button class="pz-source" data-source="lichess" role="tab"
+                    aria-selected="false">Lichess database</button>
+          </div>
+
+          <p class="panel-note" id="pz-source-note"></p>
+
+          <!-- Your puzzle rating, and how it's moving. -->
+          <div id="pz-rating-bar" class="pz-rating-bar hidden">
+            <div class="pz-rating-main">
+              <span class="pz-rating-value" id="pz-rating"></span>
+              <span class="pz-rating-meta" id="pz-rating-meta"></span>
+            </div>
+            <span class="pz-rating-delta" id="pz-rating-delta"></span>
+          </div>
+
+          <div class="play-grid" id="pz-own-controls">
             <label>From
               <select id="pz-scope">
                 <option value="blunder">Blunders</option>
@@ -481,6 +497,7 @@
               </select>
             </label>
           </div>
+
           <div class="play-buttons">
             <button id="pz-next">Next</button>
             <button id="pz-reveal">Show me</button>
@@ -488,6 +505,63 @@
           </div>
           <div id="pz-status"></div>
           <div id="pz-feedback"></div>
+
+          <!-- Themes. Grouped, counted, and only ever offering ones with
+               puzzles behind them. -->
+          <details class="pz-block" id="pz-themes-block">
+            <summary>Themes <span class="pz-chip-count" id="pz-themes-count"></span></summary>
+            <div class="pz-theme-actions">
+              <button type="button" id="pz-themes-clear" class="link-btn">Clear all</button>
+              <span class="pz-hint" id="pz-themes-hint"></span>
+            </div>
+            <div id="pz-themes"></div>
+          </details>
+
+          <!-- Per-theme progress: which motifs you are actually good at. -->
+          <details class="pz-block" id="pz-progress-block">
+            <summary>Your progress</summary>
+            <div id="pz-progress"></div>
+          </details>
+        </div>
+
+        <!-- ============ Getting the Lichess database ============ -->
+        <div class="panel" id="puzzle-import-panel">
+          <h3>Lichess puzzle database</h3>
+          <p class="panel-note">
+            Lichess publishes every one of its puzzles — several million, each
+            with themes and a rating measured against real solvers. Importing
+            all of it takes a while and about a gigabyte of disk, so the
+            filters below let you take a band around your own rating instead.
+            Re-importing later adds to what you have rather than starting over.
+          </p>
+          <div id="pz-import-status" class="pz-import-status"></div>
+          <div class="play-grid">
+            <label>Rating from
+              <input type="number" id="pz-import-min" min="0" max="4000" step="50"
+                     placeholder="any" />
+            </label>
+            <label>to
+              <input type="number" id="pz-import-max" min="0" max="4000" step="50"
+                     placeholder="any" />
+            </label>
+            <label>Most to import
+              <input type="number" id="pz-import-limit" min="100" step="1000"
+                     placeholder="all" />
+            </label>
+            <label>Already downloaded? Path
+              <input type="text" id="pz-import-path"
+                     placeholder="lichess_db_puzzle.csv.zst" />
+            </label>
+          </div>
+          <label class="pz-inline-check">
+            <input type="checkbox" id="pz-import-replace" />
+            Replace what's already imported
+          </label>
+          <div class="play-buttons">
+            <button id="pz-import-start">Import</button>
+            <button id="pz-import-cancel" disabled>Stop</button>
+          </div>
+          <div id="pz-import-progress"></div>
         </div>
       </div>
 

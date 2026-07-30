@@ -20,7 +20,8 @@ you analyse at once, the trend-over-time view, and the polish pass. That is
 the whole build order from the spec.
 
 Beyond the spec: the page is split into four tabs rather than one long column,
-puzzles built from your own mistakes, pre-moves, looking back through a game
+puzzles built from your own mistakes and from the Lichess puzzle
+database, pre-moves, looking back through a game
 while you're playing it, separate board/piece sets, an opening database
 built from a PGN library that answers the board as you move, downloading
 your library straight from chess.com with the clocks intact, and filtering it
@@ -38,7 +39,7 @@ with the board, the move list and the Settings dialog shared between them:
 | **Analyse a game** | Load games, the game list, the single-game Quick/Full analysis, batch analysis, and the per-game Elo sweep. Everything that runs an engine over games you already have. |
 | **Progress** | Your pooled strength and the trend over time, over whichever slice of the library you pick at the top of the tab. No board — these are aggregates, so the panels take the full width in columns. |
 | **Play** | Play vs Maia3. |
-| **Puzzles** | Your own mistakes, handed back (below). |
+| **Puzzles** | Your own mistakes handed back, or the Lichess puzzle database — themes, per-theme progress and a Glicko-2 rating across both (below). |
 
 Batch analysis stays beside the board rather than moving to Progress: it drives
 the same two passes as the single-game panel and steps the board through each
@@ -427,13 +428,26 @@ The board follows whichever game is being processed, per section 6.
 Games run sequentially within a batch, but the batch releases its worker-pool
 slots between games -- see above.
 
-### Puzzles from your own games
+### Puzzles
 
-Every position where you gave something away, handed back as a puzzle. Opening
-the tab hands the board to its puzzle mode and asks for one straight away —
-there's nothing to set up first — giving you the position you faced, oriented to
-the side you had, with the opponent's name and the date, and asking for the move
-you should have played.
+Two sources over one board, picked with the switch at the top of the tab.
+They answer different questions and neither replaces the other:
+
+- **From your games** — every position where you gave something away, handed
+  back. Nothing else can give you this, and it is why the feature exists.
+- **The Lichess database** — several million positions with difficulty
+  measured against real solvers, themes to aim at, and a set that doesn't run
+  out. Your own blunders are finite, they cluster in whatever you happen to
+  play, and they carry no calibrated difficulty; this fills all three gaps.
+
+Both share a theme vocabulary, one picker, and one rating.
+
+#### From your games
+
+Opening the tab hands the board to its puzzle mode and asks for one straight
+away — there's nothing to set up first — giving you the position you faced,
+oriented to the side you had, with the opponent's name and the date, and
+asking for the move you should have played.
 
 Four decisions, all of them the difference between a useful set and a pile of
 positions:
@@ -460,6 +474,84 @@ Blunders only by default, or blunders and mistakes; random order or worst
 first. Show me plays the answer on the board and leaves the puzzle unsolved —
 a revealed answer isn't one you found, so it comes round again. The eval bar is
 hidden for the duration, for the obvious reason.
+
+#### The Lichess puzzle database
+
+Lichess publishes every one of its puzzles as a single zstd-compressed CSV
+([database.lichess.org](https://database.lichess.org/#puzzles), CC0). Import
+it from the panel under the Puzzles tab.
+
+**Importing.** All of it is several million rows and about a gigabyte on disk,
+so the filters take a band instead: a rating range, a theme, a cap on how many.
+They're applied while the file streams, so a filtered import reads the file
+once and stops early when it has enough. Nothing is ever held in memory but one
+batch. An import that dies halfway leaves what it committed, and re-running
+adds only what's missing rather than starting over — tick **Replace** if you
+actually want to start over. If you'd rather not pull a few hundred megabytes
+through the app, download the file yourself and give the importer its path.
+
+**Solving.** A Lichess puzzle is a line, not a move. The stored position is the
+one *before* the opponent's move; that move is played in on the board so the
+puzzle reads as a moment from a game rather than a diagram, and then it's your
+turn. Each move is checked against the server one at a time and the opponent's
+reply comes back with it — **the rest of the line is never sent to the
+browser**, which is the only way "don't peek" can mean anything. If the
+recorded move is mate and you find a different mate, yours counts.
+
+#### Themes
+
+Both sources are tagged with Lichess's own theme keys, so one picker filters
+either and one table tracks your progress against both. The picker is grouped
+(motifs, mates, phases, what it wins, length, special) and every chip carries
+how many puzzles are behind it — a theme with nothing behind it isn't offered
+at all.
+
+Imported puzzles arrive tagged. Puzzles from your own games are tagged here,
+from the position, the move you should have played and the evaluation already
+stored — forks, pins, skewers, hanging pieces, discovered attacks, sacrifices,
+trapped pieces, mates and their patterns, phase and endgame type, promotion,
+en passant, castling, quiet moves, and what the move actually wins. The phase
+tags are applied at Rescan; the rest need the solution, so they appear the
+first time an engine works a puzzle out.
+
+What is *not* derived for your own games: `deflection`, `attraction`,
+`interference`, `clearance`, `zugzwang`, `intermezzo` and `xRayAttack`. All of
+them need to reason about why the refutation fails, which needs lines this
+doesn't have. They're in the catalog because imported puzzles carry them, and
+they're simply never applied to a home-grown one. So a theme count for your own
+games is a count of what could be detected, not a claim the motif is absent.
+
+#### The rating
+
+Glicko-2, the system Lichess rates puzzles with — a rating plus a deviation
+saying how sure it is, so a new solver converges in a couple of dozen puzzles
+instead of a couple of hundred. The deviation is shown, not hidden: a 1500 that
+has seen three puzzles and a 1500 that has seen three hundred are different
+claims. You get an overall rating and one per theme, because "am I actually
+getting better at forks" is not a question a single number can answer. Broad
+tags (phase, length) don't get their own rating — they'd move with the overall
+one and tell you nothing.
+
+**Only your first attempt at a puzzle is rated.** Without that rule, failing a
+puzzle and retrying until it works is free rating. A retry still counts as an
+attempt; it just doesn't move the number. Giving up counts as a miss, once.
+
+A puzzle only moves your rating if its difficulty is actually known:
+
+- **Lichess puzzles** carry a rating and a deviation measured over their real
+  play history.
+- **Your own puzzles** get an estimate, borrowed from the imported set: a
+  home-grown puzzle tagged `fork middlegame crushing` is taken to be about as
+  hard as the Lichess puzzles carrying those themes, whose difficulty *is*
+  measured. It's handed to Glicko-2 with a deliberately wide deviation, which
+  is exactly how the system is meant to express "this number is a guess" — it
+  nudges your rating instead of shoving it.
+- **With no database imported** there's nothing to calibrate against, so
+  own-game puzzles go unrated rather than inventing a number. They're still
+  perfectly playable and still counted.
+
+The arithmetic is checked against Glickman's own worked example in
+`backend/sims/glicko2_check.py`.
 
 ### Saved analyses
 

@@ -10,6 +10,7 @@ class Board {
     this.pieceSet = opts.pieces || opts.board || 'default';
     this.showLegalMoves = opts.showLegalMoves !== false;
     this.orientation = 'w'; // 'w' -> white at bottom (standard), 'b' -> flipped
+    this.el.dataset.orientation = 'w';
     this.currentFEN = START_FEN;
     this.pieceEls = {};
     // Interactivity state lives for the life of the Board instance, not just
@@ -419,6 +420,11 @@ class Board {
       down the piece elements mid-slide, killing any animation in flight. */
   setOrientation(color) {
     const next = color === 'b' ? 'b' : 'w';
+    // Published on the element as well as held here. Which way the board is
+    // facing decides what every square coordinate means, and without it in
+    // the DOM nothing outside this class -- CSS, or anything driving the
+    // board from outside -- can tell a1 from h8.
+    this.el.dataset.orientation = next;
     if (next === this.orientation) return;
     this.orientation = next;
     // The marks are positioned in board coordinates, so flipping has to
