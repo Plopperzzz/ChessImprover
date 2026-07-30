@@ -29,7 +29,16 @@ const state = {
   playMode: false,
   play: null,
   puzzleMode: false,
-  puzzle: null,   // { id, chess, fen, yourColor, answered, ... } // { ws, chess, humanColor, turn, whiteMs, blackMs, clockEnabled, result, tick }
+  // { key, source, id, chess, fen, your_color, themes, answered, busy, played }
+  // `chess` tracks the position the solver is looking at, which for a
+  // multi-move Lichess line moves on as the opponent answers; `played` is
+  // every move of the line found so far, re-sent on each attempt so the
+  // server can check the whole prefix without keeping per-solver state.
+  puzzle: null,
+  // 'own' | 'lichess'. Remembered in localStorage, so the tab opens on the
+  // set you were last using.
+  puzzleSource: 'own',
+  puzzleImportPoll: null,
   // The board faces the side you played, so a game you had as Black opens
   // flipped. The nav flip button sets this override for the current game;
   // selecting another game clears it.
@@ -51,12 +60,40 @@ const state = {
   selectedIds: new Set(),
 };
 
+/** Makes a string safe to drop into an innerHTML template.
+
+    Most of this file builds its DOM with createElement/textContent, which
+    needs no escaping. The places that don't -- a table of rows, a line of
+    feedback -- are interpolating names out of PGN headers, theme labels and
+    error text from the server, none of which are guaranteed to be free of
+    angle brackets. */
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    credentials: 'include',
-    headers: opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
-    ...opts,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      credentials: 'include',
+      headers: opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
+      ...opts,
+    });
+  } catch (e) {
+    // fetch only rejects when the request never got an answer at all. The
+    // browser's own wording for that is "Failed to fetch", which reads like
+    // the app is broken and says nothing about where to look -- so name the
+    // two things it actually means on a self-hosted server.
+    throw new Error(
+      `no answer from the server (${path}). It may have stopped, or be busy `
+      + 'with a long job — check the terminal it is running in.',
+    );
+  }
   if (!res.ok) {
     let message = res.statusText;
     try { const body = await res.json(); message = body.detail || message; } catch (e) { /* ignore */ }
@@ -797,15 +834,26 @@ function renderPlayerPlates() {
   const sides = { w: {}, b: {} };
 
   if (state.puzzleMode && state.puzzle) {
-    // The plates name the two players from the game the puzzle came from --
-    // it happened, and whose game it was is part of recognising it.
+    // For a puzzle from your own games the plates name the two players -- it
+    // happened, and whose game it was is part of recognising it. A Lichess
+    // puzzle has no names worth showing (they aren't in the export), so the
+    // side to solve is labelled as yours and the other as the opponent.
     const p = state.puzzle;
     const names = { w: p.white, b: p.black };
     for (const colour of ['w', 'b']) {
+      const yours = colour === p.your_color;
+      const fallback = p.source === 'lichess'
+        ? (yours ? (state.user.display_name || 'You') : 'Opponent')
+        : (colour === 'w' ? 'White' : 'Black');
       sides[colour] = {
-        name: names[colour] || (colour === 'w' ? 'White' : 'Black'),
-        rating: '', you: colour === p.your_color, result: '', clock: '',
-        toMove: colour === p.your_color,
+        name: names[colour] || fallback,
+        // No rating on the plate. The only number in play is the puzzle's
+        // difficulty, and in the slot where a player's rating goes it reads
+        // as though it were yours. It is in the line above the board instead,
+        // where it is labelled.
+        rating: '',
+        you: yours, result: '', clock: '',
+        toMove: yours,
       };
     }
   } else if (state.playMode && state.play) {
@@ -1609,11 +1657,13 @@ function renderCcMonths(months) {
   wrap.innerHTML = '';
   for (const m of months) {
     const label = document.createElement('label');
-    label.className = 'cc-month' + (m.imported ? ' done' : '');
+    label.className = 'cc-month' + (m.imported ? ' done' : '')
+      + (m.settled ? ' settled' : '');
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.value = m.label;
     box.dataset.imported = m.imported;
+    box.dataset.settled = m.settled ? '1' : '0';
     label.appendChild(box);
     label.appendChild(document.createTextNode(m.label));
     if (m.imported) {
@@ -1622,6 +1672,17 @@ function renderCcMonths(months) {
       have.textContent = `${m.imported} held`;
       have.title = 'already in your library — downloading again adds only new games';
       label.appendChild(have);
+    }
+    if (m.settled) {
+      // A finished month that's already been read can't gain a game, so
+      // "Get new games" won't even ask about it. Marked, because a button
+      // that quietly does less than the whole list has to say so.
+      const done = document.createElement('span');
+      done.className = 'cc-settled';
+      done.textContent = '✓';
+      done.title = 'this month is over and already downloaded — nothing can be '
+        + 'added to it, so it will not be fetched again';
+      label.appendChild(done);
     }
     wrap.appendChild(label);
   }
@@ -1679,43 +1740,95 @@ function wireChesscomImport() {
     for (const box of document.querySelectorAll('#cc-months input')) box.checked = false;
   });
 
-  document.getElementById('cc-import-btn').addEventListener('click', async () => {
+  /** Runs an import to completion over `months`.
+
+      In 'new' mode the whole list goes to the server at once: it decides
+      which months cost a request (a finished month already downloaded costs
+      none) and hands back whatever its per-request cap didn't reach, so this
+      loops on `remaining` rather than slicing the list itself. Only the
+      server knows which months are free.
+
+      'refetch' pulls the named months down in full, so it chunks by the
+      server's cap the way it always did. */
+  const ccRun = async (buttonId, months, mode) => {
+    // Looked up by id rather than taken from the click event: `currentTarget`
+    // is only valid while the event is dispatching, and both callers await
+    // before getting here, by which point it is null and the button never
+    // comes back out of its disabled state.
+    const button = document.getElementById(buttonId);
     const username = usernameBox.value.trim();
-    const months = ccSelected();
-    if (months.length === 0) { ccStatus('Tick at least one month.', true); return; }
-    const button = document.getElementById('cc-import-btn');
+    if (!username) { ccStatus('Type your chess.com username first.', true); return; }
+    if (!months.length) { ccStatus('Tick at least one month.', true); return; }
+
     button.disabled = true;
-    let added = 0, skipped = 0, clocked = 0, done = 0;
+    let added = 0, skipped = 0, clocked = 0;
+    let downloaded = 0, settled = 0, unchanged = 0, handled = 0;
+    let pending = mode === 'refetch' ? months.slice(0, CC_MONTHS_PER_REQUEST) : months;
+    let queued = mode === 'refetch' ? months.slice(CC_MONTHS_PER_REQUEST) : [];
+
     try {
-      for (let i = 0; i < months.length; i += CC_MONTHS_PER_REQUEST) {
-        const chunk = months.slice(i, i + CC_MONTHS_PER_REQUEST);
-        ccStatus(`Downloading ${done + 1}-${done + chunk.length} of ${months.length} month(s)...`);
+      while (pending.length) {
+        ccStatus(mode === 'refetch'
+          ? `Downloading ${handled + 1}-${handled + pending.length} of ${months.length} month(s)...`
+          : `Checking ${months.length - handled} month(s) for new games...`);
         const target = document.getElementById('cc-collection').value;
         const res = await api('/api/games/chesscom/import', {
           method: 'POST', body: JSON.stringify({
-            username, months: chunk,
+            username, months: pending, mode,
             collection_id: target ? Number(target) : null,
           }),
         });
         added += res.added; skipped += res.skipped; clocked += res.with_clocks;
-        done += chunk.length;
-        // After every chunk, so a long import fills the library as it goes
+        downloaded += res.downloaded || 0;
+        settled += res.settled || 0;
+        unchanged += res.unchanged || 0;
+        handled += pending.length - (res.remaining || []).length;
+        // After every round, so a long import fills the library as it goes
         // rather than all at the end. The whole library, not just the list:
         // new games change the speed counts and the group sizes too.
         await refreshLibrary();
+        pending = (res.remaining && res.remaining.length) ? res.remaining
+          : queued.splice(0, CC_MONTHS_PER_REQUEST);
       }
       await loadMonths(true);   // repaint the "held" counts against the new library
-      // Clocks are called out because they're the reason to import this way:
-      // without them the Elo fit can't drop moves played instantly.
-      ccStatus(`Added ${added} game(s)${clocked ? `, ${clocked} with clock times` : ''}`
-        + `${skipped ? `; skipped ${skipped} already in your library` : ''}.`);
+
+      // Say what was downloaded as well as what was added. "Added 0 games"
+      // on its own reads as a failure; "checked 1 month, 119 already
+      // complete" says the thing actually worked.
+      const savings = [];
+      if (settled) savings.push(`${settled} already complete`);
+      if (unchanged) savings.push(`${unchanged} unchanged`);
+      const detail = savings.length ? ` (${savings.join(', ')}, not re-downloaded)` : '';
+      if (added) {
+        // Clocks are called out because they're the reason to import this
+        // way: without them the Elo fit can't drop moves played instantly.
+        ccStatus(`Added ${added} game(s)${clocked ? `, ${clocked} with clock times` : ''}`
+          + `${skipped ? `; ${skipped} already in your library` : ''}`
+          + `${detail}.`);
+      } else {
+        ccStatus(`No new games. Downloaded ${downloaded} month(s)${detail}.`);
+      }
     } catch (e) {
-      ccStatus(`Stopped after ${done} of ${months.length} month(s): ${e.message}`
+      ccStatus(`Stopped after ${handled} of ${months.length} month(s): ${e.message}`
         + (added ? ` ${added} game(s) were saved.` : ''), true);
       await refreshLibrary();
     } finally {
       button.disabled = false;
     }
+  };
+
+  // The everyday action: whatever chess.com has that you don't. Every month
+  // goes to the server, which skips the finished ones for free -- so this is
+  // usually one request that checks the current month and nothing else.
+  document.getElementById('cc-sync-btn').addEventListener('click', async () => {
+    const months = await loadMonths(true)
+      || [...document.querySelectorAll('#cc-months input')].map((i) => ({ label: i.value }));
+    await ccRun('cc-sync-btn', months.map((m) => m.label), 'new');
+  });
+
+  document.getElementById('cc-import-btn').addEventListener('click', () => {
+    const refetch = document.getElementById('cc-refetch').checked;
+    return ccRun('cc-import-btn', ccSelected(), refetch ? 'refetch' : 'new');
   });
 }
 
@@ -3616,14 +3729,41 @@ function trendChart(buckets) {
   return svg;
 }
 
-/* ---------------- Puzzles from your own games ----------------
-   The same board, in a third mode. Every position where you gave something
-   away is a puzzle: you faced it, you got it wrong, here it is again. The
-   move you actually played stays hidden until you've tried, because knowing
-   it turns "find the move" into "find the other move" -- and the reveal,
-   with what it cost you, is the lesson. */
+/* ---------------- Puzzles ----------------
+   Two sources over the same board. Your own games give you the mistakes you
+   actually make; the Lichess database gives you difficulty measured against
+   real solvers, themes to aim at, and a set that doesn't run out. Which one
+   you're on changes what the panel offers, but not how solving feels.
+
+   The move you played is hidden until you've tried -- knowing it turns "find
+   the move" into "find the other move" -- and for a Lichess puzzle the line
+   is never sent to the browser at all: each move is checked against the
+   server, one at a time, and the opponent's reply comes back with it. */
+
+const PZ_SOURCES = ['own', 'lichess'];
+
+/** Themes chosen per source, remembered across visits. Kept apart because the
+    two sets barely overlap: 'fork' is worth picking against a hundred
+    thousand Lichess puzzles and pointless against the four in your own. */
+function pzThemeKey(source) { return `pz-themes-${source}`; }
+
+function pzSelectedThemes(source = state.puzzleSource) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(pzThemeKey(source)) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function pzSetSelectedThemes(themes) {
+  localStorage.setItem(pzThemeKey(state.puzzleSource), JSON.stringify(themes));
+}
 
 function wirePuzzles() {
+  state.puzzleSource = PZ_SOURCES.includes(localStorage.getItem('pz-source'))
+    ? localStorage.getItem('pz-source') : 'own';
+
   document.getElementById('pz-next').addEventListener('click', () => loadNextPuzzle());
   document.getElementById('pz-reveal').addEventListener('click', revealPuzzle);
   document.getElementById('pz-rebuild').addEventListener('click', rebuildPuzzles);
@@ -3632,7 +3772,53 @@ function wirePuzzles() {
       if (state.puzzleMode) loadNextPuzzle();
     });
   }
+  for (const btn of document.querySelectorAll('.pz-source')) {
+    btn.addEventListener('click', () => setPuzzleSource(btn.dataset.source));
+  }
+  document.getElementById('pz-themes-clear').addEventListener('click', () => {
+    pzSetSelectedThemes([]);
+    renderPuzzleThemes();
+    if (state.puzzleMode) loadNextPuzzle();
+  });
+  document.getElementById('pz-import-start').addEventListener('click', startPuzzleImport);
+  document.getElementById('pz-import-cancel').addEventListener('click', cancelPuzzleImport);
+
+  applyPuzzleSource();
   refreshPuzzleStats();
+}
+
+function setPuzzleSource(source) {
+  if (!PZ_SOURCES.includes(source) || source === state.puzzleSource) return;
+  state.puzzleSource = source;
+  localStorage.setItem('pz-source', source);
+  applyPuzzleSource();
+  // The themes belong to the source, so they have to be re-fetched before a
+  // puzzle is asked for with them.
+  renderPuzzleThemes().then(() => {
+    if (state.puzzleMode) loadNextPuzzle();
+  });
+}
+
+/** Which controls make sense for the source that's selected. */
+function applyPuzzleSource() {
+  const own = state.puzzleSource === 'own';
+  for (const btn of document.querySelectorAll('.pz-source')) {
+    const on = btn.dataset.source === state.puzzleSource;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+  // Scope and Rescan are about your own library and mean nothing against
+  // Lichess; the rating bar is the other way round until an own-game puzzle
+  // has been rated.
+  document.getElementById('pz-own-controls').classList.toggle('hidden', !own);
+  document.getElementById('pz-rebuild').classList.toggle('hidden', !own);
+  document.getElementById('puzzle-import-panel').classList.toggle('hidden', own);
+  document.getElementById('pz-source-note').textContent = own
+    ? 'Every position where you gave something away, as a puzzle. No engine '
+      + 'runs to build them, only to check an answer.'
+    : 'Positions from real games, rated against millions of solvers. Puzzles '
+      + 'are drawn from a band around your rating, and one you have attempted '
+      + 'never comes back.';
 }
 
 function puzzleCounts(stats) {
@@ -3645,10 +3831,140 @@ function puzzleCounts(stats) {
 async function refreshPuzzleStats() {
   try {
     const stats = await api('/api/puzzles/stats');
-    if (!state.puzzleMode) document.getElementById('pz-status').textContent = puzzleCounts(stats);
+    if (!state.puzzleMode && state.puzzleSource === 'own') {
+      document.getElementById('pz-status').textContent = puzzleCounts(stats);
+    }
+    renderPuzzleRating(stats.progress, null);
+    renderPuzzleProgress(stats.progress);
+    renderImportStatus(stats.lichess);
     return stats;
   } catch (e) {
     return null;
+  }
+}
+
+/* ---- the rating ---- */
+
+function renderPuzzleRating(progress, change) {
+  const bar = document.getElementById('pz-rating-bar');
+  if (!progress || !progress.overall) { bar.classList.add('hidden'); return; }
+  const overall = progress.overall;
+  bar.classList.remove('hidden');
+  document.getElementById('pz-rating').textContent = overall.rating;
+
+  // The interval, not just the number. A rating with three attempts behind it
+  // is a guess, and showing it bare would be a claim the data can't support.
+  const parts = [];
+  if (overall.provisional) {
+    parts.push(`provisional, ${overall.interval[0]}–${overall.interval[1]}`);
+  } else {
+    parts.push(`± ${Math.round((overall.interval[1] - overall.interval[0]) / 2)}`);
+  }
+  if (overall.attempts) {
+    parts.push(`${overall.solved}/${overall.attempts} rated`);
+  }
+  document.getElementById('pz-rating-meta').textContent = parts.join(' · ');
+
+  const delta = document.getElementById('pz-rating-delta');
+  if (change && change.rated && change.delta) {
+    delta.textContent = (change.delta > 0 ? '+' : '') + change.delta;
+    delta.className = 'pz-rating-delta ' + (change.delta > 0 ? 'up' : 'down');
+  } else if (change && !change.rated) {
+    // Say why nothing moved rather than leaving a number that looks stuck.
+    delta.textContent = change.first_try === false ? 'seen before — unrated' : 'unrated';
+    delta.className = 'pz-rating-delta';
+  } else {
+    delta.textContent = '';
+    delta.className = 'pz-rating-delta';
+  }
+}
+
+/* ---- per-theme progress ---- */
+
+/** The per-theme list only. Deliberately does *not* touch the rating bar:
+    both are refreshed together after an attempt, and having this one also
+    redraw the bar wiped the "+34" that had just been put there. */
+function renderPuzzleProgress(progress) {
+  const host = document.getElementById('pz-progress');
+  if (!progress || !progress.themes || !progress.themes.length) {
+    host.innerHTML = '<div class="pz-progress-empty">Nothing yet. Solve a few '
+      + 'puzzles and this fills in with a rating per theme.</div>';
+    return;
+  }
+  // Scaled against the strongest theme, so the bars compare with each other
+  // rather than with an arbitrary ceiling.
+  const top = Math.max(...progress.themes.map((t) => t.rating), 1);
+  host.innerHTML = progress.themes.map((t) => {
+    const label = PZ_THEME_LABELS[t.theme] || t.theme;
+    const provisional = t.provisional ? ' <span class="pz-provisional">provisional</span>' : '';
+    return `<div class="pz-progress-row">
+      <span class="pz-progress-name">${escapeHtml(label)}</span>
+      <span class="pz-progress-rating">${t.rating}${provisional}</span>
+      <span class="pz-progress-detail">${t.solved}/${t.attempts} solved</span>
+      <span class="pz-progress-detail">${t.interval[0]}–${t.interval[1]}</span>
+      <div class="pz-progress-bar"><div class="pz-progress-fill"
+        style="width:${Math.max(2, Math.round((t.rating / top) * 100))}%"></div></div>
+    </div>`;
+  }).join('');
+}
+
+/* ---- the theme picker ---- */
+
+// Filled from the catalog the server sends, so a label is never duplicated
+// here and left to drift.
+const PZ_THEME_LABELS = {};
+
+async function renderPuzzleThemes() {
+  const host = document.getElementById('pz-themes');
+  const chosen = new Set(pzSelectedThemes());
+  let data;
+  try {
+    data = await api(`/api/puzzles/themes?source=${state.puzzleSource}`);
+  } catch (e) {
+    host.innerHTML = `<div class="pz-hint">Couldn't load themes: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  for (const group of data.groups) {
+    for (const theme of group.themes) PZ_THEME_LABELS[theme.key] = theme.label;
+  }
+
+  document.getElementById('pz-themes-count').textContent =
+    chosen.size ? `(${chosen.size} picked)` : '';
+  document.getElementById('pz-themes-hint').textContent = state.puzzleSource === 'own'
+    ? 'Motifs are tagged once an engine has worked a puzzle out, so a fresh set only lists its phases.'
+    : 'Pick none to draw from everything.';
+
+  if (!data.groups.length) {
+    host.innerHTML = state.puzzleSource === 'own'
+      ? '<div class="pz-hint">No themes yet — rescan your games, then solve a few.</div>'
+      : '<div class="pz-hint">Import the database below and the themes appear here.</div>';
+    return;
+  }
+
+  host.innerHTML = data.groups.map((group) => `
+    <div class="pz-theme-group">
+      <div class="pz-theme-group-name">${escapeHtml(group.label)}</div>
+      <div class="pz-theme-chips">${group.themes.map((theme) => {
+        const on = chosen.has(theme.key) ? ' on' : '';
+        const rating = theme.progress
+          ? `<span class="pz-theme-rating">${theme.progress.rating}</span>` : '';
+        return `<button type="button" class="filter-chip pz-theme${on}"
+          data-theme="${escapeHtml(theme.key)}" title="${escapeHtml(theme.description)}">`
+          + `${escapeHtml(theme.label)}`
+          + `<span class="chip-count">${theme.count}</span>${rating}</button>`;
+      }).join('')}</div>
+    </div>`).join('');
+
+  for (const chip of host.querySelectorAll('.pz-theme')) {
+    chip.addEventListener('click', () => {
+      const selected = new Set(pzSelectedThemes());
+      if (selected.has(chip.dataset.theme)) selected.delete(chip.dataset.theme);
+      else selected.add(chip.dataset.theme);
+      pzSetSelectedThemes([...selected]);
+      renderPuzzleThemes();
+      if (state.puzzleMode) loadNextPuzzle();
+    });
   }
 }
 
@@ -3665,6 +3981,7 @@ async function rebuildPuzzles() {
       bits.push(`${result.skipped_already_lost} skipped (the game was already lost there)`);
     }
     document.getElementById('pz-status').textContent = bits.join(', ') + '.';
+    renderPuzzleThemes();
   } catch (e) {
     document.getElementById('pz-status').textContent = 'Error: ' + e.message;
   } finally {
@@ -3677,6 +3994,8 @@ async function rebuildPuzzles() {
     another one. */
 async function startPuzzles() {
   state.puzzleMode = true;
+  applyPuzzleSource();
+  renderPuzzleThemes();
   await loadNextPuzzle();
 }
 
@@ -3689,20 +4008,23 @@ function exitPuzzleMode() {
 }
 
 async function loadNextPuzzle() {
-  const scope = document.getElementById('pz-scope').value;
-  const order = document.getElementById('pz-order').value;
   const previous = state.puzzle ? state.puzzle.id : null;
   document.getElementById('pz-feedback').innerHTML = '';
   document.getElementById('pz-status').textContent = 'Finding one...';
+  const params = new URLSearchParams({ source: state.puzzleSource });
+  if (state.puzzleSource === 'own') {
+    params.set('scope', document.getElementById('pz-scope').value);
+    params.set('order', document.getElementById('pz-order').value);
+  }
+  const themes = pzSelectedThemes();
+  if (themes.length) params.set('themes', themes.join(','));
+  if (previous) params.set('exclude', previous);
+
   try {
-    const params = `scope=${scope}&order=${order}` + (previous ? `&exclude=${previous}` : '');
     const data = await api(`/api/puzzles/next?${params}`);
     showPuzzle(data);
   } catch (e) {
-    document.getElementById('pz-status').textContent =
-      e.message.includes('no puzzles')
-        ? 'No puzzles for that selection — press Rescan, or widen it to mistakes.'
-        : 'Error: ' + e.message;
+    document.getElementById('pz-status').textContent = e.message;
     // Nothing to solve, so nothing should look solvable. Now that the tab loads
     // a puzzle on its own, this is a state you can land straight in, and the
     // previous puzzle's board sitting there would read as the next one.
@@ -3712,24 +4034,95 @@ async function loadNextPuzzle() {
   }
 }
 
-function showPuzzle(data) {
-  const p = data.puzzle;
-  state.puzzle = { ...p, chess: new Chess(), answered: false, busy: false };
-  state.puzzle.chess.load(p.fen);
-  state.flipOverride = false;
-  applyOrientation();                 // faces the side you played, as ever
-  state.board.renderFEN(p.fen);
-  renderPlayerPlates();
+/** Puts a puzzle on the board.
 
-  const opponent = p.your_color === 'w' ? p.black : p.white;
-  const cost = p.wp_drop != null ? ` You gave up ${(p.wp_drop * 100).toFixed(0)}% here.` : '';
-  document.getElementById('pz-status').innerHTML =
-    `<b>${p.your_color === 'w' ? 'White' : 'Black'} to move</b> — move ${p.move_number} `
-    + `vs ${opponent || '?'}${p.date ? ` (${p.date})` : ''}.${cost} `
-    + `<span class="pz-count">${data.solved}/${data.total} solved</span>`;
+    For a Lichess puzzle the position stored is the one *before* the
+    opponent's move, and that move is played in rather than skipped: seeing it
+    land is what makes the position read as a moment from a game instead of a
+    diagram, and it is how you know which piece just moved. */
+async function showPuzzle(data) {
+  const p = data.puzzle;
+  state.puzzle = {
+    ...p,
+    chess: new Chess(),
+    answered: false,
+    busy: false,
+    // Every move you've played in this line so far. The server checks the
+    // whole prefix each time, so it never has to remember where you are.
+    played: [],
+  };
+  state.flipOverride = false;
+  applyOrientation();
+  renderPlayerPlates();
+  renderPuzzleRating(data.progress, null);
+
+  if (p.setup) {
+    // Show the position before, then play the opponent's move into it.
+    state.puzzle.chess.load(p.setup.fen);
+    state.board.renderFEN(p.setup.fen);
+    state.puzzle.busy = true;
+    document.getElementById('pz-status').innerHTML = describePuzzle(p, data);
+    document.getElementById('pz-feedback').innerHTML =
+      '<div class="pz-prompt">Watch the last move...</div>';
+    const from = p.setup.uci.slice(0, 2);
+    const to = p.setup.uci.slice(2, 4);
+    playMoveSound(p.setup.san || '', true);
+    await state.board.animateMove(from, to, p.fen);
+    state.puzzle.busy = false;
+  } else {
+    state.board.renderFEN(p.fen);
+  }
+  state.puzzle.chess.load(p.fen);
+
+  document.getElementById('pz-status').innerHTML = describePuzzle(p, data);
   document.getElementById('pz-feedback').innerHTML =
-    '<div class="pz-prompt">Find the move you should have played.</div>';
+    `<div class="pz-prompt">${puzzlePrompt(p)}</div>`;
 }
+
+function puzzlePrompt(p) {
+  const side = p.your_color === 'w' ? 'White' : 'Black';
+  if (p.source === 'own') return 'Find the move you should have played.';
+  if (p.moves_required > 1) return `${side} to play and win — ${p.moves_required} moves.`;
+  return `${side} to play and win.`;
+}
+
+/** The line above the board: where the puzzle came from and what it's worth. */
+function describePuzzle(p, data) {
+  const bits = [`<b>${p.your_color === 'w' ? 'White' : 'Black'} to move</b>`];
+  if (p.source === 'own') {
+    const opponent = p.your_color === 'w' ? p.black : p.white;
+    bits.push(`move ${p.move_number} vs ${escapeHtml(opponent || '?')}`
+      + (p.date ? ` (${escapeHtml(p.date)})` : ''));
+    if (p.wp_drop != null) bits.push(`you gave up ${(p.wp_drop * 100).toFixed(0)}% here`);
+    if (p.rating) bits.push(`about ${p.rating}`);
+    const counts = data && data.total
+      ? ` <span class="pz-count">${data.solved}/${data.total} solved</span>` : '';
+    return bits.join(' — ') + '.' + counts;
+  }
+  bits.push(`rated ${p.rating}`);
+  if (p.themes && p.themes.length) {
+    // Themes that would give the puzzle away are held back until it's over.
+    const safe = p.themes.filter((t) => !PZ_SPOILER_THEMES.has(t));
+    if (safe.length) {
+      bits.push(safe.map((t) => escapeHtml(PZ_THEME_LABELS[t] || t)).join(', '));
+    }
+  }
+  return bits.join(' — ') + '.';
+}
+
+/* Naming the motif is naming the answer. 'Mate in two' is a hint the solver
+   should be allowed to have -- Lichess shows it too, and the move count is
+   already public -- but 'smothered mate' or 'hanging piece' hands over the
+   idea, so those wait until the puzzle is finished. */
+const PZ_SPOILER_THEMES = new Set([
+  'fork', 'pin', 'skewer', 'hangingPiece', 'discoveredAttack', 'doubleCheck',
+  'sacrifice', 'deflection', 'attraction', 'trappedPiece', 'capturingDefender',
+  'interference', 'clearance', 'xRayAttack', 'intermezzo', 'zugzwang',
+  'backRankMate', 'smotheredMate', 'hookMate', 'anastasiaMate', 'arabianMate',
+  'bodenMate', 'doubleBishopMate', 'dovetailMate', 'promotion',
+  'underPromotion', 'enPassant', 'castling', 'quietMove', 'advancedPawn',
+  'defensiveMove', 'attackingF2F7',
+]);
 
 function puzzleLegalTargets(square) {
   const p = state.puzzle;
@@ -3745,7 +4138,7 @@ async function onPuzzleMove(from, to, promotion) {
   const p = state.puzzle;
   if (!p || p.answered || p.busy) return;
   const probe = new Chess();
-  probe.load(p.fen);
+  probe.load(p.chess.fen());
   const res = probe.move({ from, to, promotion: promotion || 'q' });
   if (!res) return;
 
@@ -3753,48 +4146,112 @@ async function onPuzzleMove(from, to, promotion) {
   playMoveSound(res.san, true);
   await state.board.animateMove(from, to, probe.fen());
   const feedback = document.getElementById('pz-feedback');
-  // The check is an engine search, so it isn't instant -- say so rather than
-  // leaving a board that looks stuck.
   feedback.innerHTML = '<div class="pz-prompt">Checking...</div>';
 
-  let verdict;
+  const uci = from + to + (promotion || (res.promotion ? 'q' : ''));
   try {
-    verdict = await api(`/api/puzzles/${p.id}/attempt`, {
-      method: 'POST',
-      body: JSON.stringify({ uci: from + to + (promotion || (res.promotion ? 'q' : '')) }),
-    });
+    if (p.source === 'lichess') {
+      await attemptLichessMove(uci);
+    } else {
+      const verdict = await api(`/api/puzzles/${p.id}/attempt`, {
+        method: 'POST',
+        body: JSON.stringify({ uci }),
+      });
+      renderPuzzleVerdict(verdict);
+    }
   } catch (e) {
-    feedback.innerHTML = `<div class="pz-wrong">Couldn't check that: ${e.message}</div>`;
+    feedback.innerHTML = `<div class="pz-wrong">Couldn't check that: ${escapeHtml(e.message)}</div>`;
     resetPuzzleBoard();
+  } finally {
     p.busy = false;
-    return;
   }
-  p.busy = false;
-  renderPuzzleVerdict(verdict);
 }
 
-/** Puts the board back to the puzzle position after a wrong answer, so the
-    next attempt starts from the same place you started from. */
+/** One move of a Lichess line. The server holds the answer and hands back the
+    opponent's reply, so the browser learns the line only by getting it
+    right. */
+async function attemptLichessMove(uci) {
+  const p = state.puzzle;
+  const feedback = document.getElementById('pz-feedback');
+  const moves = [...p.played, uci];
+  const verdict = await api(`/api/puzzles/lichess/${p.id}/attempt`, {
+    method: 'POST',
+    body: JSON.stringify({ moves }),
+  });
+
+  if (!verdict.correct) {
+    playSound('wrong');
+    p.answered = true;
+    feedback.innerHTML =
+      `<div class="pz-wrong">✗ <b>${escapeHtml(verdict.attempt.san || uci)}</b> `
+      + `isn't it — ${escapeHtml(verdict.expected.san)} was.</div>`
+      + `<div class="pz-note">${puzzleThemeLine(verdict.themes)}</div>`;
+    renderPuzzleRating(verdict.progress, verdict.rating);
+    renderPuzzleProgress(verdict.progress);
+    setTimeout(resetPuzzleBoard, 650);
+    return;
+  }
+
+  p.played = moves;
+
+  if (!verdict.done) {
+    // Right so far: play the opponent's answer and keep going.
+    p.chess.load(verdict.fen);
+    feedback.innerHTML =
+      `<div class="pz-onward">✓ <b>${escapeHtml(verdict.attempt.san)}</b>`
+      + `<span class="pz-step">${verdict.moves_played} of ${verdict.moves_required}`
+      + ` — they reply ${escapeHtml(verdict.reply.san)}</span></div>`;
+    playMoveSound(verdict.reply.san, true);
+    await state.board.animateMove(
+      verdict.reply.uci.slice(0, 2), verdict.reply.uci.slice(2, 4), verdict.fen,
+    );
+    return;
+  }
+
+  p.answered = true;
+  playSound('solved');
+  const link = verdict.game_url
+    ? ` <a href="${escapeHtml(verdict.game_url)}" target="_blank" rel="noopener">See the game</a>.`
+    : '';
+  feedback.innerHTML =
+    '<div class="pz-right">✓ Solved.</div>'
+    + `<div class="pz-note">${puzzleThemeLine(verdict.themes)}${link}</div>`;
+  renderPuzzleRating(verdict.progress, verdict.rating);
+  renderPuzzleProgress(verdict.progress);
+}
+
+/** The themes, spelled out once the puzzle is over -- which is when naming
+    the motif teaches something rather than giving it away. */
+function puzzleThemeLine(themes) {
+  if (!themes || !themes.length) return '';
+  const named = themes.map((t) => escapeHtml(PZ_THEME_LABELS[t] || t));
+  return `Themes: ${named.join(', ')}.`;
+}
+
+/** Puts the board back to where the line had got to after a wrong answer, so
+    the next attempt starts from the same place you started from. */
 function resetPuzzleBoard() {
   const p = state.puzzle;
   if (!p) return;
-  state.board.renderFEN(p.fen);
+  state.board.renderFEN(p.chess.fen());
 }
 
 function renderPuzzleVerdict(v) {
   const p = state.puzzle;
   const feedback = document.getElementById('pz-feedback');
   const played = v.played && v.played.san
-    ? `In the game you played <b>${v.played.san}</b>.` : '';
+    ? `In the game you played <b>${escapeHtml(v.played.san)}</b>.` : '';
+  renderPuzzleRating(v.progress, v.rating);
+  renderPuzzleProgress(v.progress);
 
   if (v.correct) {
     p.answered = true;
     playSound('solved');
     const equal = v.attempt.uci !== v.best.uci
-      ? ` (the engine prefers ${v.best.san}, but yours is as good)` : '';
+      ? ` (the engine prefers ${escapeHtml(v.best.san)}, but yours is as good)` : '';
     feedback.innerHTML =
-      `<div class="pz-right">✓ <b>${v.attempt.san}</b> — that's it${equal}.</div>`
-      + `<div class="pz-note">${played}</div>`;
+      `<div class="pz-right">✓ <b>${escapeHtml(v.attempt.san)}</b> — that's it${equal}.</div>`
+      + `<div class="pz-note">${played} ${puzzleThemeLine(v.themes)}</div>`;
     document.getElementById('pz-status').innerHTML =
       `Solved. <span class="pz-count">${v.solved}/${v.total} solved</span>`;
     return;
@@ -3804,8 +4261,8 @@ function renderPuzzleVerdict(v) {
   const cost = `${(v.given_up * 100).toFixed(0)}%`;
   feedback.innerHTML =
     (v.same_as_played
-      ? `<div class="pz-wrong">✗ <b>${v.attempt.san}</b> — that's the move you played, and it gives up ${cost}.</div>`
-      : `<div class="pz-wrong">✗ <b>${v.attempt.san}</b> gives up ${cost} of the win probability.</div>`)
+      ? `<div class="pz-wrong">✗ <b>${escapeHtml(v.attempt.san)}</b> — that's the move you played, and it gives up ${cost}.</div>`
+      : `<div class="pz-wrong">✗ <b>${escapeHtml(v.attempt.san)}</b> gives up ${cost} of the win probability.</div>`)
     + `<div class="pz-note">Try again, or <b>Show me</b>.${v.same_as_played ? '' : ' ' + played}</div>`;
   // A beat on the board before it goes back, so you see what you played.
   setTimeout(resetPuzzleBoard, 650);
@@ -3820,24 +4277,185 @@ async function revealPuzzle() {
   const feedback = document.getElementById('pz-feedback');
   feedback.innerHTML = '<div class="pz-prompt">Working it out...</div>';
   try {
-    const data = await api(`/api/puzzles/${p.id}/reveal`, { method: 'POST' });
-    p.answered = true;
-    // Play it on the board: seeing the move is the point of asking.
-    const probe = new Chess();
-    probe.load(p.fen);
-    const move = data.best.uci && probe.move({
-      from: data.best.uci.slice(0, 2), to: data.best.uci.slice(2, 4),
-      promotion: data.best.uci.slice(4) || 'q',
-    });
-    if (move) await state.board.animateMove(move.from, move.to, probe.fen());
-    feedback.innerHTML =
-      `<div class="pz-shown">The move was <b>${data.best.san}</b>.</div>`
-      + `<div class="pz-note">In the game you played <b>${data.played.san}</b>. `
-      + `This one stays unsolved — it'll come round again.</div>`;
+    if (p.source === 'lichess') await revealLichessPuzzle();
+    else await revealOwnPuzzle();
   } catch (e) {
-    feedback.innerHTML = `<div class="pz-wrong">Couldn't work it out: ${e.message}</div>`;
+    feedback.innerHTML = `<div class="pz-wrong">Couldn't work it out: ${escapeHtml(e.message)}</div>`;
   } finally {
     p.busy = false;
+  }
+}
+
+async function revealOwnPuzzle() {
+  const p = state.puzzle;
+  const data = await api(`/api/puzzles/${p.id}/reveal`, { method: 'POST' });
+  p.answered = true;
+  // Play it on the board: seeing the move is the point of asking.
+  const probe = new Chess();
+  probe.load(p.fen);
+  const move = data.best.uci && probe.move({
+    from: data.best.uci.slice(0, 2), to: data.best.uci.slice(2, 4),
+    promotion: data.best.uci.slice(4) || 'q',
+  });
+  if (move) await state.board.animateMove(move.from, move.to, probe.fen());
+  document.getElementById('pz-feedback').innerHTML =
+    `<div class="pz-shown">The move was <b>${escapeHtml(data.best.san)}</b>.</div>`
+    + `<div class="pz-note">In the game you played <b>${escapeHtml(data.played.san)}</b>. `
+    + `This one stays unsolved — it'll come round again. ${puzzleThemeLine(data.themes)}</div>`;
+  renderPuzzleRating(data.progress, data.rating);
+  renderPuzzleProgress(data.progress);
+}
+
+/** Gives up on a Lichess puzzle and plays the whole line out on the board. */
+async function revealLichessPuzzle() {
+  const p = state.puzzle;
+  const data = await api(`/api/puzzles/lichess/${p.id}/reveal`, { method: 'POST' });
+  p.answered = true;
+
+  // Replay from the puzzle's own starting position, not from wherever a
+  // half-finished attempt left the board.
+  const probe = new Chess();
+  probe.load(p.fen);
+  state.board.renderFEN(p.fen);
+  for (const move of data.line) {
+    const res = probe.move({
+      from: move.uci.slice(0, 2), to: move.uci.slice(2, 4),
+      promotion: move.uci.slice(4) || 'q',
+    });
+    if (!res) break;
+    playMoveSound(res.san, true);
+    await state.board.animateMove(move.uci.slice(0, 2), move.uci.slice(2, 4), probe.fen());
+  }
+  const line = data.line
+    .map((m) => (m.yours ? `<b>${escapeHtml(m.san)}</b>` : escapeHtml(m.san)))
+    .join(' ');
+  document.getElementById('pz-feedback').innerHTML =
+    `<div class="pz-shown">The line was ${line}.</div>`
+    + `<div class="pz-note">${puzzleThemeLine(data.themes)} Giving up counts as a miss.</div>`;
+  renderPuzzleRating(data.progress, data.rating);
+  renderPuzzleProgress(data.progress);
+}
+
+/* ---------------- Importing the Lichess database ----------------
+   A long job with no websocket behind it: the import runs inside one request
+   and the browser polls for progress, which is enough for something you start
+   once and watch a progress bar for. */
+
+function renderImportStatus(status) {
+  const host = document.getElementById('pz-import-status');
+  if (!host) return;
+  if (!status) { host.textContent = ''; return; }
+  if (!status.available) {
+    host.innerHTML = 'Nothing imported yet.';
+  } else {
+    const span = status.min_rating != null
+      ? ` rated ${status.min_rating}–${status.max_rating}` : '';
+    host.innerHTML = `<b>${status.puzzles.toLocaleString()}</b> puzzles imported${span}`
+      + (status.imported_at ? ` · ${escapeHtml(status.imported_at)}` : '');
+  }
+  if (status.running) {
+    // An import survives a page reload -- it's a thread on the server, not
+    // something this tab owns. Pick it back up rather than showing a stale
+    // "nothing imported" next to a job that is halfway through.
+    renderImportProgress(status.running);
+    importInFlight(true);
+    pollImportProgress();
+  }
+}
+
+function renderImportProgress(progress) {
+  const host = document.getElementById('pz-import-progress');
+  if (!progress) { host.innerHTML = ''; return; }
+  const bits = [];
+  if (progress.rows_kept) bits.push(`${progress.rows_kept.toLocaleString()} kept`);
+  if (progress.rows_read) bits.push(`${progress.rows_read.toLocaleString()} read`);
+  if (progress.bytes_read) {
+    bits.push(`${(progress.bytes_read / 1e6).toFixed(0)} MB`);
+  }
+  if (progress.elapsed_s) bits.push(`${Math.round(progress.elapsed_s)}s`);
+
+  const pct = progress.total_bytes
+    ? Math.min(100, (progress.bytes_read / progress.total_bytes) * 100) : null;
+  const bar = pct != null
+    ? `<div class="pz-import-bar"><div class="pz-import-fill" style="width:${pct.toFixed(1)}%"></div></div>`
+    : '';
+  const failed = progress.state === 'error' ? ' pz-import-error' : '';
+  host.innerHTML = `<div class="${failed.trim()}">${escapeHtml(progress.message || progress.state)}`
+    + (bits.length ? ` — ${bits.join(', ')}` : '') + '</div>' + bar;
+}
+
+function importInFlight(running) {
+  document.getElementById('pz-import-start').disabled = running;
+  document.getElementById('pz-import-cancel').disabled = !running;
+}
+
+/** Kicks off an import. The request returns as soon as the job has started;
+    everything after that is the poll below. An import can run for many
+    minutes, and waiting on the request is how the browser ends up reporting
+    a failure on a job that is running fine. */
+async function startPuzzleImport() {
+  const number = (id) => {
+    const raw = document.getElementById(id).value.trim();
+    return raw === '' ? null : Number(raw);
+  };
+  const body = {
+    min_rating: number('pz-import-min'),
+    max_rating: number('pz-import-max'),
+    max_puzzles: number('pz-import-limit'),
+    source_path: document.getElementById('pz-import-path').value.trim() || null,
+    themes: pzSelectedThemes('lichess'),
+    replace: document.getElementById('pz-import-replace').checked,
+  };
+  importInFlight(true);
+  renderImportProgress({ state: 'starting', message: 'starting...' });
+  try {
+    const ack = await api('/api/puzzles/lichess/import', {
+      method: 'POST', body: JSON.stringify(body),
+    });
+    if (ack.progress) renderImportProgress(ack.progress);
+    pollImportProgress();
+  } catch (e) {
+    // Only the things checkable up front land here -- a missing file, an
+    // import already running. Anything that goes wrong once it's going is
+    // reported through the poll.
+    renderImportProgress({ state: 'error', message: e.message });
+    importInFlight(false);
+  }
+}
+
+/** Follows a running import to its end, then refreshes what it produced. */
+function pollImportProgress() {
+  clearTimeout(state.puzzleImportPoll);
+  state.puzzleImportPoll = setTimeout(async () => {
+    let status;
+    try {
+      status = await api('/api/puzzles/lichess/status');
+    } catch (e) {
+      // A dropped poll is not the import failing. Keep asking.
+      pollImportProgress();
+      return;
+    }
+    const progress = status.running || status.last_run;
+    if (progress) renderImportProgress(progress);
+    if (status.running) {
+      pollImportProgress();
+      return;
+    }
+    // Finished, one way or another.
+    importInFlight(false);
+    renderImportStatus(status);
+    if (progress) renderImportProgress(progress);
+    await refreshPuzzleStats();
+    await renderPuzzleThemes();
+  }, 900);
+}
+
+async function cancelPuzzleImport() {
+  document.getElementById('pz-import-cancel').disabled = true;
+  try {
+    await api('/api/puzzles/lichess/cancel', { method: 'POST' });
+  } catch (e) {
+    /* the import is finishing anyway */
   }
 }
 

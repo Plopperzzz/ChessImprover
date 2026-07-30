@@ -167,6 +167,35 @@ CREATE TABLE IF NOT EXISTS game_collections (
 
 CREATE INDEX IF NOT EXISTS idx_game_collections_game ON game_collections(game_id);
 
+-- What we already know about each chess.com monthly archive, so a repeat
+-- import doesn't download months it has already got (see app/chesscom.py).
+--
+-- Two things make a re-download unnecessary, and this table holds the
+-- evidence for both:
+--
+-- * `etag` / `last_modified` are chess.com's own cache validators, sent back
+--   on the next request so an unchanged month answers 304 with no body.
+-- * `fetched_at` says *when* we last read the archive. A monthly archive
+--   holds the games that ended in that month, so once the month is over
+--   nothing can be added to it -- a month fetched after it ended is final and
+--   need never be requested again, not even to be told it hasn't changed.
+--
+-- Keyed by username as well as user, because one account may import from more
+-- than one chess.com handle (an alt, or a partner's games).
+CREATE TABLE IF NOT EXISTS chesscom_archives (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    month INTEGER NOT NULL,
+    etag TEXT,
+    last_modified TEXT,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- How many games the archive held when we last read it. Reported to the
+    -- browser so "nothing new" can be said with a number behind it.
+    games INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, username, year, month)
+);
+
 -- A saved analysis run: a named container that games get appended to, so a
 -- batch (section 12) and a one-off single-game analysis are the same shape.
 CREATE TABLE IF NOT EXISTS analysis_runs (
@@ -265,6 +294,18 @@ CREATE TABLE IF NOT EXISTS puzzles (
     solved INTEGER NOT NULL DEFAULT 0,
     revealed INTEGER NOT NULL DEFAULT 0,
     last_seen_at TEXT,
+    -- Whether the theme tagger has run over this puzzle. A flag rather than
+    -- "are there rows in puzzle_themes", because a puzzle can legitimately
+    -- have no themes and would otherwise be re-tagged on every pass.
+    themes_tagged INTEGER NOT NULL DEFAULT 0,
+    -- Estimated difficulty, and how rough the estimate is, on the same scale
+    -- as a Lichess puzzle rating. Both NULL until it can be estimated at all
+    -- -- which needs the Lichess database imported to calibrate against, and
+    -- the solution known so the puzzle has themes to calibrate *on*. An
+    -- unrated puzzle is still perfectly playable; it just doesn't move your
+    -- rating, because there is nothing honest to move it by.
+    rating INTEGER,
+    rating_rd INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     -- One puzzle per bad move, so a re-analysed or re-batched game can't
     -- produce the same position twice.
@@ -272,6 +313,122 @@ CREATE TABLE IF NOT EXISTS puzzles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_puzzles_user ON puzzles(user_id, solved);
+
+-- Themes on a puzzle built from your own games, in Lichess's own vocabulary
+-- (see app/puzzle_themes.py). Kept in its own table rather than a text column
+-- on `puzzles` so the theme picker can filter with an index instead of a LIKE
+-- over every row.
+--
+-- Filled in lazily, like the solution: most of the motifs are properties of
+-- the move you *should* have played, and that move isn't known until an
+-- engine works it out. A puzzle whose solution has never been computed
+-- carries only the themes readable off the position itself.
+CREATE TABLE IF NOT EXISTS puzzle_themes (
+    puzzle_id INTEGER NOT NULL REFERENCES puzzles(id) ON DELETE CASCADE,
+    theme TEXT NOT NULL,
+    PRIMARY KEY (puzzle_id, theme)
+);
+
+CREATE INDEX IF NOT EXISTS idx_puzzle_themes_theme ON puzzle_themes(theme);
+
+-- The Lichess puzzle database (https://database.lichess.org/#puzzles), as
+-- imported by app/lichess_puzzles.py.
+--
+-- Deliberately NOT scoped to a user. It is a public dataset of several
+-- million rows and a copy per account would be several million rows per
+-- account; what is per-user is which of them you have attempted, and that
+-- lives in `puzzle_attempts`.
+CREATE TABLE IF NOT EXISTS lichess_puzzles (
+    puzzle_id TEXT PRIMARY KEY,
+    -- The position *before* the opponent's move. The first move in `moves` is
+    -- theirs and is played automatically; the solver answers from the
+    -- position after it. This is Lichess's own convention and keeping it
+    -- means an imported row needs no rewriting.
+    fen TEXT NOT NULL,
+    moves TEXT NOT NULL,              -- space-separated UCI, opponent first
+    rating INTEGER NOT NULL,
+    rating_deviation INTEGER,
+    popularity INTEGER,
+    nb_plays INTEGER,
+    themes TEXT NOT NULL,             -- space-separated theme keys
+    game_url TEXT,
+    opening_tags TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_lichess_puzzles_rating ON lichess_puzzles(rating);
+
+-- Theme keys, numbered. The join table below is the biggest thing in the
+-- database -- several themes per puzzle across millions of puzzles -- so the
+-- theme is stored there as a small integer rather than as the string.
+CREATE TABLE IF NOT EXISTS lichess_theme_names (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme TEXT NOT NULL UNIQUE
+);
+
+-- Which puzzles carry which theme. Ordered (theme, rating) because that is
+-- the only query that runs against it: "a puzzle with this theme, near this
+-- rating". WITHOUT ROWID because the primary key is the whole row -- there is
+-- nothing else to store, and the rowid copy would double the table.
+CREATE TABLE IF NOT EXISTS lichess_puzzle_themes (
+    theme_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL,
+    puzzle_id TEXT NOT NULL,
+    PRIMARY KEY (theme_id, rating, puzzle_id)
+) WITHOUT ROWID;
+
+-- One row, describing the import that produced the table above.
+CREATE TABLE IF NOT EXISTS lichess_puzzle_import (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+    source TEXT,
+    puzzles INTEGER NOT NULL DEFAULT 0,
+    filters_json TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Your puzzle rating, overall and per theme. One row per (user, theme), with
+-- the empty string standing for "overall" -- the per-theme numbers answer
+-- "am I actually getting better at forks", which a single rating cannot.
+--
+-- Glicko-2 (see app/glicko2.py), which is what Lichess rates puzzles with.
+-- `rd` is how unsure the rating is and is as much a part of it as the number.
+CREATE TABLE IF NOT EXISTS puzzle_ratings (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    theme TEXT NOT NULL,              -- '' = overall
+    rating REAL NOT NULL DEFAULT 1500,
+    rd REAL NOT NULL DEFAULT 350,
+    vol REAL NOT NULL DEFAULT 0.06,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    solved INTEGER NOT NULL DEFAULT 0,
+    best_rating REAL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, theme)
+);
+
+-- One row per graded attempt, from either source. This is both the history
+-- the progress view reads and the record of what you have already seen, which
+-- is what stops the same Lichess puzzle coming round twice.
+CREATE TABLE IF NOT EXISTS puzzle_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,             -- 'own' | 'lichess'
+    -- 'own:123' or 'lichess:00sHx'. One column rather than a nullable pair,
+    -- because every query against it wants "have I done this one".
+    puzzle_key TEXT NOT NULL,
+    solved INTEGER NOT NULL,
+    -- Whether this attempt moved the rating. Only the first attempt at a
+    -- puzzle does, which is Lichess's rule and the only one that makes the
+    -- number mean anything -- otherwise retrying a failed puzzle until it
+    -- works would ratchet the rating up for free.
+    rated INTEGER NOT NULL DEFAULT 0,
+    puzzle_rating INTEGER,
+    rating_before REAL,
+    rating_after REAL,
+    themes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_puzzle_attempts_key ON puzzle_attempts(user_id, puzzle_key);
+CREATE INDEX IF NOT EXISTS idx_puzzle_attempts_user ON puzzle_attempts(user_id, created_at);
 
 -- Applied one-off data migrations, so a migration that rewrites user data
 -- can't run twice and undo a deliberate change made afterwards.
@@ -289,6 +446,12 @@ def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Wait for a writer rather than failing instantly. The puzzle-database
+    # import writes for minutes from a background thread (see
+    # app/lichess_puzzles.py), and with sqlite3's default a click that
+    # happened to land during one of its batches would come back as
+    # "database is locked" instead of just taking a moment.
+    conn.execute("PRAGMA busy_timeout = 15000")
     return conn
 
 
@@ -448,6 +611,9 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_external ON games(user_id, external_id)")
         _backfill_external_ids(conn)
         _backfill_time_controls(conn)
+        _ensure_column(conn, "puzzles", "themes_tagged", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "puzzles", "rating", "INTEGER")
+        _ensure_column(conn, "puzzles", "rating_rd", "INTEGER")
         _ensure_column(conn, "sweep_positions", "think_ms", "INTEGER")
         _ensure_column(conn, "sweep_positions", "policies", "TEXT")
         _ensure_column(conn, "run_games", "maia_model_size", "TEXT")

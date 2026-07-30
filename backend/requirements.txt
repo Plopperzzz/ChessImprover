@@ -5,5 +5,10 @@ python-multipart==0.0.20
 numpy==2.2.1
 scipy==1.14.1
 websockets==14.1
-# Downloading a library from the chess.com public API (app/chesscom.py).
+# Downloading a library from the chess.com public API (app/chesscom.py), and
+# streaming the Lichess puzzle database (app/lichess_puzzles.py).
 httpx==0.28.1
+# Lichess publishes the puzzle database as zstd-compressed CSV. Only needed to
+# import it -- the rest of the app runs fine without this installed, and the
+# importer says so by name rather than failing with an ImportError.
+zstandard==0.23.0

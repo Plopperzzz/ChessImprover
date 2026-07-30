@@ -165,9 +165,14 @@
               <div id="cc-status" class="hint"></div>
               <div id="cc-months"></div>
               <div class="cc-row cc-actions hidden" id="cc-actions">
+                <button type="button" id="cc-sync-btn" class="cc-go"
+                        title="Fetches only what chess.com has that you don't. Finished months you already have are not downloaded again.">Get new games</button>
                 <button type="button" id="cc-select-new">Select months I don't have</button>
                 <button type="button" id="cc-clear">Clear</button>
-                <button type="button" id="cc-import-btn" class="cc-go">Download selected</button>
+                <button type="button" id="cc-import-btn">Download selected</button>
+                <label class="cc-refetch" title="Ignore what's already been downloaded and pull the selected months in full. Use this to get back games you deleted from the library.">
+                  <input type="checkbox" id="cc-refetch" /> in full
+                </label>
               </div>
               <!-- Filing the download straight into a group, so a tournament
                    month doesn't have to be found again afterwards. -->
@@ -460,14 +465,30 @@
       <div class="tab-panels" id="panels-puzzles" role="tabpanel"
            aria-labelledby="tab-btn-puzzles">
         <div class="panel" id="puzzle-panel">
-          <h3>Puzzles from your games</h3>
-          <p class="panel-note">
-            Every position where you gave something away, as a puzzle. The
-            positions come from your own games — no engine runs to build them,
-            only to check an answer. The move you played is hidden until you've
-            tried, and anything as good as the engine's best counts.
-          </p>
-          <div class="play-grid">
+          <h3>Puzzles</h3>
+
+          <!-- Two sources, one trainer. They answer different questions:
+               your own games are the mistakes you actually make, and the
+               Lichess set has difficulty measured against real solvers. -->
+          <div class="pz-sources" role="tablist" aria-label="Puzzle source">
+            <button class="pz-source active" data-source="own" role="tab"
+                    aria-selected="true">From your games</button>
+            <button class="pz-source" data-source="lichess" role="tab"
+                    aria-selected="false">Lichess database</button>
+          </div>
+
+          <p class="panel-note" id="pz-source-note"></p>
+
+          <!-- Your puzzle rating, and how it's moving. -->
+          <div id="pz-rating-bar" class="pz-rating-bar hidden">
+            <div class="pz-rating-main">
+              <span class="pz-rating-value" id="pz-rating"></span>
+              <span class="pz-rating-meta" id="pz-rating-meta"></span>
+            </div>
+            <span class="pz-rating-delta" id="pz-rating-delta"></span>
+          </div>
+
+          <div class="play-grid" id="pz-own-controls">
             <label>From
               <select id="pz-scope">
                 <option value="blunder">Blunders</option>
@@ -481,6 +502,7 @@
               </select>
             </label>
           </div>
+
           <div class="play-buttons">
             <button id="pz-next">Next</button>
             <button id="pz-reveal">Show me</button>
@@ -488,6 +510,65 @@
           </div>
           <div id="pz-status"></div>
           <div id="pz-feedback"></div>
+
+          <!-- Themes. Grouped, counted, and only ever offering ones with
+               puzzles behind them. -->
+          <details class="pz-block" id="pz-themes-block">
+            <summary>Themes <span class="pz-chip-count" id="pz-themes-count"></span></summary>
+            <div class="pz-theme-actions">
+              <button type="button" id="pz-themes-clear" class="link-btn">Clear all</button>
+              <span class="pz-hint" id="pz-themes-hint"></span>
+            </div>
+            <div id="pz-themes"></div>
+          </details>
+
+          <!-- Per-theme progress: which motifs you are actually good at. -->
+          <details class="pz-block" id="pz-progress-block">
+            <summary>Your progress</summary>
+            <div id="pz-progress"></div>
+          </details>
+        </div>
+
+        <!-- ============ Getting the Lichess database ============ -->
+        <div class="panel" id="puzzle-import-panel">
+          <h3>Lichess puzzle database</h3>
+          <p class="panel-note">
+            Lichess publishes every one of its puzzles — several million, each
+            with themes and a rating measured against real solvers. Importing
+            all of it takes a while and about a gigabyte of disk, so the
+            filters below let you take a band around your own rating instead.
+            Re-importing later adds to what you have rather than starting over.
+            It runs in the background, so you can carry on using the app —
+            and it keeps going if you close this page.
+          </p>
+          <div id="pz-import-status" class="pz-import-status"></div>
+          <div class="play-grid">
+            <label>Rating from
+              <input type="number" id="pz-import-min" min="0" max="4000" step="50"
+                     placeholder="any" />
+            </label>
+            <label>to
+              <input type="number" id="pz-import-max" min="0" max="4000" step="50"
+                     placeholder="any" />
+            </label>
+            <label>Most to import
+              <input type="number" id="pz-import-limit" min="100" step="1000"
+                     placeholder="all" />
+            </label>
+            <label title="A path on the machine running the app. .csv, .zst, .zip, .gz, .bz2 and .xz all work.">Already downloaded? Path on the server
+              <input type="text" id="pz-import-path"
+                     placeholder="/path/to/lichess_db_puzzle.csv.zst" />
+            </label>
+          </div>
+          <label class="pz-inline-check">
+            <input type="checkbox" id="pz-import-replace" />
+            Replace what's already imported
+          </label>
+          <div class="play-buttons">
+            <button id="pz-import-start">Import</button>
+            <button id="pz-import-cancel" disabled>Stop</button>
+          </div>
+          <div id="pz-import-progress"></div>
         </div>
       </div>
 
