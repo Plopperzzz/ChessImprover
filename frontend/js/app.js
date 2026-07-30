@@ -1657,11 +1657,13 @@ function renderCcMonths(months) {
   wrap.innerHTML = '';
   for (const m of months) {
     const label = document.createElement('label');
-    label.className = 'cc-month' + (m.imported ? ' done' : '');
+    label.className = 'cc-month' + (m.imported ? ' done' : '')
+      + (m.settled ? ' settled' : '');
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.value = m.label;
     box.dataset.imported = m.imported;
+    box.dataset.settled = m.settled ? '1' : '0';
     label.appendChild(box);
     label.appendChild(document.createTextNode(m.label));
     if (m.imported) {
@@ -1670,6 +1672,17 @@ function renderCcMonths(months) {
       have.textContent = `${m.imported} held`;
       have.title = 'already in your library — downloading again adds only new games';
       label.appendChild(have);
+    }
+    if (m.settled) {
+      // A finished month that's already been read can't gain a game, so
+      // "Get new games" won't even ask about it. Marked, because a button
+      // that quietly does less than the whole list has to say so.
+      const done = document.createElement('span');
+      done.className = 'cc-settled';
+      done.textContent = '✓';
+      done.title = 'this month is over and already downloaded — nothing can be '
+        + 'added to it, so it will not be fetched again';
+      label.appendChild(done);
     }
     wrap.appendChild(label);
   }
@@ -1727,43 +1740,95 @@ function wireChesscomImport() {
     for (const box of document.querySelectorAll('#cc-months input')) box.checked = false;
   });
 
-  document.getElementById('cc-import-btn').addEventListener('click', async () => {
+  /** Runs an import to completion over `months`.
+
+      In 'new' mode the whole list goes to the server at once: it decides
+      which months cost a request (a finished month already downloaded costs
+      none) and hands back whatever its per-request cap didn't reach, so this
+      loops on `remaining` rather than slicing the list itself. Only the
+      server knows which months are free.
+
+      'refetch' pulls the named months down in full, so it chunks by the
+      server's cap the way it always did. */
+  const ccRun = async (buttonId, months, mode) => {
+    // Looked up by id rather than taken from the click event: `currentTarget`
+    // is only valid while the event is dispatching, and both callers await
+    // before getting here, by which point it is null and the button never
+    // comes back out of its disabled state.
+    const button = document.getElementById(buttonId);
     const username = usernameBox.value.trim();
-    const months = ccSelected();
-    if (months.length === 0) { ccStatus('Tick at least one month.', true); return; }
-    const button = document.getElementById('cc-import-btn');
+    if (!username) { ccStatus('Type your chess.com username first.', true); return; }
+    if (!months.length) { ccStatus('Tick at least one month.', true); return; }
+
     button.disabled = true;
-    let added = 0, skipped = 0, clocked = 0, done = 0;
+    let added = 0, skipped = 0, clocked = 0;
+    let downloaded = 0, settled = 0, unchanged = 0, handled = 0;
+    let pending = mode === 'refetch' ? months.slice(0, CC_MONTHS_PER_REQUEST) : months;
+    let queued = mode === 'refetch' ? months.slice(CC_MONTHS_PER_REQUEST) : [];
+
     try {
-      for (let i = 0; i < months.length; i += CC_MONTHS_PER_REQUEST) {
-        const chunk = months.slice(i, i + CC_MONTHS_PER_REQUEST);
-        ccStatus(`Downloading ${done + 1}-${done + chunk.length} of ${months.length} month(s)...`);
+      while (pending.length) {
+        ccStatus(mode === 'refetch'
+          ? `Downloading ${handled + 1}-${handled + pending.length} of ${months.length} month(s)...`
+          : `Checking ${months.length - handled} month(s) for new games...`);
         const target = document.getElementById('cc-collection').value;
         const res = await api('/api/games/chesscom/import', {
           method: 'POST', body: JSON.stringify({
-            username, months: chunk,
+            username, months: pending, mode,
             collection_id: target ? Number(target) : null,
           }),
         });
         added += res.added; skipped += res.skipped; clocked += res.with_clocks;
-        done += chunk.length;
-        // After every chunk, so a long import fills the library as it goes
+        downloaded += res.downloaded || 0;
+        settled += res.settled || 0;
+        unchanged += res.unchanged || 0;
+        handled += pending.length - (res.remaining || []).length;
+        // After every round, so a long import fills the library as it goes
         // rather than all at the end. The whole library, not just the list:
         // new games change the speed counts and the group sizes too.
         await refreshLibrary();
+        pending = (res.remaining && res.remaining.length) ? res.remaining
+          : queued.splice(0, CC_MONTHS_PER_REQUEST);
       }
       await loadMonths(true);   // repaint the "held" counts against the new library
-      // Clocks are called out because they're the reason to import this way:
-      // without them the Elo fit can't drop moves played instantly.
-      ccStatus(`Added ${added} game(s)${clocked ? `, ${clocked} with clock times` : ''}`
-        + `${skipped ? `; skipped ${skipped} already in your library` : ''}.`);
+
+      // Say what was downloaded as well as what was added. "Added 0 games"
+      // on its own reads as a failure; "checked 1 month, 119 already
+      // complete" says the thing actually worked.
+      const savings = [];
+      if (settled) savings.push(`${settled} already complete`);
+      if (unchanged) savings.push(`${unchanged} unchanged`);
+      const detail = savings.length ? ` (${savings.join(', ')}, not re-downloaded)` : '';
+      if (added) {
+        // Clocks are called out because they're the reason to import this
+        // way: without them the Elo fit can't drop moves played instantly.
+        ccStatus(`Added ${added} game(s)${clocked ? `, ${clocked} with clock times` : ''}`
+          + `${skipped ? `; ${skipped} already in your library` : ''}`
+          + `${detail}.`);
+      } else {
+        ccStatus(`No new games. Downloaded ${downloaded} month(s)${detail}.`);
+      }
     } catch (e) {
-      ccStatus(`Stopped after ${done} of ${months.length} month(s): ${e.message}`
+      ccStatus(`Stopped after ${handled} of ${months.length} month(s): ${e.message}`
         + (added ? ` ${added} game(s) were saved.` : ''), true);
       await refreshLibrary();
     } finally {
       button.disabled = false;
     }
+  };
+
+  // The everyday action: whatever chess.com has that you don't. Every month
+  // goes to the server, which skips the finished ones for free -- so this is
+  // usually one request that checks the current month and nothing else.
+  document.getElementById('cc-sync-btn').addEventListener('click', async () => {
+    const months = await loadMonths(true)
+      || [...document.querySelectorAll('#cc-months input')].map((i) => ({ label: i.value }));
+    await ccRun('cc-sync-btn', months.map((m) => m.label), 'new');
+  });
+
+  document.getElementById('cc-import-btn').addEventListener('click', () => {
+    const refetch = document.getElementById('cc-refetch').checked;
+    return ccRun('cc-import-btn', ccSelected(), refetch ? 'refetch' : 'new');
   });
 }
 

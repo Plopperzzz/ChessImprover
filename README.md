@@ -209,20 +209,42 @@ needed anyway.
 you'd rather not export a PGN by hand. Type your chess.com handle (a profile
 URL works too), press **Find months**, and it lists every month that account
 has games in — newest first, each marked with how many of its games you
-already hold. Tick the ones you want and press **Download selected**.
+already hold and whether it's finished. Then press **Get new games**.
 
+* **It only downloads what you don't have.** Not "downloads everything and
+  discards the duplicates" — it doesn't fetch them at all. Three layers,
+  because each catches what the one below it can't:
+
+  1. **A finished month you've already read is never requested again.** A
+     monthly archive holds the games that *ended* in that month, so once the
+     month is over nothing can be added to it. There is no point even asking
+     whether it changed. This is what turns "get my latest games" on a
+     ten-year account from 120 downloads into one.
+  2. **Everything else is asked conditionally**, with chess.com's own
+     `ETag`/`Last-Modified` sent back, so an unchanged archive answers `304`
+     with no body.
+  3. **A game you already hold is never stored twice.** chess.com gives every
+     game a permanent link, recorded on the row the first time it lands, so
+     even a month that really did change contributes only the games played
+     since. Games you uploaded by hand are recognised the same way.
+
+  Months skipped this way are marked ✓ in the list and counted in the summary
+  ("14 already complete, not re-downloaded") — a button that does less than
+  the whole list should say so rather than look like it failed.
+* **To force a re-download**, tick the months and press **Download selected**
+  with **in full**. That ignores all of the above, which is what you want
+  after deleting games from the library and wanting them back — the caching
+  would otherwise make that impossible.
 * It pulls the *monthly PGN archives*, which is deliberate: they carry the
   `%clk` comments, so an imported library arrives with per-move think times
   and the Elo fit's instant-move filter (below) works on it. The summary line
   says how many of the games came with clocks, because a library without them
   means something different.
-* Re-downloading a month costs nothing but the download. chess.com gives every
-  game a permanent link and the importer remembers it, so importing the
-  current month again — the normal way to pick up the last few days — adds
-  only what's new. Games you had already uploaded by hand are recognised too.
 * Months are fetched a few at a time with a progress line, rather than one
   long request. chess.com rate-limits, and a five-year account is sixty
-  archives; stopping halfway keeps everything that already landed.
+  archives; stopping halfway keeps everything that already landed. The cap
+  counts *downloads*, not months considered, so asking about ten years of
+  archive is normally a single call.
 * Only public, finished games are available, which is all the API offers. No
   password is involved and nothing is sent to chess.com but the username.
 

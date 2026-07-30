@@ -167,6 +167,35 @@ CREATE TABLE IF NOT EXISTS game_collections (
 
 CREATE INDEX IF NOT EXISTS idx_game_collections_game ON game_collections(game_id);
 
+-- What we already know about each chess.com monthly archive, so a repeat
+-- import doesn't download months it has already got (see app/chesscom.py).
+--
+-- Two things make a re-download unnecessary, and this table holds the
+-- evidence for both:
+--
+-- * `etag` / `last_modified` are chess.com's own cache validators, sent back
+--   on the next request so an unchanged month answers 304 with no body.
+-- * `fetched_at` says *when* we last read the archive. A monthly archive
+--   holds the games that ended in that month, so once the month is over
+--   nothing can be added to it -- a month fetched after it ended is final and
+--   need never be requested again, not even to be told it hasn't changed.
+--
+-- Keyed by username as well as user, because one account may import from more
+-- than one chess.com handle (an alt, or a partner's games).
+CREATE TABLE IF NOT EXISTS chesscom_archives (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    month INTEGER NOT NULL,
+    etag TEXT,
+    last_modified TEXT,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- How many games the archive held when we last read it. Reported to the
+    -- browser so "nothing new" can be said with a number behind it.
+    games INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, username, year, month)
+);
+
 -- A saved analysis run: a named container that games get appended to, so a
 -- batch (section 12) and a one-off single-game analysis are the same shape.
 CREATE TABLE IF NOT EXISTS analysis_runs (

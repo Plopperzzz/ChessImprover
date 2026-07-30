@@ -510,7 +510,9 @@ input[type="text"], input[type="number"], textarea, select {
   max-height: 200px;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  /* Wide enough for 'YYYY-MM', the held count and the settled tick on one
+     line -- the month label wrapping in half is what a narrower cell does. */
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
   gap: 4px;
   margin-top: 8px;
 }
@@ -527,10 +529,24 @@ input[type="text"], input[type="number"], textarea, select {
 }
 .cc-month:hover { border-color: var(--border); }
 .cc-month input { width: auto; flex: none; }
+.cc-month { white-space: nowrap; }
 /* Months already in the library are quiet: the point of the mark is that
    re-downloading them is a no-op, not that they're unavailable. */
 .cc-month .cc-have { color: var(--muted); font-size: 10px; }
 .cc-month.done { color: var(--muted); }
+/* A month that is over and already downloaded. "Get new games" skips it
+   without a request, so it is marked -- a button that does less than the
+   whole list has to show which part it left out. */
+.cc-month .cc-settled { color: #7db37d; font-size: 10px; margin-left: auto; }
+.cc-refetch {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.cc-refetch input { width: auto; flex: none; }
 #cc-status.error { color: #e05050; }
 
 .fen-row { display: flex; gap: 8px; width: 100%; margin-top: 6px; }

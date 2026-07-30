@@ -165,9 +165,14 @@
               <div id="cc-status" class="hint"></div>
               <div id="cc-months"></div>
               <div class="cc-row cc-actions hidden" id="cc-actions">
+                <button type="button" id="cc-sync-btn" class="cc-go"
+                        title="Fetches only what chess.com has that you don't. Finished months you already have are not downloaded again.">Get new games</button>
                 <button type="button" id="cc-select-new">Select months I don't have</button>
                 <button type="button" id="cc-clear">Clear</button>
-                <button type="button" id="cc-import-btn" class="cc-go">Download selected</button>
+                <button type="button" id="cc-import-btn">Download selected</button>
+                <label class="cc-refetch" title="Ignore what's already been downloaded and pull the selected months in full. Use this to get back games you deleted from the library.">
+                  <input type="checkbox" id="cc-refetch" /> in full
+                </label>
               </div>
               <!-- Filing the download straight into a group, so a tournament
                    month doesn't have to be found again afterwards. -->
