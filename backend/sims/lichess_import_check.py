@@ -22,12 +22,12 @@ What it is actually checking, in rough order of how badly each would hurt:
   never hand back a puzzle the user has already attempted.
 """
 
-import asyncio
 import csv
 import io
 import os
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -89,11 +89,36 @@ def build_csv(rows: int) -> bytes:
     return buffer.getvalue().encode()
 
 
-def compress(raw: bytes, path: str):
-    import zstandard
+def compress(raw: bytes, path: str, kind: str = "zstd"):
+    """The same bytes in whichever wrapper. People arrive with all of these:
+    the published .zst, a plain .csv they decompressed, or something an
+    archive manager re-wrapped on the way."""
+    if kind == "zstd":
+        import zstandard
 
+        data = zstandard.ZstdCompressor().compress(raw)
+    elif kind == "gzip":
+        import gzip
+
+        data = gzip.compress(raw)
+    elif kind == "bzip2":
+        import bz2
+
+        data = bz2.compress(raw)
+    elif kind == "xz":
+        import lzma
+
+        data = lzma.compress(raw)
+    elif kind == "zip":
+        import zipfile
+
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("lichess_db_puzzle.csv", raw)
+        return
+    else:
+        data = raw
     with open(path, "wb") as handle:
-        handle.write(zstandard.ZstdCompressor().compress(raw))
+        handle.write(data)
 
 
 def reset_tables():
@@ -105,7 +130,36 @@ def reset_tables():
 
 
 def run(filters, path, replace=False):
-    return asyncio.run(lp.run_import(filters, source_path=path, replace=replace))
+    """The import, run to completion the way the background thread runs it."""
+    return lp.run_import(filters, source_path=path, replace=replace)
+
+
+def _missing_message() -> str:
+    try:
+        lp.start(lp.ImportFilters(), source_path="/nope/missing.csv")
+    except lp.PuzzleImportError as e:
+        return str(e)
+    return ""
+
+
+def run_in_background_and_watch(path: str) -> dict:
+    """Starts an import the way the endpoint does and polls it to the end.
+
+    The point is the polling. The first version of this feature did the whole
+    import on the event loop, so `current_progress` could not be read while it
+    ran -- the progress bar it fed was dead for exactly as long as there was
+    progress to report, and every other request queued behind it.
+    """
+    lp.start(lp.ImportFilters(), source_path=path, replace=True)
+    seen = []
+    for _ in range(600):
+        snapshot = lp.current_progress()
+        if snapshot:
+            seen.append(snapshot)
+            if snapshot["finished"]:
+                break
+        time.sleep(0.05)
+    return {"snapshots": seen, "final": lp.current_progress()}
 
 
 def main():
@@ -182,16 +236,76 @@ def main():
     except lp.PuzzleImportError as e:
         check("a wrong file is refused", "PuzzleId" in str(e), str(e))
 
-    print("\nUncompressed input gets an error that says what to do:")
-    plain_path = os.path.join(SCRATCH, "plain.csv.zst")
-    with open(plain_path, "wb") as handle:
-        handle.write(build_csv(3))
+    print("\nEvery shape the file actually turns up in:")
+    # The published file is .csv.zst, but by the time it reaches the importer
+    # it may have been decompressed by the browser, or re-wrapped by an
+    # archive manager. Refusing all but zstd -- which the first version did --
+    # tells someone their own copy of the database is the wrong file.
+    raw = build_csv(20)
+    # Names deliberately distinct from the main fixture: writing a 20-row
+    # file over the 500-row one is how the rating-band checks below quietly
+    # started passing over an empty database.
+    for kind, name in [("plain", "shape.csv"), ("zstd", "shape.csv.zst"),
+                       ("gzip", "shape.csv.gz"), ("bzip2", "shape.csv.bz2"),
+                       ("xz", "shape.csv.xz"), ("zip", "shape.zip")]:
+        candidate = os.path.join(SCRATCH, name)
+        compress(raw, candidate, kind)
+        reset_tables()
+        try:
+            result = run(lp.ImportFilters(), candidate)
+            check(f"  {kind:6} ({name})", result["imported"] == 21,
+                  f"imported {result['imported']}")
+        except lp.PuzzleImportError as e:
+            check(f"  {kind:6} ({name})", False, str(e))
+
+    # ...and the extension is not what decides it, because the extension is
+    # the thing most likely to be wrong.
+    mislabelled = os.path.join(SCRATCH, "actually-plain.csv.zst")
+    compress(raw, mislabelled, "plain")
     reset_tables()
     try:
-        run(lp.ImportFilters(), plain_path)
-        check("plain CSV is refused", False, "it was accepted")
+        result = run(lp.ImportFilters(), mislabelled)
+        check("a plain CSV named .zst still works", result["imported"] == 21,
+              f"imported {result['imported']}")
     except lp.PuzzleImportError as e:
-        check("plain CSV is refused", "zstd" in str(e), str(e))
+        check("a plain CSV named .zst still works", False, str(e))
+
+    gz_as_zst = os.path.join(SCRATCH, "actually-gzip.csv.zst")
+    compress(raw, gz_as_zst, "gzip")
+    reset_tables()
+    try:
+        result = run(lp.ImportFilters(), gz_as_zst)
+        check("a gzip named .zst still works", result["imported"] == 21,
+              f"imported {result['imported']}")
+    except lp.PuzzleImportError as e:
+        check("a gzip named .zst still works", False, str(e))
+
+    print("\nFormat sniffing reads the leading bytes, not the name:")
+    for kind in ("plain", "zstd", "gzip", "bzip2", "xz", "zip"):
+        probe = os.path.join(SCRATCH, f"sniff-{kind}")
+        compress(b"PuzzleId,FEN\n", probe, kind)
+        with open(probe, "rb") as handle:
+            got = lp.detect_format(handle.read(4096))
+        check(f"  {kind}", got == kind, f"detected {got}")
+
+    print("\nAn empty file says so rather than importing nothing quietly:")
+    empty = os.path.join(SCRATCH, "empty.csv")
+    open(empty, "wb").close()
+    reset_tables()
+    try:
+        run(lp.ImportFilters(), empty)
+        check("an empty file is refused", False, "it was accepted")
+    except lp.PuzzleImportError as e:
+        check("an empty file is refused", "header" in str(e), str(e))
+
+    print("\nA missing path is caught before any work starts:")
+    try:
+        lp.start(lp.ImportFilters(), source_path="/nope/missing.csv")
+        check("a missing file is refused up front", False, "it was accepted")
+    except lp.PuzzleImportError as e:
+        check("a missing file is refused up front", "no such file" in str(e), str(e))
+    check("and it says the path is server-side",
+          "machine running the app" in _missing_message(), _missing_message())
 
     print("\nFilters:")
     reset_tables()
@@ -271,7 +385,37 @@ def main():
               or isinstance(lp.rating_for_themes(conn, ["zugzwang"]), int))
         check("no themes gives no rating", lp.rating_for_themes(conn, []) is None)
 
+    print("\nRunning in the background, with progress readable while it runs:")
+    big = os.path.join(SCRATCH, "background.csv.zst")
+    compress(build_csv(40000), big)
+    watched = run_in_background_and_watch(big)
+    snapshots = watched["snapshots"]
+    final = watched["final"]
+    check("it finishes", final and final["finished"], str(final))
+    check("and imports everything", final and final["rows_kept"] == 40001,
+          str(final and final["rows_kept"]))
+    # More than one distinct reading means the progress object really was
+    # readable mid-flight rather than only after the fact.
+    distinct = len({s["rows_kept"] for s in snapshots})
+    check("progress moved while it ran", distinct > 2,
+          f"{distinct} distinct readings across {len(snapshots)} polls")
+    check("it is not still holding the lock",
+          not lp.is_running() and lp.start is not None)
+
+    print("\nStarting a second import while one runs is refused:")
+    lp.start(lp.ImportFilters(), source_path=big, replace=True)
+    try:
+        lp.start(lp.ImportFilters(), source_path=big)
+        check("the second is refused", False, "it was accepted")
+    except lp.PuzzleImportError as e:
+        check("the second is refused", "already running" in str(e), str(e))
+    while lp.is_running():
+        time.sleep(0.05)
+    check("and once it's done another can start", not lp.is_running())
+
     print("\nStatus reporting:")
+    reset_tables()
+    run(lp.ImportFilters(), path, replace=True)
     with db_cursor() as conn:
         status = lp.import_status(conn)
     check("reports the database as available", status["available"] is True)

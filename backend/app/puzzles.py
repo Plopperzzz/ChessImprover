@@ -112,8 +112,13 @@ def build(user_id: int) -> dict:
     # on every rescan once 'miss' was split out of mistake/blunder.
     wanted_classes = ", ".join("?" * len(PUZZLE_CLASSIFICATIONS))
     with db_cursor() as conn:
+        # No pgn_text here. The old version selected it alongside every
+        # matching move and leaned on DISTINCT, which made SQLite sort a copy
+        # of the full game text per bad move -- on a real library that is tens
+        # of megabytes of sorting to find a few thousand ply numbers. The text
+        # is fetched below, once per game, and only for games that need it.
         rows = conn.execute(
-            f"""SELECT DISTINCT g.id AS game_id, g.pgn_text, g.your_color,
+            f"""SELECT DISTINCT g.id AS game_id, g.your_color,
                        m.ply, m.classification, m.wp_drop, m.cp_before
                 FROM analysis_moves m
                 JOIN run_games rg ON rg.id = m.run_game_id
@@ -124,6 +129,15 @@ def build(user_id: int) -> dict:
                 ORDER BY g.id, m.ply""",
             (user_id, *PUZZLE_CLASSIFICATIONS),
         ).fetchall()
+        # What's already been built, so a rescan doesn't re-parse the whole
+        # library to rediscover puzzles it made last time. This is the
+        # difference between a rescan costing a minute and costing a second,
+        # and a rescan is something you press after every analysis.
+        existing = {
+            (row["game_id"], row["ply"]) for row in conn.execute(
+                "SELECT game_id, ply FROM puzzles WHERE user_id = ?", (user_id,)
+            )
+        }
 
     considered = len(rows)
     skipped_already_lost = 0
@@ -136,26 +150,47 @@ def build(user_id: int) -> dict:
         if row["cp_before"] is not None and win_prob(row["cp_before"]) < MIN_WIN_PROB_BEFORE:
             skipped_already_lost += 1
             continue
+        if (row["game_id"], row["ply"]) in existing:
+            continue
         by_game.setdefault(row["game_id"], []).append(row)
 
     made = []
-    for game_id, moves in by_game.items():
-        # One parse per game, however many of its moves qualify.
-        game = chess.pgn.read_game(io.StringIO(moves[0]["pgn_text"]))
-        if game is None:
-            continue
-        wanted = {m["ply"]: m for m in moves}
-        board = game.board()
-        ply = 0
-        for move in game.mainline_moves():
-            ply += 1
-            row = wanted.get(ply)
-            if row is not None:
-                made.append((
-                    row["game_id"], ply, board.fen(), move.uci(), board.san(move),
-                    row["your_color"], row["classification"], row["wp_drop"], row["cp_before"],
-                ))
-            board.push(move)
+    if by_game:
+        with db_cursor() as conn:
+            ids = list(by_game)
+            texts = {}
+            # Chunked because SQLite caps the number of bound parameters
+            # (999 on older builds), and a first scan can want thousands.
+            for start in range(0, len(ids), 500):
+                batch = ids[start:start + 500]
+                texts.update({
+                    row["id"]: row["pgn_text"] for row in conn.execute(
+                        "SELECT id, pgn_text FROM games WHERE id IN "
+                        f"({', '.join('?' * len(batch))})", batch
+                    )
+                })
+
+        for game_id, moves in by_game.items():
+            pgn_text = texts.get(game_id)
+            if not pgn_text:
+                continue
+            # One parse per game, however many of its moves qualify.
+            game = chess.pgn.read_game(io.StringIO(pgn_text))
+            if game is None:
+                continue
+            wanted = {m["ply"]: m for m in moves}
+            board = game.board()
+            ply = 0
+            for move in game.mainline_moves():
+                ply += 1
+                row = wanted.get(ply)
+                if row is not None:
+                    made.append((
+                        row["game_id"], ply, board.fen(), move.uci(), board.san(move),
+                        row["your_color"], row["classification"], row["wp_drop"],
+                        row["cp_before"],
+                    ))
+                board.push(move)
 
     with db_cursor() as conn:
         before = conn.execute(
@@ -1011,12 +1046,17 @@ def lichess_status(user: dict = Depends(require_user)):
 
 
 @router.post("/lichess/import")
-async def lichess_import(body: ImportIn, user: dict = Depends(require_user)):
-    """Downloads and imports the Lichess puzzle database.
+def lichess_import(body: ImportIn, user: dict = Depends(require_user)):
+    """Starts importing the Lichess puzzle database, and returns immediately.
 
-    Runs to completion in the request. It is a long request -- minutes for a
-    filtered import, longer for the whole thing -- and the browser polls
-    /lichess/status meanwhile for progress rather than watching this call.
+    Deliberately *not* run inside the request. A full import is minutes of
+    work behind a few hundred megabytes of download, and the first version of
+    this held the HTTP request open for all of it -- so the browser gave up
+    and reported "Failed to fetch" on an import that was running perfectly
+    well, and the progress poll it was supposed to be feeding couldn't be
+    answered either, because the same request had the event loop.
+
+    Now it hands the work to a thread and the browser polls /lichess/status.
     """
     filters = lichess_puzzles.ImportFilters(
         min_rating=body.min_rating,
@@ -1025,7 +1065,7 @@ async def lichess_import(body: ImportIn, user: dict = Depends(require_user)):
         max_puzzles=body.max_puzzles,
     )
     try:
-        return await lichess_puzzles.run_import(
+        return lichess_puzzles.start(
             filters, source_path=body.source_path, replace=body.replace
         )
     except lichess_puzzles.PuzzleImportError as e:

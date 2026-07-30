@@ -77,11 +77,23 @@ function escapeHtml(value) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    credentials: 'include',
-    headers: opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
-    ...opts,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      credentials: 'include',
+      headers: opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
+      ...opts,
+    });
+  } catch (e) {
+    // fetch only rejects when the request never got an answer at all. The
+    // browser's own wording for that is "Failed to fetch", which reads like
+    // the app is broken and says nothing about where to look -- so name the
+    // two things it actually means on a self-hosted server.
+    throw new Error(
+      `no answer from the server (${path}). It may have stopped, or be busy `
+      + 'with a long job — check the terminal it is running in.',
+    );
+  }
   if (!res.ok) {
     let message = res.statusText;
     try { const body = await res.json(); message = body.detail || message; } catch (e) { /* ignore */ }
@@ -4276,7 +4288,14 @@ function renderImportStatus(status) {
     host.innerHTML = `<b>${status.puzzles.toLocaleString()}</b> puzzles imported${span}`
       + (status.imported_at ? ` · ${escapeHtml(status.imported_at)}` : '');
   }
-  if (status.running) renderImportProgress(status.running);
+  if (status.running) {
+    // An import survives a page reload -- it's a thread on the server, not
+    // something this tab owns. Pick it back up rather than showing a stale
+    // "nothing imported" next to a job that is halfway through.
+    renderImportProgress(status.running);
+    importInFlight(true);
+    pollImportProgress();
+  }
 }
 
 function renderImportProgress(progress) {
@@ -4305,6 +4324,10 @@ function importInFlight(running) {
   document.getElementById('pz-import-cancel').disabled = !running;
 }
 
+/** Kicks off an import. The request returns as soon as the job has started;
+    everything after that is the poll below. An import can run for many
+    minutes, and waiting on the request is how the browser ends up reporting
+    a failure on a job that is running fine. */
 async function startPuzzleImport() {
   const number = (id) => {
     const raw = document.getElementById(id).value.trim();
@@ -4320,37 +4343,45 @@ async function startPuzzleImport() {
   };
   importInFlight(true);
   renderImportProgress({ state: 'starting', message: 'starting...' });
-  pollImportProgress();
   try {
-    const result = await api('/api/puzzles/lichess/import', {
+    const ack = await api('/api/puzzles/lichess/import', {
       method: 'POST', body: JSON.stringify(body),
     });
-    renderImportProgress({ state: 'done', message: result.message,
-                           rows_kept: result.imported, rows_read: result.rows_read });
-    // The themes only exist once something has been imported.
-    await refreshPuzzleStats();
-    await renderPuzzleThemes();
+    if (ack.progress) renderImportProgress(ack.progress);
+    pollImportProgress();
   } catch (e) {
+    // Only the things checkable up front land here -- a missing file, an
+    // import already running. Anything that goes wrong once it's going is
+    // reported through the poll.
     renderImportProgress({ state: 'error', message: e.message });
-  } finally {
     importInFlight(false);
-    clearTimeout(state.puzzleImportPoll);
   }
 }
 
+/** Follows a running import to its end, then refreshes what it produced. */
 function pollImportProgress() {
   clearTimeout(state.puzzleImportPoll);
   state.puzzleImportPoll = setTimeout(async () => {
+    let status;
     try {
-      const status = await api('/api/puzzles/lichess/status');
-      if (status.running) {
-        renderImportProgress(status.running);
-        pollImportProgress();
-      }
+      status = await api('/api/puzzles/lichess/status');
     } catch (e) {
-      // The import request itself reports failures; a dropped poll is not
-      // worth surfacing on top of that.
+      // A dropped poll is not the import failing. Keep asking.
+      pollImportProgress();
+      return;
     }
+    const progress = status.running || status.last_run;
+    if (progress) renderImportProgress(progress);
+    if (status.running) {
+      pollImportProgress();
+      return;
+    }
+    // Finished, one way or another.
+    importInFlight(false);
+    renderImportStatus(status);
+    if (progress) renderImportProgress(progress);
+    await refreshPuzzleStats();
+    await renderPuzzleThemes();
   }, 900);
 }
 

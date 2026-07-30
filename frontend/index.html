@@ -533,6 +533,8 @@
             all of it takes a while and about a gigabyte of disk, so the
             filters below let you take a band around your own rating instead.
             Re-importing later adds to what you have rather than starting over.
+            It runs in the background, so you can carry on using the app —
+            and it keeps going if you close this page.
           </p>
           <div id="pz-import-status" class="pz-import-status"></div>
           <div class="play-grid">
@@ -548,9 +550,9 @@
               <input type="number" id="pz-import-limit" min="100" step="1000"
                      placeholder="all" />
             </label>
-            <label>Already downloaded? Path
+            <label title="A path on the machine running the app. .csv, .zst, .zip, .gz, .bz2 and .xz all work.">Already downloaded? Path on the server
               <input type="text" id="pz-import-path"
-                     placeholder="lichess_db_puzzle.csv.zst" />
+                     placeholder="/path/to/lichess_db_puzzle.csv.zst" />
             </label>
           </div>
           <label class="pz-inline-check">

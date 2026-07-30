@@ -487,8 +487,24 @@ They're applied while the file streams, so a filtered import reads the file
 once and stops early when it has enough. Nothing is ever held in memory but one
 batch. An import that dies halfway leaves what it committed, and re-running
 adds only what's missing rather than starting over — tick **Replace** if you
-actually want to start over. If you'd rather not pull a few hundred megabytes
-through the app, download the file yourself and give the importer its path.
+actually want to start over.
+
+It runs **in the background**: pressing Import returns immediately and the
+panel polls for progress. That is not a detail — a full import is minutes of
+work behind a few hundred megabytes of download, and doing it inside the
+request meant the browser eventually gave up and said "Failed to fetch" on a
+job that was running perfectly well, while the whole server sat unable to
+answer anything else (including the progress poll, and including a puzzle
+scan in another tab). You can keep using the app while it runs, and it
+survives a page reload — come back and the panel picks the job up again.
+
+If you'd rather not pull a few hundred megabytes through the app, download the
+file yourself and give the importer its path. **It takes the file in whatever
+shape you have it**: the published `.csv.zst`, a plain `.csv` you decompressed,
+or a `.zip`, `.gz`, `.bz2` or `.xz`. The format is read from the file's leading
+bytes, not its name, so a mislabelled extension doesn't matter. The path is on
+the machine running the app, not the one you're browsing from, and the error
+says so if it can't find it.
 
 **Solving.** A Lichess puzzle is a line, not a move. The stored position is the
 one *before* the opponent's move; that move is played in on the board so the

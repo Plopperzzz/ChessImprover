@@ -24,12 +24,12 @@ What matters most here, in order:
   not the ones it wasn't tagged with.
 """
 
-import asyncio
 import csv
 import io
 import os
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -81,7 +81,7 @@ def seed_lichess():
     path = os.path.join(SCRATCH, "puzzles.csv.zst")
     with open(path, "wb") as handle:
         handle.write(zstandard.ZstdCompressor().compress(buffer.getvalue().encode()))
-    asyncio.run(lp.run_import(lp.ImportFilters(), source_path=path))
+    lp.run_import(lp.ImportFilters(), source_path=path)
 
 
 def login(client: TestClient) -> None:
@@ -305,6 +305,26 @@ def main():
     check("the rescan does not 500", "added" in built, str(built))
     check("it finds the blunder", built["added"] == 1, str(built))
     check("and reports the total", built["total"] == 1, str(built))
+
+    again = client.post("/api/puzzles/rebuild").json()
+    check("a second rescan adds nothing", again["added"] == 0, str(again))
+    check("and keeps what was there", again["total"] == 1, str(again))
+    # The rescan is a button people press after every analysis, and it is a
+    # blocking request with no progress bar. It stays quick because it skips
+    # games whose puzzles already exist; if that regresses, a large library's
+    # rescan goes back to re-parsing every PGN and looking hung.
+    with db_cursor() as conn:
+        conn.execute("DELETE FROM puzzles WHERE user_id = 1")
+    from app.puzzles import build as build_puzzles  # noqa: PLC0415
+
+    build_puzzles(1)
+    seen = []
+    for _ in range(3):
+        started = time.monotonic()
+        build_puzzles(1)
+        seen.append(time.monotonic() - started)
+    check("and re-parses nothing when there is nothing new",
+          max(seen) < 0.25, f"slowest repeat rescan {max(seen)*1000:.0f}ms")
 
     own = client.get("/api/puzzles/next?source=own").json()["puzzle"]
     check("the puzzle is the position before the blunder",

@@ -417,6 +417,12 @@ def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Wait for a writer rather than failing instantly. The puzzle-database
+    # import writes for minutes from a background thread (see
+    # app/lichess_puzzles.py), and with sqlite3's default a click that
+    # happened to land during one of its batches would come back as
+    # "database is locked" instead of just taking a moment.
+    conn.execute("PRAGMA busy_timeout = 15000")
     return conn
 
 
