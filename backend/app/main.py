@@ -20,7 +20,14 @@ from .games import router as games_router
 from .jobqueue import pool
 from .live_eval_ws import router as ws_router
 from .openings import router as openings_router
-from .paths import ASSETS_DIR, FRONTEND_DIR, asset_set_details, list_board_images
+from .paths import (
+    ASSETS_DIR,
+    FRONTEND_DIR,
+    WEB_DIST_DIR,
+    asset_set_details,
+    list_board_images,
+    web_built,
+)
 from .play import router as play_router
 from .play import status as play_status
 from .puzzles import router as puzzles_router
@@ -136,5 +143,28 @@ class AssetStaticFiles(RevalidatingStaticFiles):
         return await super().get_response(path, scope)
 
 
+class SpaStaticFiles(RevalidatingStaticFiles):
+    """StaticFiles for a single-page app: anything that isn't a real file falls
+    back to index.html so a deep link doesn't 404 on reload."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        if response.status_code == 404:
+            return await super().get_response("index.html", scope)
+        return response
+
+
 app.mount("/assets", AssetStaticFiles(directory=ASSETS_DIR), name="assets")
-app.mount("/", RevalidatingStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+
+# The classic UI keeps working, at its own prefix, and stays the app's front
+# door until the React bundle has been built. Play vs Maia, puzzles, batch
+# runs, the chess.com import and the opening explorer still live only there,
+# and the React UI links across to it for them.
+app.mount("/legacy", RevalidatingStaticFiles(directory=FRONTEND_DIR, html=True), name="legacy")
+
+# Mounted last: a mount at "/" matches everything, so it has to come after the
+# API routers and the two prefixed mounts above.
+if web_built():
+    app.mount("/", SpaStaticFiles(directory=WEB_DIST_DIR, html=True), name="web")
+else:
+    app.mount("/", RevalidatingStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

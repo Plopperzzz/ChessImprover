@@ -10,6 +10,9 @@ __pycache__/
 .DS_Store
 node_modules/
 *.tgz
+# The React UI's build output. Built on each machine with `npm run build` in
+# web/ -- the server falls back to the classic UI when it isn't there.
+web/dist/
 db/*
 # Local test virtualenv (torch + maia3 for driving the real engine)
 .venv/

@@ -3,7 +3,16 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # backend/
 REPO_ROOT = os.path.dirname(BASE_DIR)
 ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
+# The classic (vanilla JS) UI. Still served in full, at /legacy.
 FRONTEND_DIR = os.path.join(REPO_ROOT, "frontend")
+# The React UI's build output. Absent until `npm run build` has been run in
+# web/, which is why the mount in main.py is conditional -- a fresh checkout
+# has to boot into *something*, and that something is the classic UI.
+WEB_DIST_DIR = os.path.join(REPO_ROOT, "web", "dist")
+
+
+def web_built() -> bool:
+    return os.path.isfile(os.path.join(WEB_DIST_DIR, "index.html"))
 
 # The only directory engine binaries may be launched from. It lives under
 # assets/ for convenience, but is explicitly *not* served over HTTP -- see

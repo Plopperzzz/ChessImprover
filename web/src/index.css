@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* The move list and the games table are the two long scrollers in the app and
+   both sit inside dark panels, where the platform scrollbar is a bright slab. */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #57534d transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: #57534d;
+  border-radius: 4px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}

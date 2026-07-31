@@ -28,6 +28,17 @@ your library straight from chess.com with the clocks intact, and filtering it
 by time control into groups you can analyse or delete in bulk. What's next is in
 [`docs/TODO.md`](docs/TODO.md).
 
+### Two front ends
+
+There is now a second UI, in [`web/`](web/README.md) — React, and a single
+**Full analysis** button that runs the Stockfish pass and the Maia Elo sweep
+together and shows the fitted rating beneath the move list. It covers game
+analysis and the progress view. The classic vanilla-JS UI in `frontend/` is
+unchanged and still holds everything the React one hasn't picked up yet —
+play vs Maia, puzzles, batch runs, the chess.com import and the opening
+explorer. Both are served by the same process, off the same database: the
+React build at `/`, the classic UI at `/legacy/`.
+
 ### The four tabs
 
 Everything used to sit on one page, which meant scrolling past a batch runner
@@ -1035,6 +1046,24 @@ $env:STOCKFISH_PATH = "C:\path\to\stockfish.exe"
 
 Setting `STOCKFISH_PATH` is optional -- it's simpler to drop the engines into
 `assets/Engines/` (see below) and pick them in Settings.
+
+### Building the new UI
+
+There are two front ends in the repo, and both talk to the server above.
+
+```bash
+cd web
+npm install
+npm run build
+```
+
+That produces `web/dist`, which the server mounts at `/`. Without it the
+server serves the classic UI at `/` instead, so the build step is optional
+and nothing breaks if you skip it -- see [`web/README.md`](web/README.md).
+
+The classic UI is always available at `http://<server>:8000/legacy/`, and is
+still the only place Play vs Maia, puzzles, batch analysis, the chess.com
+import and the opening explorer live.
 
 Re-run the `pip install -r requirements.txt` line after a `git pull` that adds
 a dependency. Downloading games from chess.com added `httpx`, and the server
