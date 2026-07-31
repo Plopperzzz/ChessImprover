@@ -49,6 +49,15 @@ app = FastAPI(title="ChessImprover Engine Room")
 @app.on_event("startup")
 async def on_startup():
     init_db()
+    # Which UI is at '/' is decided by whether web/dist exists, and a checkout
+    # that has never had `npm run build` run in it silently serves the classic
+    # one. Silently is the problem: it looks like the fetch didn't take. Say so.
+    if web_built():
+        print("[engine-room] serving the React UI at /  (classic UI at /legacy/)")
+    else:
+        print("[engine-room] serving the CLASSIC UI at / -- web/dist not found.\n"
+              "[engine-room] to get the React UI: cd web && npm install && npm run build,\n"
+              "[engine-room] then restart this server.")
     await manager.start_idle_sweep()
 
 
