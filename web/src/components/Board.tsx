@@ -22,7 +22,9 @@ interface BoardProps {
   lastMove?: { from: string; to: string } | null;
   /** Quality badge pinned to a square (the move just played). */
   marker?: BoardMarker | null;
-  /** Arrow drawn for the engine's suggestion, in UCI (e.g. 'e2e4'). */
+  /** Arrow drawn for the engine's suggestion, in UCI (e.g. 'e2e4'). Only ever
+   *  a move for the position on the board -- see `linesStale` at the call
+   *  site, which is what keeps the previous position's move off this one. */
   hintMove?: string | null;
   onMove?: (from: string, to: string, promotion?: string) => void;
   interactive?: boolean;
@@ -214,9 +216,44 @@ export function Board({
   };
 
   const markerStyle = styleFor(marker?.quality);
-  const hintFrom = hintMove ? hintMove.slice(0, 2) : null;
-  const hintTo = hintMove ? hintMove.slice(2, 4) : null;
   const dragOver = drag?.moved ? squareAt(drag.x, drag.y) : null;
+
+  /**
+   * The engine's suggestion, as an arrow.
+   *
+   * It used to be a ring around each of the two squares, which is the same
+   * decoration selection and drag-over use: with the engine on, stepping
+   * through a game lit up two unrelated squares and read as the board having
+   * selected something by itself. An arrow can only mean "play this".
+   *
+   * Drawn in the 8x8 square grid's own coordinates, so the flip is already
+   * accounted for by `files`/`ranks`, and shortened at both ends -- off the
+   * centre of the piece it leaves, short of the centre of the square it
+   * points at -- so the head sits on the target square rather than under
+   * whatever is standing there.
+   */
+  const hint = (() => {
+    if (!hintMove || hintMove.length < 4) return null;
+    const centre = (square: string) => {
+      const file = files.indexOf(square[0]);
+      const rank = ranks.indexOf(square[1]);
+      return file < 0 || rank < 0 ? null : { x: file + 0.5, y: rank + 0.5 };
+    };
+    const from = centre(hintMove.slice(0, 2));
+    const to = centre(hintMove.slice(2, 4));
+    if (!from || !to) return null;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) return null;
+    const unit = { x: dx / length, y: dy / length };
+    return {
+      x1: from.x + unit.x * 0.3,
+      y1: from.y + unit.y * 0.3,
+      x2: to.x - unit.x * 0.38,
+      y2: to.y - unit.y * 0.38,
+    };
+  })();
 
   return (
     <div
@@ -240,7 +277,6 @@ export function Board({
             const piece = game?.get(square as never);
             const isTarget = targets.includes(square);
             const isLastMove = lastMove?.from === square || lastMove?.to === square;
-            const isHint = hintFrom === square || hintTo === square;
             const grabbable = interactive && piece && piece.color === game?.turn();
 
             return (
@@ -258,12 +294,21 @@ export function Board({
                   // of the UI that doesn't follow the theme: they read against
                   // the board's own colours, not the page's.
                   backgroundColor: light ? 'rgba(240,217,181,0.92)' : 'rgba(140,100,64,0.92)',
+                  // Dragging, on a touch screen.
+                  //
+                  // A finger on a square the browser is allowed to pan with is
+                  // a scroll gesture: the browser claims the pointer as soon as
+                  // it moves and fires `pointercancel`, which killed every drag
+                  // before it started -- the piece lit up as selected and then
+                  // stayed put. Taking the gesture away fixes that, and doing
+                  // it *only* on a square holding a piece you could move keeps
+                  // the phone able to scroll the page with the other sixty:
+                  // the board is most of that screen, and a board you cannot
+                  // scroll past is its own bug.
+                  touchAction: grabbable ? 'none' : undefined,
                 }}
               >
                 {isLastMove && <div className="absolute inset-0 bg-accent/30" />}
-                {isHint && (
-                  <div className="absolute inset-0 ring-2 ring-inset ring-accent-2/80" />
-                )}
                 {selected === square && (
                   <div className="absolute inset-0 ring-4 ring-inset ring-accent" />
                 )}
@@ -393,6 +438,41 @@ export function Board({
           );
         })}
       </div>
+
+      {/* The engine's suggestion. Over the pieces, because an arrow that
+          disappears behind the piece it starts from doesn't point at anything. */}
+      {hint && (
+        <svg
+          viewBox="0 0 8 8"
+          preserveAspectRatio="none"
+          className="pointer-events-none absolute inset-0 z-[45] h-full w-full"
+        >
+          <defs>
+            <marker
+              id="board-hint-head"
+              viewBox="0 0 4 4"
+              refX="2.4"
+              refY="2"
+              markerWidth="3.2"
+              markerHeight="3.2"
+              orient="auto"
+            >
+              <path d="M0,0 L4,2 L0,4 z" className="fill-accent-2" />
+            </marker>
+          </defs>
+          <line
+            x1={hint.x1}
+            y1={hint.y1}
+            x2={hint.x2}
+            y2={hint.y2}
+            strokeWidth={0.14}
+            strokeLinecap="round"
+            markerEnd="url(#board-hint-head)"
+            className="stroke-accent-2"
+            opacity={0.85}
+          />
+        </svg>
+      )}
 
       {/* Promotion: asked, not assumed. A knight is the right answer often
           enough that defaulting to a queen would quietly lose games. */}
