@@ -608,6 +608,108 @@ second didn't before.
 
 ---
 
+## E. Third pass: the animation, the phone on its side, and the pie
+
+### E1. Stepping backwards never animated — **done**
+
+Forward moved the pieces; back snapped them. The two directions looked like
+different features, and the report — "navigating forward or backwards does not
+always show the animation" — is exactly that asymmetry.
+
+`Board.tsx` took the journey to animate along from its `lastMove` prop, which
+is *the move that produced the position on the board*. Stepping forward that
+is the move being played and the animation is right. Stepping back it is the
+move that produced the **parent** position — a move played a ply earlier,
+whose origin square is empty in both the position being left and the position
+being arrived at. `pieces.reconcile` therefore carried nothing, every piece was
+matched by square alone, and the piece that un-moved was drawn as a new arrival
+while the one it left behind vanished. That is a snap, and it happened on every
+single backwards step.
+
+Fixed by not asking the caller. `pieces.transition(previousFen, fen)` works the
+journey out from the two positions themselves: it takes the squares whose
+occupants differ (never more than four, and four only for a castle), tries the
+legal moves that touch them from the old position, and returns the one that
+reaches the new one. If none does it tries the same search the other way round
+and returns that move reversed — which is what stepping back is. Castling
+carries its rook explicitly, because the rook's journey cannot be inferred from
+a king travelling g1→e1: the direction says queenside and the answer is f1→h1.
+
+Two positions that aren't one move apart still return null and still snap, so
+jumping from move 5 to move 40 does not slide a piece along a path it never
+took. Nothing needed to change in `reconcile` beyond honouring an explicit
+rook, and `lastMove` stays as what it always was — the highlight.
+
+Checked without a browser, in `web/checks/animation_check.ts` (`npm run
+check`): every ply of a game walked forwards and backwards, castling both
+ways, a capture undone, en passant, and a promotion keeping the pawn's
+identity. Piece *ids* are what is asserted, since an id that survives is
+exactly what CSS animates.
+
+### E2. The board goes edge to edge on a phone — **done**
+
+In landscape the board was bounded by `100svh - 15rem` (D5), and on a phone
+lying down `100svh` is the *short* side: a 390px-tall screen left a board about
+150px wide, marooned in the middle of an 844px-wide page. Asked for: the board
+as wide as the screen, no padding, literally edge to edge.
+
+Both the cap and the padding now lift below `lg`, which is the width at which
+the game library stops being a column and becomes a sheet — so the scroller
+holding the board is the full width of the screen and its own padding is the
+only thing left between the board and the edge. Two classes in `index.css` do
+it: `.board-column` (the cap, and its removal) and `.board-bleed` (margins that
+are the negatives of `p-3` and `sm:p-6`, so the board's edges land exactly on
+the screen's). `.board-frame` on the board itself loses its rounded corners and
+side borders under the same query — they are the shape of a card sitting on a
+page, and it is no longer sitting on anything.
+
+Both screens with a board use the same two classes rather than a copied inline
+`maxWidth`, which is how the puzzle board and the analysis board came to be
+sized by two separate copies of one expression.
+
+The trade is deliberate and worth stating: in landscape a full-width board is
+taller than the viewport, so the plates and the step buttons under it are
+scrolled to. That is what "edge to edge" costs on a screen wider than it is
+tall, and it is the ask.
+
+### E3. The pie's legend is gone; the icons are in the breakdown — **done**
+
+The list under the move-quality pie was a legend: a coloured dot, a name, a
+count. The dot said "this slice is the green one", which is the one thing the
+reader can already see — and, with three greens in the table, the thing it said
+worst. Each row now carries the classification's own icon instead, the same
+badge the board pins to the move, so the row names the slice rather than
+pointing at its colour. The tooltip gained the name back for the same reason:
+with no legend under the chart, "42 moves" doesn't say 42 of what.
+
+### E4. Best is a brighter green — **done**
+
+`Best` was `#81b64c` — the same value as `Excellent`, and a shade off `Good`'s
+`#95b776`. Three classifications, one colour to a glance, which is unreadable
+in a pie. Best is now `#5bd44a`: a similar hue, far more saturated, so it
+separates from Good's muted sage as well as from Excellent.
+
+`assets/icons/classification/best.svg`'s own fill changed with it. `quality.ts`
+says its colours are taken from the icons' fills, and now that the icon sits
+beside the slice in E3's breakdown, an icon in the old green next to a slice in
+the new one would have made a liar of that comment on the same screen.
+
+### E5. Progress: the whole screen follows the time control — **done**
+
+The speed picker narrowed the trend chart and nothing else. So "Your actual
+rating" sat above a rapid-only chart reporting a number averaged over rapid,
+blitz and bullet together — and every provider rates those separately, so that
+average is a rating no one holds.
+
+`/api/strength`, `/api/trend` and `/api/move-quality` all take the same
+`speed` (`games.library_filter`); the screen now passes it to all three, and
+the picker moved from the chart card up beside the screen's title, where a
+control that scopes everything below it belongs. The header says which slice it
+is pooling, and the rating card names the speed in its own label. This is what
+the README already described the tab as doing.
+
+---
+
 ## Suggested order
 
 1. ~~**A2 (theming)** first, and properly. A6, B2's eval-bar restyle and B15's

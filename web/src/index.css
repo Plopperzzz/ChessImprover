@@ -324,6 +324,58 @@ body,
   height: 100%;
 }
 
+/*
+ * The board column, on every screen that has one.
+ *
+ * The board is square, so its width is also its height. On a wide monitor half
+ * the page is far taller than the screen, and the board has to be bounded by
+ * the *short* side of the viewport instead: 15rem is what the plates above and
+ * below it and the step buttons under those take. `min()` keeps this from
+ * widening the column when the width is what binds.
+ */
+.board-column {
+  max-width: min(100%, calc(100svh - 15rem));
+}
+
+/*
+ * On a phone, the board goes edge to edge.
+ *
+ * Below `lg` the game library is a sheet rather than a column, so the scroller
+ * holding the board is the full width of the screen and the only thing between
+ * the board and the edge is that scroller's own padding. `.board-bleed` pulls
+ * the board back out over it — the margins are the negatives of `p-3` and
+ * `sm:p-6`, so the board's edges land exactly on the screen's.
+ *
+ * The height cap goes with it. In landscape the short side is the height, and
+ * `100svh - 15rem` on a phone lying down is a board a third of the screen wide
+ * with empty space either side of it; a full-width board is taller than the
+ * viewport and is scrolled to, which is the trade asked for.
+ *
+ * The frame's rounded corners and side borders go too: they are the shape of a
+ * card sitting on a page, and this is no longer sitting on anything.
+ */
+@media (max-width: 1023.98px) {
+  .board-column {
+    max-width: none;
+  }
+  .board-bleed {
+    margin-left: -0.75rem;
+    margin-right: -0.75rem;
+  }
+  .board-bleed .board-frame {
+    border-radius: 0;
+    border-left-width: 0;
+    border-right-width: 0;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1023.98px) {
+  .board-bleed {
+    margin-left: -1.5rem;
+    margin-right: -1.5rem;
+  }
+}
+
 /* The move list and the games table are the two long scrollers in the app and
    both sit inside panels, where the platform scrollbar is a bright slab. */
 .thin-scroll {

@@ -525,11 +525,9 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
     <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
       <div className="thin-scroll min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
       <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 xl:flex-row xl:items-start">
-        {/* The board, sized the way the analysis screen sizes it. */}
-        <div
-          className="order-2 flex w-full min-w-0 flex-col xl:order-none xl:flex-1"
-          style={{ maxWidth: 'min(100%, calc(100svh - 15rem))' }}
-        >
+        {/* The board, sized the way the analysis screen sizes it -- one class,
+            so the two can't drift. */}
+        <div className="board-column order-2 flex w-full min-w-0 flex-col xl:order-none xl:flex-1">
           <div className="flex items-center justify-between gap-2 pb-1">
             <div className="min-w-0">
               <span className="text-sm font-semibold text-fg">
@@ -575,23 +573,25 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
             </div>
           </div>
 
-          <Board
-            fen={fen}
-            flipped={flipped}
-            boardSet={boardSet}
-            pieceSet={pieceSet}
-            showLegalMoves={Boolean(user.show_legal_moves)}
-            lastMove={lastMove}
-            hintMove={
-              // Only ever the engine's move for the position in front of you,
-              // and never while there is anything to find.
-              phase === 'explore' && liveActive && !live.stale
-                ? (live.lines[0]?.pv[0] ?? null)
-                : null
-            }
-            interactive={interactive}
-            onMove={phase === 'explore' ? playInExplore : tryMove}
-          />
+          <div className="board-bleed">
+            <Board
+              fen={fen}
+              flipped={flipped}
+              boardSet={boardSet}
+              pieceSet={pieceSet}
+              showLegalMoves={Boolean(user.show_legal_moves)}
+              lastMove={lastMove}
+              hintMove={
+                // Only ever the engine's move for the position in front of
+                // you, and never while there is anything to find.
+                phase === 'explore' && liveActive && !live.stale
+                  ? (live.lines[0]?.pv[0] ?? null)
+                  : null
+              }
+              interactive={interactive}
+              onMove={phase === 'explore' ? playInExplore : tryMove}
+            />
+          </div>
 
           <div className="flex items-center justify-between gap-2 pt-1">
             <span className="text-sm font-semibold text-fg">

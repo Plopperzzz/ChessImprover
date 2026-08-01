@@ -211,7 +211,13 @@ function TrendChart({
 
 /** The move-quality pie (C6). Colours come from `lib/quality.ts`, the same
  *  table the board badges and the move list read, so a blunder is one colour
- *  everywhere. */
+ *  everywhere.
+ *
+ *  There is no colour-swatch legend under it any more. A swatch says only
+ *  "this slice is the green one", which is the one thing the reader can
+ *  already see and the thing three greens made hardest; the classification's
+ *  own icon — the same badge the board pins to the move — names it outright,
+ *  so it sits in each slice's own row of the breakdown instead. */
 function QualityPie({
   quality,
   palette,
@@ -224,6 +230,8 @@ function QualityPie({
     name: QUALITY[q].label,
     value: quality.counts[q],
     colour: QUALITY[q].color,
+    icon: QUALITY[q].icon,
+    symbol: QUALITY[q].symbol,
   }));
 
   if (slices.length === 0) {
@@ -263,7 +271,9 @@ function QualityPie({
                 borderRadius: 10,
                 fontSize: 12,
               }}
-              formatter={(value) => [`${value} moves · ${share(Number(value))}%`, '']}
+              // The name goes back in: with no legend under the chart, a
+              // tooltip that says only "42 moves" doesn't say which slice.
+              formatter={(value, name) => [`${value} moves · ${share(Number(value))}%`, name]}
             />
           </PieChart>
         </ResponsiveContainer>
@@ -272,9 +282,11 @@ function QualityPie({
       <ul className="mt-2 space-y-1">
         {slices.map((slice) => (
           <li key={slice.key} className="flex items-center gap-2 text-[11px]">
-            <span
-              className="h-2 w-2 shrink-0 rounded-full"
-              style={{ backgroundColor: slice.colour }}
+            <img
+              src={slice.icon}
+              alt={slice.symbol || slice.name}
+              draggable={false}
+              className="h-4 w-4 shrink-0"
             />
             <span className="truncate text-fg-2">{slice.name}</span>
             <span className="ml-auto shrink-0 font-mono text-fg-muted">
@@ -323,13 +335,18 @@ export function ProgressScreen() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    // The time control filters the *trend* only. The pooled estimate above is
-    // your strength, which isn't a per-speed thing; the chart is where asking
-    // "and what about only my rapid games?" makes sense.
+    // The time control filters the whole screen, not just the chart. It used
+    // to narrow the trend alone, which left the cards above it — your actual
+    // rating among them — reporting a number pooled over every speed while the
+    // chart beside them was rapid-only. Bullet and rapid are different games
+    // and you have a different rating in each; asking for one and being shown
+    // the average of both is the question not being answered. All three
+    // endpoints take the same `speed` (`games.library_filter`), so one value
+    // slices the estimate, the trend and the move counts together.
     Promise.all([
-      api.strength(),
+      api.strength({ speed: speed || null }),
       api.trend({ granularity, window: window_, speed: speed || null }),
-      api.moveQuality(),
+      api.moveQuality({ speed: speed || null }),
     ])
       .then(([s, t, q]) => {
         if (cancelled) return;
@@ -369,15 +386,25 @@ export function ProgressScreen() {
   return (
     <div className="thin-scroll mx-auto w-full max-w-6xl flex-1 space-y-6 overflow-y-auto p-4 sm:p-6">
       <div className="flex flex-col items-start justify-between gap-4 rounded-2xl border border-line bg-surface p-6 shadow-xl sm:flex-row sm:items-center">
-        <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-accent/20 bg-accent/10 text-accent">
+        <div className="flex items-start gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-accent/20 bg-accent/10 text-accent">
             <LayoutDashboard className="h-6 w-6" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-xl font-bold text-fg">Progress</h2>
             <p className="text-xs text-fg-muted">
-              Pooled over every game with a Maia Elo sweep — no engine is re-run.
+              Pooled over every {speed ? `${(SPEED_LABEL[speed] ?? speed).toLowerCase()} ` : ''}
+              game with a Maia Elo sweep — no engine is re-run.
             </p>
+            {/* D7 / the rating card: the same time controls the game library
+                filters by, and it sits here rather than in the chart below
+                because everything on this screen is drawn from the slice it
+                picks — the estimate and the rating beside it included. */}
+            {speedOptions.length > 1 && (
+              <div className="mt-2">
+                <Picker options={speedOptions} value={speed} onChange={setSpeed} />
+              </div>
+            )}
           </div>
         </div>
 
@@ -474,15 +501,32 @@ export function ProgressScreen() {
                   : undefined
               }
             />
+            {/* Your rating in the time control picked above, averaged over the
+                games of it that carry a header rating. Every provider rates
+                each speed separately, so this is the one card on the screen
+                that was actively wrong when it ignored the filter. */}
             <Stat
               icon={<Gauge className="h-5 w-5" />}
-              label="Your actual rating"
+              label={
+                speed
+                  ? `Your actual ${(SPEED_LABEL[speed] ?? speed).toLowerCase()} rating`
+                  : 'Your actual rating'
+              }
               value={
                 strength.your_rating_mean != null
                   ? String(Math.round(strength.your_rating_mean))
                   : '—'
               }
-              sub={`${strength.your_rating_n} games with a header rating`}
+              // Short enough not to be truncated by the card, which is a
+              // quarter of the row: "…games with a header rating" arrived as
+              // "1 game with a header rati…".
+              sub={
+                strength.your_rating_n > 0
+                  ? `over ${strength.your_rating_n} rated game${
+                      strength.your_rating_n === 1 ? '' : 's'
+                    }`
+                  : 'no rated games here'
+              }
             />
             {/* C5: this slot held a Confidence card, which said in a number
                 what the popover above now says in words. */}
@@ -528,15 +572,6 @@ export function ProgressScreen() {
                   )}
                 </h3>
                 <div className="flex flex-wrap items-center gap-3">
-                  {/* D7: the same time controls the game library filters by.
-                      Rapid and bullet are different games — a trend pooled
-                      over both is two lines drawn as one. */}
-                  {speedOptions.length > 1 && (
-                    <>
-                      <Picker options={speedOptions} value={speed} onChange={setSpeed} />
-                      <span className="h-4 w-px bg-line" aria-hidden />
-                    </>
-                  )}
                   {/* C2: the window the backend has always accepted, offered
                       in the unit the buckets are drawn in. */}
                   <Picker options={WINDOWS[granularity]} value={window_} onChange={setWindow} />
