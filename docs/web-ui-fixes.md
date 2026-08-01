@@ -21,6 +21,7 @@ The whole UI is about 2,400 lines under `web/src`:
 | `components/ThemeToggle.tsx` | the light/system/dark segmented control |
 | `lib/theme.ts` | theme mode, palette, accent, and the chart colours |
 | `lib/useHeaderVisibility.ts` | whether the top bar is on screen, on a phone |
+| `lib/media.ts` | the stacked-layout breakpoint, for what has to *behave* differently |
 | `components/Board.tsx` | squares, pieces, highlights, quality badge |
 | `components/GameAnalysis/AnalysisScreen.tsx` | all analysis state, board/eval-bar layout |
 | `components/GameAnalysis/MoveList.tsx` | move table, nav buttons, the analysis buttons |
@@ -561,6 +562,29 @@ It is gated to the same breakpoint as D9, and deliberately: on a desktop
 everything is on screen already, and a page that doesn't scroll would have no
 way left to bring the header back.
 
+### D13. With the engine on, the plot becomes a bar — **done**
+
+D11 and D12 both bought height and it still wasn't enough: with the engine's
+lines open, a plot of the whole game plus three ranked lines is more than a
+phone has above the board, and the step buttons went off the bottom again.
+
+The two want the same space and only one of them is about the position in
+front of you. So on a phone, turning **Analyse** on turns the plot into a
+slim horizontal eval bar — one row: the bar, and the number it draws, in place
+of the card's title, ply counter and plot. Switching the engine off brings the
+plot straight back, and a desktop keeps both, as it always had the room to.
+
+The bar reads the same `barCp` the vertical bar beside the board does, passed
+in rather than recomputed, so the two can't disagree; it grows from whichever
+edge white is playing towards, like the vertical one. The engine-lines block
+is now a component shared by both shapes of the card.
+
+Measured on the real thing, with the engine answering: the card is 176px with
+the bar and three lines, against 172px for the plot alone — the lines are
+effectively free now. On a 390×844 phone the eval, the lines, the board and
+the step buttons span 0–678; on a 360×700 phone, 0–648. Both fit, and the
+second didn't before.
+
 ---
 
 ## Suggested order
@@ -583,8 +607,8 @@ way left to bring the header back.
 7. ~~**B3–B5** — variations, dragging and animation last. It is the largest item
    by a distance and it changes how `Board.tsx` is structured.~~ **Done**, and
    it did: `Board.tsx` is a square grid with a piece layer over it now.
-8. ~~**D1–D12** — a second pass over the same screens at sizes the first review
-   never opened them at.~~ **Done.** D3, D6, D9–D12 are one layout between
+8. ~~**D1–D13** — a second pass over the same screens at sizes the first review
+   never opened them at.~~ **Done.** D3, D6, D9–D13 are one layout between
    them and were done together; D1, D2, D4, D5, D7 and D8 are independent.
 
 ## Needs a decision before starting

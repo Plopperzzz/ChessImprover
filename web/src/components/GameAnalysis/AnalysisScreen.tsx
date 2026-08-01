@@ -687,6 +687,10 @@ export function AnalysisScreen({
                 engineLines={live.lines}
                 linesStale={live.stale}
                 liveError={live.error}
+                // The same number the bar beside the board draws, so the two
+                // shapes of this card can't disagree with it (D13).
+                evalCp={barCp}
+                flipped={flipped}
               />
             </div>
 

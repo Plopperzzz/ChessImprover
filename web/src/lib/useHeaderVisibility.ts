@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-/** Wide enough that the header costs nothing worth reclaiming. Below it the
- *  header is a sixth of the screen, on a page whose point is a board. */
-const NARROW = '(max-width: 1023px)';
+import { NARROW } from './media';
 
 /** How long an explicit `hide()` outranks the scroll listener. Long enough to
  *  cover a smooth scroll settling — that scroll is *why* the header was
