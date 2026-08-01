@@ -660,7 +660,22 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
                 </p>
               )}
 
-              {verdict && puzzle && (
+              {/* Mid-line, the verdict is "right so far" and not a result.
+                  Rendering it with the finished-puzzle panel is how a
+                  two-move answer came to announce "Solved" after one move. */}
+              {verdict && puzzle && verdict.correct && !verdict.done && (
+                <p className="mt-2 text-sm font-semibold text-success-fg">
+                  ✓ {verdict.attempt?.san ?? verdict.attempt?.uci}
+                  {verdict.moves_required != null && (
+                    <span className="ml-2 font-normal text-fg-subtle">
+                      {verdict.moves_played} of {verdict.moves_required}
+                      {verdict.reply && ` — they reply ${verdict.reply.san}`}
+                    </span>
+                  )}
+                </p>
+              )}
+
+              {verdict && puzzle && (phase === 'over' || phase === 'explore') && (
                 <Feedback verdict={verdict} answer={answer} puzzle={puzzle} />
               )}
 
