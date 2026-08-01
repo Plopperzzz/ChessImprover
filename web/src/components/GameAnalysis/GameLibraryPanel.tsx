@@ -100,7 +100,7 @@ export function GameLibraryPanel({
     return (
       <button
         onClick={onToggleCollapsed}
-        className="flex w-11 shrink-0 flex-col items-center gap-3 border-l border-stone-800 bg-stone-900/60 py-4 text-stone-400 hover:text-stone-100"
+        className="flex w-11 shrink-0 flex-col items-center gap-3 border-l border-line bg-surface/60 py-4 text-fg-muted hover:text-fg"
         title="Show game library"
       >
         <Database className="h-4 w-4" />
@@ -112,33 +112,33 @@ export function GameLibraryPanel({
   }
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-l border-stone-800 bg-stone-900/60 lg:w-80 xl:w-96">
-      <div className="flex items-center justify-between border-b border-stone-800 px-4 py-3">
+    <aside className="flex w-full shrink-0 flex-col border-l border-line bg-surface/60 lg:w-80 xl:w-96">
+      <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
-          <Database className="h-4 w-4 text-amber-500" />
-          <h3 className="text-xs font-semibold tracking-wider text-stone-300 uppercase">
+          <Database className="h-4 w-4 text-accent" />
+          <h3 className="text-xs font-semibold tracking-wider text-fg-2 uppercase">
             Game library
           </h3>
         </div>
         <button
           onClick={onToggleCollapsed}
-          className="rounded p-1 text-stone-400 hover:bg-stone-800 hover:text-stone-100"
+          className="rounded p-1 text-fg-muted hover:bg-surface-2 hover:text-fg"
           title="Collapse"
         >
           <ChevronRight className="h-4 w-4" />
         </button>
       </div>
 
-      <div className="space-y-3 border-b border-stone-800 px-4 py-3">
+      <div className="space-y-3 border-b border-line px-4 py-3">
         <label className="block">
-          <span className="mb-1 block text-[10px] tracking-wider text-stone-500 uppercase">
+          <span className="mb-1 block text-[10px] tracking-wider text-fg-subtle uppercase">
             Save results into
           </span>
           <div className="flex gap-1.5">
             <select
               value={runId ?? ''}
               onChange={(e) => onChangeRun(e.target.value ? Number(e.target.value) : null)}
-              className="min-w-0 flex-1 rounded-lg border border-stone-800 bg-stone-950 px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-amber-600"
+              className="min-w-0 flex-1 rounded-lg border border-line bg-canvas px-2 py-1.5 text-xs text-fg-2 outline-none focus:border-accent-strong"
             >
               <option value="">Default run</option>
               {runs.map((run) => (
@@ -151,7 +151,7 @@ export function GameLibraryPanel({
             <button
               onClick={newRun}
               title="New run"
-              className="rounded-lg border border-stone-800 bg-stone-950 px-2 text-stone-400 hover:text-stone-100"
+              className="rounded-lg border border-line bg-canvas px-2 text-fg-muted hover:text-fg"
             >
               <FolderPlus className="h-3.5 w-3.5" />
             </button>
@@ -159,7 +159,7 @@ export function GameLibraryPanel({
         </label>
 
         <div>
-          <span className="mb-1 block text-[10px] tracking-wider text-stone-500 uppercase">
+          <span className="mb-1 block text-[10px] tracking-wider text-fg-subtle uppercase">
             Time control
           </span>
           <div className="flex flex-wrap gap-1">
@@ -167,8 +167,8 @@ export function GameLibraryPanel({
               onClick={() => onChangeFilter({ ...filter, speed: null })}
               className={`rounded-full px-2.5 py-1 text-[11px] transition-colors ${
                 !filter.speed
-                  ? 'bg-amber-600 text-white'
-                  : 'bg-stone-950 text-stone-400 ring-1 ring-stone-800 hover:text-stone-200'
+                  ? 'bg-accent-strong text-on-accent'
+                  : 'bg-canvas text-fg-muted ring-1 ring-line hover:text-fg-2'
               }`}
             >
               All {facets ? `(${facets.total})` : ''}
@@ -179,8 +179,8 @@ export function GameLibraryPanel({
                 onClick={() => onChangeFilter({ ...filter, speed: speed.speed })}
                 className={`rounded-full px-2.5 py-1 text-[11px] transition-colors ${
                   filter.speed === speed.speed
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-stone-950 text-stone-400 ring-1 ring-stone-800 hover:text-stone-200'
+                    ? 'bg-accent-strong text-on-accent'
+                    : 'bg-canvas text-fg-muted ring-1 ring-line hover:text-fg-2'
                 }`}
               >
                 {SPEED_LABEL[speed.speed] ?? speed.speed} ({speed.games})
@@ -191,7 +191,7 @@ export function GameLibraryPanel({
 
         {collections.length > 0 && (
           <label className="block">
-            <span className="mb-1 block text-[10px] tracking-wider text-stone-500 uppercase">
+            <span className="mb-1 block text-[10px] tracking-wider text-fg-subtle uppercase">
               Group
             </span>
             <select
@@ -202,7 +202,7 @@ export function GameLibraryPanel({
                   collection_id: e.target.value ? Number(e.target.value) : null,
                 })
               }
-              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-2 py-1.5 text-xs text-stone-200 outline-none focus:border-amber-600"
+              className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-xs text-fg-2 outline-none focus:border-accent-strong"
             >
               <option value="">Every group</option>
               {collections.map((collection) => (
@@ -217,15 +217,15 @@ export function GameLibraryPanel({
 
       <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-xs text-stone-500">
+          <div className="flex items-center justify-center gap-2 py-10 text-xs text-fg-subtle">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading games…
           </div>
         ) : games.length === 0 ? (
-          <p className="px-4 py-10 text-center text-xs text-stone-500">
+          <p className="px-4 py-10 text-center text-xs text-fg-subtle">
             No games match this filter. Upload a PGN below to get started.
           </p>
         ) : (
-          <ul className="divide-y divide-stone-800/70">
+          <ul className="divide-y divide-line/70">
             {games.map((game) => {
               const active = game.id === activeGameId;
               const you = game.your_color;
@@ -235,32 +235,32 @@ export function GameLibraryPanel({
                   <button
                     onClick={() => onSelectGame(game)}
                     className={`w-full px-4 py-2.5 text-left transition-colors ${
-                      active ? 'bg-amber-600/15 ring-1 ring-inset ring-amber-600/40' : 'hover:bg-stone-800/50'
+                      active ? 'bg-accent-strong/15 ring-1 ring-inset ring-accent-strong/40' : 'hover:bg-surface-2/50'
                     }`}
                   >
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-xs font-medium text-stone-100">
+                      <span className="truncate text-xs font-medium text-fg">
                         {game.white} — {game.black}
                       </span>
-                      <span className="shrink-0 font-mono text-[10px] text-stone-500">
+                      <span className="shrink-0 font-mono text-[10px] text-fg-subtle">
                         {game.result}
                       </span>
                     </div>
-                    <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] text-stone-500">
+                    <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] text-fg-subtle">
                       <span>{game.date_header ?? game.utc_date_header ?? '—'}</span>
                       {game.speed && <span>{game.speed}</span>}
                       {(you === 'w' || you === 'b') && (
-                        <span className="text-stone-400">as {you === 'w' ? 'white' : 'black'}</span>
+                        <span className="text-fg-muted">as {you === 'w' ? 'white' : 'black'}</span>
                       )}
                       {game.analyzed && (
-                        <span className="ml-auto flex items-center gap-1 text-emerald-500">
+                        <span className="ml-auto flex items-center gap-1 text-positive">
                           <CheckCircle2 className="h-3 w-3" />
                           {game.analyzed}
                         </span>
                       )}
                     </div>
                     {estimate != null && (
-                      <div className="mt-1 inline-flex rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-400 ring-1 ring-amber-500/20">
+                      <div className="mt-1 inline-flex rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent ring-1 ring-accent/20">
                         est. {estimate}
                       </div>
                     )}
@@ -272,7 +272,7 @@ export function GameLibraryPanel({
         )}
       </div>
 
-      <div className="space-y-2 border-t border-stone-800 px-4 py-3">
+      <div className="space-y-2 border-t border-line px-4 py-3">
         <input
           ref={fileInput}
           type="file"
@@ -285,7 +285,7 @@ export function GameLibraryPanel({
           <button
             onClick={() => fileInput.current?.click()}
             disabled={uploading}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-xs text-stone-300 hover:text-stone-100 disabled:opacity-50"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-line bg-canvas px-3 py-2 text-xs text-fg-2 hover:text-fg disabled:opacity-50"
           >
             {uploading ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -297,15 +297,15 @@ export function GameLibraryPanel({
           <button
             onClick={onLibraryChanged}
             title="Reload the library"
-            className="rounded-lg border border-stone-800 bg-stone-950 px-2.5 text-stone-400 hover:text-stone-100"
+            className="rounded-lg border border-line bg-canvas px-2.5 text-fg-muted hover:text-fg"
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
         </div>
-        {uploadNote && <p className="text-[11px] text-stone-400">{uploadNote}</p>}
+        {uploadNote && <p className="text-[11px] text-fg-muted">{uploadNote}</p>}
         <a
           href="/legacy/"
-          className="block text-center text-[11px] text-stone-500 underline-offset-2 hover:text-stone-300 hover:underline"
+          className="block text-center text-[11px] text-fg-subtle underline-offset-2 hover:text-fg-2 hover:underline"
         >
           chess.com import, batch runs, groups and the opening book →
         </a>

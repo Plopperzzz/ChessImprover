@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as api from './lib/api';
+import { useTheme } from './lib/theme';
 import type { EngineSettings, ScreenType, User } from './types';
 import { AnalysisScreen } from './components/GameAnalysis/AnalysisScreen';
 import { ClassicScreen } from './components/ClassicScreen';
@@ -11,6 +12,9 @@ import { SettingsModal } from './components/SettingsModal';
 const SCREEN_KEY = 'engine-room:screen';
 
 export default function App() {
+  // One owner for the theme: the dialog is the only thing that sets it, and
+  // everything else reads the CSS tokens it writes onto <html>.
+  const theme = useTheme();
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
   const [screen, setScreen] = useState<ScreenType>(
@@ -49,7 +53,7 @@ export default function App() {
 
   if (checking) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-stone-950 text-sm text-stone-500">
+      <div className="flex min-h-screen items-center justify-center bg-canvas text-sm text-fg-subtle">
         Loading…
       </div>
     );
@@ -58,7 +62,7 @@ export default function App() {
   if (!user) return <LoginScreen onLogin={setUser} />;
 
   return (
-    <div className="flex min-h-screen flex-col bg-stone-950 font-sans text-stone-100">
+    <div className="flex min-h-screen flex-col bg-canvas font-sans text-fg">
       <Header
         currentScreen={screen}
         onSelectScreen={setScreen}
@@ -107,6 +111,8 @@ export default function App() {
         onSaved={setSettings}
         user={user}
         onProfileSaved={setUser}
+        themeMode={theme.mode}
+        onChangeTheme={theme.setMode}
       />
     </div>
   );

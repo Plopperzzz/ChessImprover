@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import * as api from '../lib/api';
+import type { ThemeMode } from '../lib/theme';
 import type { EngineSettings, User } from '../types';
+import { ThemeToggle } from './ThemeToggle';
 
 interface SettingsModalProps {
   open: boolean;
@@ -10,6 +12,8 @@ interface SettingsModalProps {
   onSaved: (settings: EngineSettings) => void;
   user: User;
   onProfileSaved: (user: User) => void;
+  themeMode: ThemeMode;
+  onChangeTheme: (mode: ThemeMode) => void;
 }
 
 function Field({
@@ -23,17 +27,17 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-medium tracking-wide text-stone-400 uppercase">
+      <span className="mb-1 block text-[11px] font-medium tracking-wide text-fg-muted uppercase">
         {label}
       </span>
       {children}
-      {hint && <span className="mt-1 block text-[11px] text-stone-500">{hint}</span>}
+      {hint && <span className="mt-1 block text-[11px] text-fg-subtle">{hint}</span>}
     </label>
   );
 }
 
 const inputClass =
-  'w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-600';
+  'w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-fg outline-none focus:border-accent-strong';
 
 export function SettingsModal({
   open,
@@ -42,6 +46,8 @@ export function SettingsModal({
   onSaved,
   user,
   onProfileSaved,
+  themeMode,
+  onChangeTheme,
 }: SettingsModalProps) {
   const [draft, setDraft] = useState<EngineSettings | null>(settings);
   const [families, setFamilies] = useState<api.EngineFamily[]>([]);
@@ -99,24 +105,40 @@ export function SettingsModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="thin-scroll max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-stone-800 bg-stone-900 p-6 text-stone-100 shadow-2xl"
+        className="thin-scroll max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line bg-surface p-6 text-fg shadow-2xl"
       >
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Settings</h2>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-800 hover:text-stone-100"
+            className="rounded-lg p-1.5 text-fg-muted hover:bg-surface-2 hover:text-fg"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
+        {/* Outside the `draft` check on purpose: the theme is a browser
+            setting, so it stays usable even when the engine settings that fill
+            the rest of the dialog haven't loaded (or failed to). */}
+        <section className="mb-6 space-y-3 border-b border-line pb-6">
+          <h3 className="text-xs font-semibold tracking-wider text-accent uppercase">
+            Appearance
+          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-xs text-[11px] leading-relaxed text-fg-subtle">
+              Light, dark, or whichever the operating system is set to. Kept in this
+              browser — it is not part of the engine settings the server stores.
+            </p>
+            <ThemeToggle mode={themeMode} onChange={onChangeTheme} />
+          </div>
+        </section>
+
         {!draft ? (
-          <p className="text-sm text-stone-400">Loading…</p>
+          <p className="text-sm text-fg-muted">Loading…</p>
         ) : (
           <div className="space-y-6">
             <section className="space-y-3">
-              <h3 className="text-xs font-semibold tracking-wider text-amber-500 uppercase">
+              <h3 className="text-xs font-semibold tracking-wider text-accent uppercase">
                 Engines
               </h3>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -198,10 +220,10 @@ export function SettingsModal({
             </section>
 
             <section className="space-y-3">
-              <h3 className="text-xs font-semibold tracking-wider text-amber-500 uppercase">
+              <h3 className="text-xs font-semibold tracking-wider text-accent uppercase">
                 Elo sweep
               </h3>
-              <p className="text-[11px] leading-relaxed text-stone-500">
+              <p className="text-[11px] leading-relaxed text-fg-subtle">
                 The grid the Full analysis button sweeps. Every position you played is put to
                 Maia at each of these ratings; the estimate is the peak of the fitted match-rate
                 curve. A finer step costs proportionally more engine time.
@@ -268,7 +290,7 @@ export function SettingsModal({
             </section>
 
             <section className="space-y-3">
-              <h3 className="text-xs font-semibold tracking-wider text-amber-500 uppercase">
+              <h3 className="text-xs font-semibold tracking-wider text-accent uppercase">
                 Board
               </h3>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -316,20 +338,20 @@ export function SettingsModal({
             </section>
 
             {error && (
-              <p className="rounded-lg bg-red-950/60 px-3 py-2 text-xs text-red-300">{error}</p>
+              <p className="rounded-lg bg-danger-surface px-3 py-2 text-xs text-danger-fg">{error}</p>
             )}
 
-            <div className="flex justify-end gap-2 border-t border-stone-800 pt-4">
+            <div className="flex justify-end gap-2 border-t border-line pt-4">
               <button
                 onClick={onClose}
-                className="rounded-lg border border-stone-800 px-4 py-2 text-sm text-stone-300 hover:bg-stone-800"
+                className="rounded-lg border border-line px-4 py-2 text-sm text-fg-2 hover:bg-surface-2"
               >
                 Cancel
               </button>
               <button
                 onClick={save}
                 disabled={saving}
-                className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg bg-accent-strong px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent disabled:opacity-50"
               >
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Save engine settings

@@ -46,19 +46,19 @@ export function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-stone-950 p-6 text-stone-100">
-      <div className="w-full max-w-sm rounded-2xl border border-stone-800 bg-stone-900 p-6 shadow-2xl">
+    <div className="flex min-h-screen items-center justify-center bg-canvas p-6 text-fg">
+      <div className="w-full max-w-sm rounded-2xl border border-line bg-surface p-6 shadow-2xl">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-amber-600 to-amber-800 ring-1 ring-amber-500/30">
-            <ShieldCheck className="h-5 w-5 text-amber-100" />
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-accent-strong to-accent-deep ring-1 ring-accent/30">
+            <ShieldCheck className="h-5 w-5 text-on-accent" />
           </div>
           <div>
             <h1 className="text-lg font-semibold">Engine Room</h1>
-            <p className="text-xs text-stone-400">Pick your account</p>
+            <p className="text-xs text-fg-muted">Pick your account</p>
           </div>
         </div>
 
-        {accounts === null && !error && <p className="text-sm text-stone-400">Loading…</p>}
+        {accounts === null && !error && <p className="text-sm text-fg-muted">Loading…</p>}
 
         <div className="space-y-2">
           {accounts?.map((account) => (
@@ -66,15 +66,15 @@ export function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
               key={account.id}
               disabled={busy}
               onClick={() => signIn(account.username)}
-              className="flex w-full items-center justify-between rounded-xl border border-stone-800 bg-stone-950 px-4 py-3 text-left transition-colors hover:border-amber-600/50 hover:bg-stone-900 disabled:opacity-50"
+              className="flex w-full items-center justify-between rounded-xl border border-line bg-canvas px-4 py-3 text-left transition-colors hover:border-accent-strong/50 hover:bg-surface disabled:opacity-50"
             >
               <span>
                 <span className="block text-sm font-semibold">{account.display_name}</span>
-                <span className="block font-mono text-[11px] text-stone-500">
+                <span className="block font-mono text-[11px] text-fg-subtle">
                   {account.username}
                 </span>
               </span>
-              <span className="font-mono text-[11px] text-stone-500">
+              <span className="font-mono text-[11px] text-fg-subtle">
                 {account.game_count} games
               </span>
             </button>
@@ -82,7 +82,7 @@ export function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
         </div>
 
         {accounts?.length === 0 && (
-          <p className="mb-3 text-sm text-stone-400">
+          <p className="mb-3 text-sm text-fg-muted">
             No accounts yet — make the first one.
           </p>
         )}
@@ -94,19 +94,19 @@ export function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
               onChange={(e) => setUsername(e.target.value)}
               placeholder="username"
               required
-              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-sm outline-none focus:border-amber-600"
+              className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm outline-none focus:border-accent-strong"
             />
             <input
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="display name (must match your PGN headers)"
               required
-              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-sm outline-none focus:border-amber-600"
+              className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm outline-none focus:border-accent-strong"
             />
             <button
               type="submit"
               disabled={busy}
-              className="w-full rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+              className="w-full rounded-lg bg-accent-strong px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent disabled:opacity-50"
             >
               Create and sign in
             </button>
@@ -114,14 +114,14 @@ export function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
         ) : (
           <button
             onClick={() => setShowCreate(true)}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-stone-800 px-3 py-2 text-xs text-stone-400 hover:text-stone-200"
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-line px-3 py-2 text-xs text-fg-muted hover:text-fg-2"
           >
             <UserPlus className="h-3.5 w-3.5" /> New account
           </button>
         )}
 
         {error && (
-          <p className="mt-4 rounded-lg bg-red-950/60 px-3 py-2 text-xs text-red-300">{error}</p>
+          <p className="mt-4 rounded-lg bg-danger-surface px-3 py-2 text-xs text-danger-fg">{error}</p>
         )}
       </div>
     </div>

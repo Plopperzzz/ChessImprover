@@ -87,6 +87,25 @@ its own confidence, and the observed-vs-fitted match rate across the grid.
 **Quick** is the Stockfish-only pass (`POST /api/analysis/quick`) — it classifies
 moves but produces no rating, because there is no sweep in it.
 
+## Colours and themes
+
+Every colour comes from a `--er-*` custom property defined in `src/index.css`,
+once for the dark theme and once for the light one. An `@theme inline` block
+turns each into a Tailwind utility — `--color-surface` gives `bg-surface`,
+`text-surface`, `border-surface` — so switching theme is one `data-theme`
+attribute on `<html>`, written by `src/lib/theme.ts`.
+
+**Don't reach for a palette shade** (`bg-stone-900`, `text-amber-500`) in a
+component: use a token, and add one to `index.css` if none fits. The three
+places that legitimately don't follow the theme — the board's own squares, the
+eval bar, and the classification badges in `lib/quality.ts` — say so in a
+comment where they are.
+
+The theme is chosen in the settings dialog (Light / System / Dark) and kept in
+`localStorage`; the backend stores nothing about it. Charts read their colours
+through `useChartTheme()`, because recharts takes colours as props rather than
+as classes.
+
 ## Not ported from the classic UI
 
 These still work, at `/legacy/`, and are not duplicated here:

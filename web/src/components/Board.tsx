@@ -107,7 +107,7 @@ export function Board({
 
   return (
     <div
-      className="relative aspect-square w-full overflow-hidden rounded-xl border-2 border-stone-800 bg-stone-900 shadow-2xl select-none"
+      className="relative aspect-square w-full overflow-hidden rounded-xl border-2 border-line bg-surface shadow-2xl select-none"
       style={{
         backgroundImage: `url(/assets/boards/${boardSet}.png), url(/assets/sets/${boardSet}/board.png)`,
         backgroundSize: 'cover',
@@ -132,16 +132,19 @@ export function Board({
                 }`}
                 style={{
                   // A board image, when the set has one, shows through; the tint
-                  // is what keeps the squares readable if it doesn't.
+                  // is what keeps the squares readable if it doesn't. Squares,
+                  // coordinates and the fallback glyphs below are the one part
+                  // of the UI that doesn't follow the theme: they read against
+                  // the board's own colours, not the page's.
                   backgroundColor: light ? 'rgba(240,217,181,0.92)' : 'rgba(140,100,64,0.92)',
                 }}
               >
-                {isLastMove && <div className="absolute inset-0 bg-amber-400/30" />}
+                {isLastMove && <div className="absolute inset-0 bg-accent/30" />}
                 {isHint && (
-                  <div className="absolute inset-0 ring-2 ring-inset ring-sky-400/70" />
+                  <div className="absolute inset-0 ring-2 ring-inset ring-accent-2/80" />
                 )}
                 {selected === square && (
-                  <div className="absolute inset-0 ring-4 ring-inset ring-amber-400" />
+                  <div className="absolute inset-0 ring-4 ring-inset ring-accent" />
                 )}
 
                 {showCoordinates && fileIdx === 0 && (
@@ -167,8 +170,8 @@ export function Board({
                   <div
                     className={`pointer-events-none absolute z-10 rounded-full ${
                       piece
-                        ? 'inset-1 border-4 border-amber-500/60'
-                        : 'h-1/3 w-1/3 bg-amber-500/60'
+                        ? 'inset-1 border-4 border-accent/60'
+                        : 'h-1/3 w-1/3 bg-accent/60'
                     }`}
                   />
                 )}

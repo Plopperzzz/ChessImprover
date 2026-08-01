@@ -15,9 +15,11 @@ The whole UI is about 2,400 lines under `web/src`:
 
 | File | What it owns |
 | --- | --- |
-| `App.tsx` | auth gate, screen routing, settings modal wiring |
+| `App.tsx` | auth gate, screen routing, settings modal wiring, theme state |
 | `components/Header.tsx` | top bar, nav, the two icon buttons |
 | `components/SettingsModal.tsx` | the single flat settings dialog |
+| `components/ThemeToggle.tsx` | the light/system/dark segmented control |
+| `lib/theme.ts` | theme mode, persistence, and the chart colours |
 | `components/Board.tsx` | squares, pieces, highlights, quality badge |
 | `components/GameAnalysis/AnalysisScreen.tsx` | all analysis state, board/eval-bar layout |
 | `components/GameAnalysis/MoveList.tsx` | move table, nav buttons, the analysis buttons |
@@ -58,17 +60,38 @@ neither. `lib/api.ts` has no wrapper for either yet.
 Renaming is not cosmetic here — it is the documented fix for a library that
 imported as `unassigned`, so it needs to be reachable.
 
-### A2. No light/dark selector
+### A2. No light/dark selector — **done**
 
-The UI is hard-coded dark: every component carries literal `bg-stone-900`,
-`text-stone-100` and so on. There is no theme state anywhere, and the
-uploaded design's three-way toggle was dropped when the mock was rebuilt.
+Was: the UI was hard-coded dark, every component carrying literal
+`bg-stone-900`, `text-stone-100` and so on, with no theme state anywhere.
 
-This one is structural, not a toggle to bolt on. Doing it properly means
-moving the palette into CSS custom properties on `:root` (Tailwind v4 reads
-them via `@theme`), and rewriting the literal colour classes to reference
-them. Every other theming item below depends on this landing first, so it's
-worth doing carefully rather than twice.
+The palette now lives in `index.css` as `--er-*` custom properties, in two
+blocks — `:root, [data-theme='dark']` and `[data-theme='light']` — mapped into
+utilities by an `@theme inline` block, so `--color-surface` gives `bg-surface`,
+`text-surface`, `border-surface`. No component names a Tailwind palette shade
+any more; the three exceptions are deliberate and commented where they sit:
+
+- the board's own squares, coordinates and fallback glyphs (`Board.tsx`), which
+  read against the board art rather than the page,
+- the eval bar, which is white-vs-black by definition and holds
+  `--er-eval-white` / `--er-eval-black` in both themes (B2 restyles it),
+- `lib/quality.ts`, whose badge colours mean a classification, not a surface.
+
+`lib/theme.ts` owns the mode (`light` / `dark` / `system`), persists it to
+`localStorage` under `engine-room:theme`, follows the OS while on `system`, and
+is applied in `main.tsx` *before* the first render so a light-theme user never
+gets a frame of dark. The selector is the three-way toggle at the top of the
+settings dialog; it sits outside the dialog's `draft` check, so the theme is
+still reachable when the engine settings fail to load.
+
+Recharts takes colours as props rather than classes, so `useChartTheme()` reads
+the chart tokens back off `<html>` and re-reads them when `data-theme` changes.
+That keeps one definition of every colour in `index.css`.
+
+Still open, and now cheap: **predefined palettes** and the **accent choice**
+(A6a). The accent tokens are already separate from the neutrals, so a palette
+is another pair of blocks keyed on a second attribute — see the comment at the
+top of `index.css`. The secondary accent B15 wants exists as `--er-accent-2`.
 
 ### A3–A6. Settings dialog needs a left-hand sub-menu
 
@@ -292,8 +315,9 @@ range.
 
 ## Suggested order
 
-1. **A2 (theming)** first, and properly. A6, B2's eval-bar restyle and B15's
-   secondary accent all depend on a palette existing.
+1. ~~**A2 (theming)** first, and properly. A6, B2's eval-bar restyle and B15's
+   secondary accent all depend on a palette existing.~~ **Done** — the tokens
+   A6, B2 and B15 were waiting on are in `index.css`.
 2. **B1** — a one-line fix, no reason to wait.
 3. **C1, C4–C8** — the Progress screen is self-contained, and C5/C6 share one
    new endpoint worth writing once.
