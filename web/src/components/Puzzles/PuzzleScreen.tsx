@@ -29,9 +29,8 @@ import type {
 } from '../../types';
 import { Board } from '../Board';
 import { EngineLines } from '../GameAnalysis/EvalChart';
-import { LichessImportPanel } from './LichessImportPanel';
-import { PuzzleFilters } from './PuzzleFilters';
-import { PuzzleRating, PuzzleThemeProgress } from './PuzzleRating';
+import { PuzzlePanel } from './PuzzlePanel';
+import { PuzzleRating } from './PuzzleRating';
 
 const SOURCE_KEY = 'engine-room:puzzle-source';
 const KINDS_KEY = 'engine-room:puzzle-kinds';
@@ -83,6 +82,10 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
   const [progress, setProgress] = useState<PuzzleProgress | null>(null);
   const [ratingChange, setRatingChange] = useState<PuzzleRatingResult | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Open beside the board is the desktop default; on a phone the panel is a
+  // full-screen sheet and opening on top of the puzzle would hide the thing
+  // the screen is for. Same rule as the game library.
+  const [panelCollapsed, setPanelCollapsed] = useState(() => window.innerWidth < 1024);
 
   /** The moves you have played at this puzzle, for the server to re-check. */
   const [played, setPlayed] = useState<string[]>([]);
@@ -519,7 +522,8 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
   const barCp = liveActive ? (live.lines[0]?.cp ?? null) : null;
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3 thin-scroll sm:p-6">
+    <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <div className="thin-scroll min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
       <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 xl:flex-row xl:items-start">
         {/* The board, sized the way the analysis screen sizes it. */}
         <div
@@ -623,9 +627,14 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
 
         {/* Everything that isn't the board. */}
         <div className="contents xl:flex xl:min-w-0 xl:flex-1 xl:flex-col xl:gap-4">
-          <div className="order-1 flex min-w-0 flex-col gap-4 xl:order-none xl:contents">
+          {/* Ordered individually below `xl`, not moved as one block. What
+              goes above the board is the sentence telling you what to do; the
+              rating and the source switch are things you read between puzzles,
+              and a screen that puts them first is a screen where the board
+              starts below the fold. */}
+          <div className="contents">
             {/* Source: two sources, one trainer. */}
-            <div className="flex gap-1.5 rounded-xl border border-line bg-surface p-1.5">
+            <div className="order-5 flex gap-1.5 rounded-xl border border-line bg-surface p-1.5 xl:order-none">
               {(['own', 'lichess'] as PuzzleSource[]).map((s) => (
                 <button
                   key={s}
@@ -645,10 +654,12 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
               ))}
             </div>
 
-            <PuzzleRating progress={progress} change={ratingChange} />
+            <div className="order-4 xl:order-none">
+              <PuzzleRating progress={progress} change={ratingChange} />
+            </div>
 
             {/* The puzzle itself: what to do, and what happened. */}
-            <div className="rounded-xl border border-line bg-surface p-4">
+            <div className="order-1 rounded-xl border border-line bg-surface p-4 xl:order-none">
               {prompt && <p className="text-sm text-fg">{prompt}</p>}
 
               {puzzle && solving && puzzle.source === 'own' && (
@@ -732,7 +743,7 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
             </div>
 
             {phase === 'explore' && liveActive && (
-              <div className="rounded-xl border border-line bg-surface p-3">
+              <div className="order-3 rounded-xl border border-line bg-surface p-3 xl:order-none">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold tracking-wide text-fg-2 uppercase">
                     Position
@@ -755,29 +766,8 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
               </div>
             )}
 
-            <PuzzleFilters
-              source={source}
-              kinds={kinds}
-              onChangeKinds={setKinds}
-              themes={themes}
-              onChangeThemes={setThemes}
-              stats={stats}
-              refreshKey={refreshKey}
-            />
-
-            <PuzzleThemeProgress progress={progress} />
-
-            {source === 'lichess' && (
-              <LichessImportPanel
-                onImported={() => {
-                  refreshStats();
-                  setRefreshKey((k) => k + 1);
-                }}
-              />
-            )}
-
             {!engineReady && source === 'own' && (
-              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs text-fg">
+              <div className="order-6 flex flex-wrap items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs text-fg xl:order-none">
                 <span>
                   No Stockfish engine is selected — puzzles from your games can't be
                   checked without one.
@@ -793,6 +783,24 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
           </div>
         </div>
       </div>
+      </div>
+
+      <PuzzlePanel
+        source={source}
+        kinds={kinds}
+        onChangeKinds={setKinds}
+        themes={themes}
+        onChangeThemes={setThemes}
+        stats={stats}
+        progress={progress}
+        refreshKey={refreshKey}
+        onImported={() => {
+          refreshStats();
+          setRefreshKey((k) => k + 1);
+        }}
+        collapsed={panelCollapsed}
+        onToggleCollapsed={() => setPanelCollapsed((v) => !v)}
+      />
     </main>
   );
 }
