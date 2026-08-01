@@ -5,6 +5,10 @@ by value per unit of work, not by when they were thought of.
 
 Anything already built lives in the README; this file is only what isn't.
 
+Fixes and polish for the React UI in `web/` are *not* here — they live in
+[`web-ui-fixes.md`](web-ui-fixes.md), so a defect list can't drown out the
+feature list.
+
 ---
 
 ## 0. Opening repertoire report

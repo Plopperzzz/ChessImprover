@@ -39,6 +39,11 @@ play vs Maia, puzzles, batch runs, the chess.com import and the opening
 explorer. Both are served by the same process, off the same database: the
 React build at `/`, the classic UI at `/legacy/`.
 
+The React UI is a first pass, and what's wrong with it is written down in
+[`docs/web-ui-fixes.md`](docs/web-ui-fixes.md) — theming, variations, drag and
+animation, sound, and the settings dialog are all still to do. That file is
+defects and polish; `docs/TODO.md` remains the feature list.
+
 ### The four tabs
 
 Everything used to sit on one page, which meant scrolling past a batch runner
