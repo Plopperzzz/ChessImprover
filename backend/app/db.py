@@ -653,6 +653,33 @@ def init_db():
         _ensure_column(conn, "puzzles", "themes_tagged", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "puzzles", "rating", "INTEGER")
         _ensure_column(conn, "puzzles", "rating_rd", "INTEGER")
+        # What kind of exercise this position is: 'tactic' (there is something
+        # to win, find it) or 'blunder_check' (you were fine and threw it
+        # away, find the move that holds). Decided when the puzzle is built,
+        # off the evaluations the analysis pass already stored -- see
+        # app/puzzles.classify_kind.
+        _ensure_column(conn, "puzzles", "kind", "TEXT NOT NULL DEFAULT 'tactic'")
+        _ensure_column(conn, "puzzles", "cp_after", "REAL")
+        # The whole answer, not just its first move: space-separated UCI,
+        # yours first, alternating with the opponent's best replies. Same
+        # shape as a Lichess row's `moves` with the setup move removed, so one
+        # grader can walk either source's line.
+        _ensure_column(conn, "puzzles", "solution_line", "TEXT")
+        _ensure_column(conn, "puzzles", "moves_required", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "puzzles", "line_cp", "REAL")
+        # How much better the solution is than the second-best move, in win
+        # probability. This is what says whether the position is a puzzle at
+        # all: when three moves are equally fine there is nothing to find.
+        _ensure_column(conn, "puzzles", "unique_margin", "REAL")
+        # Difficulty measured by asking Maia, at each Elo on the grid, whether
+        # it would play the line (app/puzzle_difficulty.py). `rating` above is
+        # what the rater uses and may come from either estimator; these two
+        # keep the Maia measurement itself, so switching estimators later
+        # doesn't lose it.
+        _ensure_column(conn, "puzzles", "maia_elo", "REAL")
+        _ensure_column(conn, "puzzles", "maia_rd", "REAL")
+        _ensure_column(conn, "puzzles", "rating_source", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_puzzles_kind ON puzzles(user_id, kind, solved)")
         _ensure_column(conn, "sweep_positions", "think_ms", "INTEGER")
         _ensure_column(conn, "sweep_positions", "policies", "TEXT")
         _ensure_column(conn, "run_games", "maia_model_size", "TEXT")
