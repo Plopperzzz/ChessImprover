@@ -562,6 +562,27 @@ It is gated to the same breakpoint as D9, and deliberately: on a desktop
 everything is on screen already, and a page that doesn't scroll would have no
 way left to bring the header back.
 
+#### D12a. …but only when the page has actually drifted — **done**
+
+As first built it realigned on *every* press, and a realign of a view already
+in place is a jump for nothing: pressing Next moved the page as well as the
+pieces, which is exactly the thing D12 was trying to stop.
+
+So a step realigns **once after each time the reader scrolls**, and every
+press after that leaves the screen alone. `hasScrolled` is set by scrolling
+the analysis column and cleared by the realign.
+
+Telling the reader's scroll from the realign's own is the whole difficulty,
+because a smooth scroll goes on firing events for a few hundred milliseconds
+after the call that started it. The realign therefore declares where it is
+going: events belong to it until the scroller lands on that target, and for at
+most a second in case it never quite arrives — a target past the end of the
+content, or a reader who grabs the page mid-animation. A claim that outlives
+its window without being collected hands the event back rather than swallowing
+it, so the reader's next scroll always counts. Where there is nothing to
+animate the claim lasts 120ms, only long enough to cover the position being
+clamped by the header leaving.
+
 ### D13. With the engine on, the plot becomes a bar — **done**
 
 D11 and D12 both bought height and it still wasn't enough: with the engine's
