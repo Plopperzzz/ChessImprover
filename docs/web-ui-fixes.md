@@ -158,8 +158,8 @@ means "leave alone" and `""` means "back to the default" — a distinction the U
 has to be able to make, and the reason it isn't spelled as a JSON null.
 
 The Board & pieces pane is now defaults on top and a screen × kind grid under
-it. Puzzles and Play vs Maia are still classic-UI screens, and the preferences
-apply there too, since both front ends read them.
+it. Play vs Maia is still a classic-UI screen, and the preferences apply there
+too, since both front ends read them.
 
 `backend/sims/screen_prefs_check.py` covers the absence rules, which are the
 part that rots quietly: a screen following the default has to keep following it
