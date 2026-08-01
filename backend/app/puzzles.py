@@ -1103,6 +1103,14 @@ class LichessAttemptIn(BaseModel):
     moves: list[str]
 
 
+def _after_setup(row) -> str:
+    """A Lichess row's position as the solver sees it: after the opponent's
+    opening move has been played in."""
+    board = chess.Board(row["fen"])
+    board.push(chess.Move.from_uci(row["moves"].split()[0]))
+    return board.fen()
+
+
 def _mates(fen: str, uci: str) -> bool:
     board = chess.Board(fen)
     try:
@@ -1222,6 +1230,10 @@ def attempt_lichess(puzzle_id: str, body: LichessAttemptIn,
             "solved": True,
             "moves_played": len(played),
             "themes": themes,
+            # The line, now that it is over. Withholding it here was leaving
+            # the solver unable to walk back through what they just found --
+            # and it is not a spoiler for a puzzle they have finished.
+            "line": _line_detail(_after_setup(row), line[1:]),
             "game_url": row["game_url"],
             "rating": result,
             "progress": puzzle_ratings.summary(conn, user["id"]),

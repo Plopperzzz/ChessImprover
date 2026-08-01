@@ -5,9 +5,17 @@ import type {
   EngineSettings,
   GameDetail,
   GameSummary,
+  LichessImportStatus,
   MoveQuality as MoveQualityLabel,
+  Puzzle,
+  PuzzleKind,
+  PuzzleProgress,
+  PuzzleSource,
+  PuzzleStats,
+  PuzzleVerdict,
   Run,
   SavedAnalysis,
+  ThemeGroup,
   User,
 } from '../types';
 
@@ -418,6 +426,104 @@ export const trend = (params: Record<string, string | number | undefined | null>
 
 export const moveQuality = (params: Record<string, string | number | undefined | null> = {}) =>
   request<MoveQualityCounts>(`/api/move-quality${query(params)}`);
+
+// --- puzzles --------------------------------------------------------------
+
+/** What the picker is being asked for.
+ *
+ * `kinds` and `themes` are independent filters that intersect, which is the
+ * point: "blunder checks, but only the forks" is a sensible thing to practise
+ * and needs no special case. An empty `themes` means every motif, and an empty
+ * `kinds` is refused by the server rather than silently meaning "all" -- a
+ * solver who has turned both toggles off asked for nothing.
+ */
+export interface PuzzleQuery {
+  source: PuzzleSource;
+  kinds?: PuzzleKind[];
+  themes?: string[];
+  scope?: 'blunder' | 'all';
+  order?: 'random' | 'worst';
+  exclude?: string | null;
+}
+
+const puzzleParams = (q: PuzzleQuery) => ({
+  source: q.source,
+  scope: q.scope ?? 'all',
+  order: q.order ?? 'random',
+  kinds: q.kinds?.length ? q.kinds.join(',') : undefined,
+  themes: q.themes?.length ? q.themes.join(',') : undefined,
+  exclude: q.exclude ?? undefined,
+});
+
+export const puzzleStats = () => request<PuzzleStats>('/api/puzzles/stats');
+
+export const puzzleThemes = (source: PuzzleSource, kinds?: PuzzleKind[]) =>
+  request<{ source: PuzzleSource; groups: ThemeGroup[] }>(
+    `/api/puzzles/themes${query({ source, kinds: kinds?.length ? kinds.join(',') : undefined })}`,
+  );
+
+export const nextPuzzle = (q: PuzzleQuery) =>
+  request<{ puzzle: Puzzle; progress: PuzzleProgress } & Omit<PuzzleStats, 'progress'>>(
+    `/api/puzzles/next${query(puzzleParams(q))}`,
+  );
+
+/** Every move you have played at this puzzle, newest last.
+ *
+ * The whole prefix rather than just the new move, for both sources: the
+ * server holds no per-solver state and re-checks the line each time, so
+ * nothing can be skipped by lying about where you are. */
+export const attemptPuzzle = (puzzle: Puzzle, moves: string[]) =>
+  request<PuzzleVerdict>(
+    puzzle.source === 'lichess'
+      ? `/api/puzzles/lichess/${puzzle.id}/attempt`
+      : `/api/puzzles/${puzzle.id}/attempt`,
+    json({ moves }),
+  );
+
+export const revealPuzzle = (puzzle: Puzzle) =>
+  request<PuzzleVerdict>(
+    puzzle.source === 'lichess'
+      ? `/api/puzzles/lichess/${puzzle.id}/reveal`
+      : `/api/puzzles/${puzzle.id}/reveal`,
+    { method: 'POST' },
+  );
+
+export const rebuildPuzzles = () =>
+  request<PuzzleStats & { added: number; considered: number; skipped_already_lost: number }>(
+    '/api/puzzles/rebuild',
+    { method: 'POST' },
+  );
+
+export const resetPuzzles = () => request<PuzzleStats>('/api/puzzles/reset', { method: 'POST' });
+export const resetPuzzleRating = () =>
+  request<PuzzleProgress>('/api/puzzles/rating/reset', { method: 'POST' });
+
+/** Measure a puzzle's difficulty with Maia, for next time.
+ *
+ * Asked for after a puzzle is over, never before: the measurement is a sweep
+ * across the whole Elo grid and putting it in front of a verdict would mean
+ * waiting seconds to be told whether the move you already played was right. */
+export const measureDifficulty = (puzzleId: number) =>
+  request<{ elo: number | null; rd: number | null; rating: number | null; reason?: string }>(
+    `/api/puzzles/${puzzleId}/difficulty`,
+    { method: 'POST' },
+  );
+
+export const lichessStatus = () => request<LichessImportStatus>('/api/puzzles/lichess/status');
+
+export interface LichessImportRequest {
+  min_rating?: number | null;
+  max_rating?: number | null;
+  max_puzzles?: number | null;
+  source_path?: string | null;
+  replace?: boolean;
+}
+
+export const startLichessImport = (body: LichessImportRequest) =>
+  request<LichessImportStatus>('/api/puzzles/lichess/import', json(body));
+
+export const cancelLichessImport = () =>
+  request<{ stopping: boolean }>('/api/puzzles/lichess/cancel', { method: 'POST' });
 
 // --- websockets -----------------------------------------------------------
 

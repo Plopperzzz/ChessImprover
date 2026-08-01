@@ -233,7 +233,7 @@ export function EvalChart({
 
 /** The engine's ranked lines, under whichever of the two the card is drawing
  *  above them — the plot on a desktop, the bar on a phone. */
-function EngineLines({
+export function EngineLines({
   engineLines,
   linesStale,
   liveError,
