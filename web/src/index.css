@@ -1,5 +1,152 @@
 @import "tailwindcss";
 
+/*
+ * Palette
+ * -------
+ * Every colour in the UI comes from one of the `--er-*` variables below, and
+ * nothing outside this file names a Tailwind palette shade. The two blocks are
+ * the same set of tokens with different values, so switching the theme is one
+ * attribute on <html> (`lib/theme.ts` writes it) rather than a `dark:` variant
+ * on every element.
+ *
+ * The `@theme inline` block below is what turns them into utilities:
+ * `--color-surface` becomes `bg-surface`, `text-surface`, `border-surface` and
+ * so on, and because the utility resolves to `var(--er-…)` it re-reads on a
+ * theme change with no re-render.
+ *
+ * Adding a *palette* (A6) means adding another pair of blocks keyed on a second
+ * attribute, e.g. `[data-palette='slate'][data-theme='dark']`; the accent
+ * tokens are already separate from the neutrals so an accent can be chosen
+ * independently of the surface colours.
+ */
+
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Surfaces, back to front. */
+  --er-canvas: #0c0a09;
+  --er-surface: #1c1917;
+  --er-surface-2: #292524;
+  --er-surface-3: #44403c;
+
+  /* Hairlines: `line` for panel edges, `line-2` where one needs to read. */
+  --er-line: #292524;
+  --er-line-2: #44403c;
+
+  /* Text, strongest to faintest. */
+  --er-fg-strong: #ffffff;
+  --er-fg: #f5f5f4;
+  --er-fg-2: #d6d3d1;
+  --er-fg-muted: #a8a29e;
+  --er-fg-subtle: #78716c;
+  --er-fg-faint: #57534d;
+
+  /* Primary accent. Amber is the look the app already had and stays the
+     default; `on-accent` is what reads on top of an accent fill. */
+  --er-accent: #f59e0b;
+  --er-accent-strong: #d97706;
+  --er-accent-soft: #fbbf24;
+  --er-accent-deep: #92400e;
+  --er-on-accent: #ffffff;
+
+  /* Secondary accent — the second series on a chart, and the calibrated
+     estimate in B15. */
+  --er-accent-2: #38bdf8;
+
+  /* Status. */
+  --er-danger: #dc2626;
+  --er-danger-fg: #fca5a5;
+  --er-danger-surface: #3b0d0d;
+  --er-danger-line: #7f1d1d;
+  --er-positive: #10b981;
+
+  /* Chart furniture. */
+  --er-chart-grid: #292524;
+  --er-chart-axis: #a8a29e;
+  --er-chart-line: #e7e5e4;
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  --er-canvas: #faf8f6;
+  --er-surface: #ffffff;
+  --er-surface-2: #f1eeea;
+  --er-surface-3: #e2ddd7;
+
+  --er-line: #e3ded8;
+  --er-line-2: #cbc4bc;
+
+  --er-fg-strong: #0c0a09;
+  --er-fg: #1c1917;
+  --er-fg-2: #44403c;
+  --er-fg-muted: #57534e;
+  --er-fg-subtle: #78716c;
+  --er-fg-faint: #a8a29e;
+
+  /* One step darker than the dark theme's amber: the same hue, but enough
+     contrast to carry white text and to be legible on a white panel. */
+  --er-accent: #d97706;
+  --er-accent-strong: #b45309;
+  --er-accent-soft: #f59e0b;
+  --er-accent-deep: #78350f;
+  --er-on-accent: #ffffff;
+
+  --er-accent-2: #0284c7;
+
+  --er-danger: #dc2626;
+  --er-danger-fg: #b91c1c;
+  --er-danger-surface: #fef2f2;
+  --er-danger-line: #fecaca;
+  --er-positive: #059669;
+
+  --er-chart-grid: #e3ded8;
+  --er-chart-axis: #78716c;
+  --er-chart-line: #57534e;
+}
+
+/* The eval bar is white-vs-black by definition, so it keeps its own colours in
+   both themes rather than following the surface tokens. */
+:root {
+  --er-eval-white: #f5f5f4;
+  --er-eval-black: #1c1917;
+}
+
+@theme inline {
+  --color-canvas: var(--er-canvas);
+  --color-surface: var(--er-surface);
+  --color-surface-2: var(--er-surface-2);
+  --color-surface-3: var(--er-surface-3);
+
+  --color-line: var(--er-line);
+  --color-line-2: var(--er-line-2);
+
+  --color-fg-strong: var(--er-fg-strong);
+  --color-fg: var(--er-fg);
+  --color-fg-2: var(--er-fg-2);
+  --color-fg-muted: var(--er-fg-muted);
+  --color-fg-subtle: var(--er-fg-subtle);
+  --color-fg-faint: var(--er-fg-faint);
+
+  --color-accent: var(--er-accent);
+  --color-accent-strong: var(--er-accent-strong);
+  --color-accent-soft: var(--er-accent-soft);
+  --color-accent-deep: var(--er-accent-deep);
+  --color-on-accent: var(--er-on-accent);
+
+  --color-accent-2: var(--er-accent-2);
+
+  --color-danger: var(--er-danger);
+  --color-danger-fg: var(--er-danger-fg);
+  --color-danger-surface: var(--er-danger-surface);
+  --color-danger-line: var(--er-danger-line);
+  --color-positive: var(--er-positive);
+
+  --color-eval-white: var(--er-eval-white);
+  --color-eval-black: var(--er-eval-black);
+}
+
 html,
 body,
 #root {
@@ -7,17 +154,17 @@ body,
 }
 
 /* The move list and the games table are the two long scrollers in the app and
-   both sit inside dark panels, where the platform scrollbar is a bright slab. */
+   both sit inside panels, where the platform scrollbar is a bright slab. */
 .thin-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #57534d transparent;
+  scrollbar-color: var(--er-line-2) transparent;
 }
 .thin-scroll::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 .thin-scroll::-webkit-scrollbar-thumb {
-  background: #57534d;
+  background: var(--er-line-2);
   border-radius: 4px;
 }
 .thin-scroll::-webkit-scrollbar-track {

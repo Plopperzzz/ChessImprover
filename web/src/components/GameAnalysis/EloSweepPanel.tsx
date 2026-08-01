@@ -11,6 +11,7 @@ import {
   ZAxis,
 } from 'recharts';
 import type { EloEstimate, SweepResults } from '../../types';
+import { useChartTheme } from '../../lib/theme';
 
 interface EloSweepPanelProps {
   results: SweepResults | null;
@@ -23,9 +24,9 @@ interface EloSweepPanelProps {
 }
 
 const CONFIDENCE: Record<string, string> = {
-  high: 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30',
-  medium: 'bg-amber-500/15 text-amber-300 ring-amber-500/30',
-  low: 'bg-red-500/15 text-red-300 ring-red-500/30',
+  high: 'bg-positive/15 text-positive ring-positive/30',
+  medium: 'bg-accent/15 text-accent ring-accent/30',
+  low: 'bg-danger/15 text-danger-fg ring-danger/30',
 };
 
 function SideEstimate({
@@ -41,13 +42,13 @@ function SideEstimate({
   return (
     <div
       className={`rounded-xl border p-3 ${
-        isYou ? 'border-amber-700/60 bg-amber-950/20' : 'border-stone-800 bg-stone-950/70'
+        isYou ? 'border-accent-deep/60 bg-accent/10' : 'border-line bg-canvas/70'
       }`}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="truncate text-xs font-semibold text-stone-200">
+        <span className="truncate text-xs font-semibold text-fg-2">
           {name}
-          {isYou && <span className="ml-1.5 text-[10px] text-amber-400">you</span>}
+          {isYou && <span className="ml-1.5 text-[10px] text-accent">you</span>}
         </span>
         <span
           className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ${
@@ -59,27 +60,27 @@ function SideEstimate({
       </div>
 
       <div className="mt-1.5 flex items-baseline gap-2">
-        <span className="font-mono text-3xl font-black text-amber-400">
+        <span className="font-mono text-3xl font-black text-accent">
           {estimate.estimate ?? '—'}
         </span>
         {bound && (
-          <span className="text-[11px] text-stone-400">
+          <span className="text-[11px] text-fg-muted">
             {bound === 'lower' ? 'at least' : 'at most'}
           </span>
         )}
       </div>
 
-      <div className="mt-1 font-mono text-[11px] text-stone-400">
+      <div className="mt-1 font-mono text-[11px] text-fg-muted">
         {estimate.ci_low != null && estimate.ci_high != null
           ? `95% CI ${estimate.ci_low} – ${estimate.ci_high}`
           : 'no interval'}
       </div>
-      <div className="mt-0.5 font-mono text-[11px] text-stone-500">
+      <div className="mt-0.5 font-mono text-[11px] text-fg-subtle">
         {estimate.n_discriminative} of {estimate.n_positions} positions carried signal
       </div>
 
       {estimate.ceiling?.implied_rating != null && (
-        <div className="mt-2 rounded-lg bg-stone-900/80 px-2 py-1.5 font-mono text-[10px] text-stone-400">
+        <div className="mt-2 rounded-lg bg-surface/80 px-2 py-1.5 font-mono text-[10px] text-fg-muted">
           match rate {(estimate.ceiling.observed * 100).toFixed(1)}% vs{' '}
           {(estimate.ceiling.expected * 100).toFixed(1)}% expected ({estimate.ceiling.model}) →
           implies ~{estimate.ceiling.implied_rating}
@@ -89,8 +90,8 @@ function SideEstimate({
       {estimate.reasons.length > 0 && (
         <ul className="mt-2 space-y-1">
           {estimate.reasons.map((reason) => (
-            <li key={reason} className="flex gap-1.5 text-[11px] leading-snug text-stone-400">
-              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-stone-600" />
+            <li key={reason} className="flex gap-1.5 text-[11px] leading-snug text-fg-muted">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-fg-faint" />
               <span>{reason}</span>
             </li>
           ))}
@@ -104,6 +105,7 @@ function SideEstimate({
  *  that curve is the estimate, which is the only way to see whether the number
  *  came off a real hump or off a flat line. */
 function SweepCurve({ estimate }: { estimate: EloEstimate }) {
+  const chart = useChartTheme();
   if (!estimate.grid?.length || !estimate.match_rates?.length) return null;
 
   // One dataset for both series: the dense fit and the sparse observations
@@ -130,27 +132,27 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
     <div className="h-40 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: 8, left: -22, bottom: 0 }}>
-          <CartesianGrid stroke="#292524" strokeDasharray="3 3" />
+          <CartesianGrid stroke={chart.grid} strokeDasharray="3 3" />
           <XAxis
             type="number"
             dataKey="elo"
             domain={['dataMin', 'dataMax']}
-            tick={{ fill: '#a8a29e', fontSize: 10 }}
+            tick={{ fill: chart.axis, fontSize: 10 }}
             axisLine={false}
             tickLine={false}
           />
           <YAxis
-            tick={{ fill: '#a8a29e', fontSize: 10 }}
+            tick={{ fill: chart.axis, fontSize: 10 }}
             tickFormatter={(v: number) => `${v.toFixed(0)}%`}
             axisLine={false}
             tickLine={false}
           />
           <ZAxis range={[26, 26]} />
           <Tooltip
-            cursor={{ stroke: '#57534d' }}
+            cursor={{ stroke: chart.axis }}
             contentStyle={{
-              background: '#0c0a09',
-              border: '1px solid #292524',
+              background: chart.surface,
+              border: `1px solid ${chart.tooltipBorder}`,
               borderRadius: 10,
               fontSize: 12,
             }}
@@ -163,13 +165,13 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
           <Line
             type="monotone"
             dataKey="fit"
-            stroke="#38bdf8"
+            stroke={chart.accent2}
             strokeWidth={2}
             dot={false}
             connectNulls
             isAnimationActive={false}
           />
-          <Scatter dataKey="rate" fill="#f59e0b" isAnimationActive={false} />
+          <Scatter dataKey="rate" fill={chart.accent} isAnimationActive={false} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
@@ -190,17 +192,17 @@ export function EloSweepPanel({
   const yours = yourColor ? results?.[yourColor] : white;
 
   return (
-    <div className="flex flex-col rounded-2xl border border-stone-800 bg-stone-900/90 p-4 text-stone-100 shadow-xl">
-      <div className="flex items-center gap-2 border-b border-stone-800 pb-3">
-        <TrendingUp className="h-4 w-4 text-amber-500" />
-        <h4 className="text-xs font-semibold tracking-wider text-stone-300 uppercase">
+    <div className="flex flex-col rounded-2xl border border-line bg-surface/90 p-4 text-fg shadow-xl">
+      <div className="flex items-center gap-2 border-b border-line pb-3">
+        <TrendingUp className="h-4 w-4 text-accent" />
+        <h4 className="text-xs font-semibold tracking-wider text-fg-2 uppercase">
           Maia Elo sweep
         </h4>
       </div>
 
       {!results ? (
-        <p className="py-6 text-center text-xs leading-relaxed text-stone-500">
-          Run <span className="font-semibold text-stone-300">Full analysis</span> to sweep this
+        <p className="py-6 text-center text-xs leading-relaxed text-fg-subtle">
+          Run <span className="font-semibold text-fg-2">Full analysis</span> to sweep this
           game against Maia at every Elo on the grid and fit an estimated rating for both
           players.
         </p>
@@ -216,8 +218,8 @@ export function EloSweepPanel({
           </div>
 
           {yours && (
-            <div className="mt-3 border-t border-stone-800 pt-3">
-              <p className="mb-1 text-[11px] tracking-wider text-stone-500 uppercase">
+            <div className="mt-3 border-t border-line pt-3">
+              <p className="mb-1 text-[11px] tracking-wider text-fg-subtle uppercase">
                 Match rate by Maia Elo ({yourColor === 'b' ? 'black' : 'white'})
               </p>
               <SweepCurve estimate={yours} />
@@ -225,7 +227,7 @@ export function EloSweepPanel({
           )}
 
           {modelNote && (
-            <p className="mt-3 flex gap-1.5 border-t border-stone-800 pt-3 text-[11px] leading-snug text-stone-500">
+            <p className="mt-3 flex gap-1.5 border-t border-line pt-3 text-[11px] leading-snug text-fg-subtle">
               <Info className="mt-0.5 h-3 w-3 shrink-0" />
               <span>{modelNote}</span>
             </p>

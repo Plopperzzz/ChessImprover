@@ -12,6 +12,7 @@ import type { AnalysisMove, EngineLine } from '../../types';
 import type { Ply } from '../../lib/chess';
 import { formatEval } from '../../lib/chess';
 import { styleFor } from '../../lib/quality';
+import { useChartTheme } from '../../lib/theme';
 
 interface EvalChartProps {
   plies: Ply[];
@@ -36,6 +37,8 @@ export function EvalChart({
   engineLines,
   liveError,
 }: EvalChartProps) {
+  const chart = useChartTheme();
+
   // `cp_after` is stored from the perspective of whoever is to move in the
   // resulting position; the plot is white-relative throughout, so black's
   // moves get flipped back.
@@ -54,15 +57,15 @@ export function EvalChart({
   const chartHeight = liveActive && engineLines.length > 0 ? 'h-36' : 'h-48 sm:h-56';
 
   return (
-    <div className="flex flex-col rounded-2xl border border-stone-800 bg-stone-900/90 p-4 text-stone-100 shadow-xl">
-      <div className="flex items-center justify-between border-b border-stone-800 pb-3">
+    <div className="flex flex-col rounded-2xl border border-line bg-surface/90 p-4 text-fg shadow-xl">
+      <div className="flex items-center justify-between border-b border-line pb-3">
         <div className="flex items-center gap-2">
-          <Activity className="h-4 w-4 text-amber-500" />
-          <h4 className="text-xs font-semibold tracking-wider text-stone-300 uppercase">
+          <Activity className="h-4 w-4 text-accent" />
+          <h4 className="text-xs font-semibold tracking-wider text-fg-2 uppercase">
             Evaluation
           </h4>
         </div>
-        <span className="font-mono text-[11px] text-stone-400">
+        <span className="font-mono text-[11px] text-fg-muted">
           {plies.length ? `Ply ${currentPlyIndex} / ${plies.length}` : 'no game'}
         </span>
       </div>
@@ -80,24 +83,24 @@ export function EvalChart({
             >
               <defs>
                 <linearGradient id="evalFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#e7e5e4" stopOpacity={0.55} />
-                  <stop offset="100%" stopColor="#e7e5e4" stopOpacity={0.05} />
+                  <stop offset="0%" stopColor={chart.line} stopOpacity={0.55} />
+                  <stop offset="100%" stopColor={chart.line} stopOpacity={0.05} />
                 </linearGradient>
               </defs>
               <XAxis dataKey="index" hide />
               <YAxis
                 domain={[-CLAMP, CLAMP]}
-                tick={{ fill: '#a8a29e', fontSize: 10 }}
+                tick={{ fill: chart.axis, fontSize: 10 }}
                 tickFormatter={(v: number) => (v / 100).toFixed(0)}
                 axisLine={false}
                 tickLine={false}
               />
-              <ReferenceLine y={0} stroke="#57534d" strokeDasharray="3 3" />
-              <ReferenceLine x={currentPlyIndex} stroke="#f59e0b" strokeWidth={1.5} />
+              <ReferenceLine y={0} stroke={chart.axis} strokeDasharray="3 3" />
+              <ReferenceLine x={currentPlyIndex} stroke={chart.accent} strokeWidth={1.5} />
               <Tooltip
                 contentStyle={{
-                  background: '#0c0a09',
-                  border: '1px solid #292524',
+                  background: chart.surface,
+                  border: `1px solid ${chart.tooltipBorder}`,
                   borderRadius: 10,
                   fontSize: 12,
                 }}
@@ -110,7 +113,7 @@ export function EvalChart({
               <Area
                 type="monotone"
                 dataKey="cp"
-                stroke="#e7e5e4"
+                stroke={chart.line}
                 strokeWidth={1.5}
                 fill="url(#evalFill)"
                 connectNulls
@@ -132,7 +135,7 @@ export function EvalChart({
                       cy={props.cy}
                       r={3.5}
                       fill={q.color}
-                      stroke="#0c0a09"
+                      stroke={chart.surface}
                       strokeWidth={1}
                     />
                   );
@@ -141,7 +144,7 @@ export function EvalChart({
             </AreaChart>
           </ResponsiveContainer>
         ) : (
-          <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-stone-800 px-6 text-center text-xs text-stone-500">
+          <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-line px-6 text-center text-xs text-fg-subtle">
             {plies.length
               ? 'Run an analysis to plot this game.'
               : 'Select a game from your library.'}
@@ -150,31 +153,31 @@ export function EvalChart({
       </div>
 
       {liveActive && (
-        <div className="mt-3 border-t border-stone-800 pt-3">
+        <div className="mt-3 border-t border-line pt-3">
           <div className="mb-2 flex items-center gap-2">
-            <Cpu className="h-3.5 w-3.5 text-sky-400" />
-            <span className="text-[11px] font-semibold tracking-wider text-stone-400 uppercase">
+            <Cpu className="h-3.5 w-3.5 text-accent-2" />
+            <span className="text-[11px] font-semibold tracking-wider text-fg-muted uppercase">
               Live engine
             </span>
           </div>
           {liveError ? (
-            <p className="rounded-lg bg-red-950/60 px-3 py-2 text-[11px] text-red-300">
+            <p className="rounded-lg bg-danger-surface px-3 py-2 text-[11px] text-danger-fg">
               {liveError}
             </p>
           ) : engineLines.length === 0 ? (
-            <p className="text-[11px] text-stone-500">Thinking…</p>
+            <p className="text-[11px] text-fg-subtle">Thinking…</p>
           ) : (
             <div className="space-y-1">
               {engineLines.map((line) => (
                 <div
                   key={line.rank}
-                  className="flex items-baseline gap-2 rounded-lg bg-stone-950/70 px-2.5 py-1.5 font-mono text-[11px]"
+                  className="flex items-baseline gap-2 rounded-lg bg-canvas/70 px-2.5 py-1.5 font-mono text-[11px]"
                 >
-                  <span className="w-14 shrink-0 font-bold text-amber-400">
+                  <span className="w-14 shrink-0 font-bold text-accent">
                     {formatEval(line.cp, line.mate)}
                   </span>
-                  <span className="w-8 shrink-0 text-stone-500">d{line.depth}</span>
-                  <span className="truncate text-stone-300">
+                  <span className="w-8 shrink-0 text-fg-subtle">d{line.depth}</span>
+                  <span className="truncate text-fg-2">
                     {(line.sanPv ?? line.pv).slice(0, 10).join(' ')}
                   </span>
                 </div>

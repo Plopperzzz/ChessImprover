@@ -43,10 +43,10 @@ function counts(plies: Ply[], moves: Map<number, AnalysisMove>, color: 'w' | 'b'
 function SideSummary({ name, tally }: { name: string; tally: Map<MoveQuality, number> }) {
   const shown = QUALITY_ORDER.filter((q) => (tally.get(q) ?? 0) > 0);
   return (
-    <div className="rounded-xl border border-stone-800/80 bg-stone-950/80 p-2.5">
-      <div className="truncate text-xs font-semibold text-stone-100">{name}</div>
+    <div className="rounded-xl border border-line/80 bg-canvas/80 p-2.5">
+      <div className="truncate text-xs font-semibold text-fg">{name}</div>
       {shown.length === 0 ? (
-        <div className="mt-1 font-mono text-[11px] text-stone-500">not analysed</div>
+        <div className="mt-1 font-mono text-[11px] text-fg-subtle">not analysed</div>
       ) : (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {shown.map((q) => (
@@ -109,7 +109,7 @@ export function MoveList({
           data-current={current}
           onClick={() => onSelectPly(ply.ply)}
           className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left font-mono text-xs transition-colors ${
-            current ? 'bg-amber-600/90 text-white' : 'text-stone-200 hover:bg-stone-800'
+            current ? 'bg-accent-strong/90 text-on-accent' : 'text-fg-2 hover:bg-surface-2'
           }`}
         >
           <span className="truncate">{ply.san}</span>
@@ -141,21 +141,21 @@ export function MoveList({
   };
 
   return (
-    <div className="flex flex-col rounded-2xl border border-stone-800 bg-stone-900/95 p-4 text-stone-100 shadow-xl">
-      <div className="grid grid-cols-2 gap-2 border-b border-stone-800 pb-3">
+    <div className="flex flex-col rounded-2xl border border-line bg-surface/95 p-4 text-fg shadow-xl">
+      <div className="grid grid-cols-2 gap-2 border-b border-line pb-3">
         <SideSummary name={`⚪ ${white}`} tally={counts(plies, moves, 'w')} />
         <SideSummary name={`⚫ ${black}`} tally={counts(plies, moves, 'b')} />
       </div>
 
       <div ref={listRef} className="thin-scroll mt-3 max-h-64 overflow-y-auto pr-1">
         {rows.length === 0 ? (
-          <p className="py-6 text-center text-xs text-stone-500">No moves to show.</p>
+          <p className="py-6 text-center text-xs text-fg-subtle">No moves to show.</p>
         ) : (
           <table className="w-full table-fixed">
             <tbody>
               {rows.map((row) => (
                 <tr key={row.moveNumber}>
-                  <td className="w-9 py-1 pr-1 text-right font-mono text-[11px] text-stone-500">
+                  <td className="w-9 py-1 pr-1 text-right font-mono text-[11px] text-fg-subtle">
                     {row.moveNumber}.
                   </td>
                   {cell(row.white)}
@@ -167,7 +167,7 @@ export function MoveList({
         )}
       </div>
 
-      <div className="mt-3 flex items-center justify-center gap-1 border-t border-stone-800 pt-3">
+      <div className="mt-3 flex items-center justify-center gap-1 border-t border-line pt-3">
         {[
           { icon: <ChevronFirst className="h-4 w-4" />, to: 0, label: 'Start' },
           {
@@ -187,19 +187,19 @@ export function MoveList({
             title={btn.label}
             disabled={plies.length === 0}
             onClick={() => onSelectPly(btn.to)}
-            className="flex h-8 w-9 items-center justify-center rounded-lg bg-stone-950 text-stone-300 ring-1 ring-stone-800 hover:bg-stone-800 hover:text-stone-100 disabled:opacity-40"
+            className="flex h-8 w-9 items-center justify-center rounded-lg bg-canvas text-fg-2 ring-1 ring-line hover:bg-surface-2 hover:text-fg disabled:opacity-40"
           >
             {btn.icon}
           </button>
         ))}
       </div>
 
-      <div className="mt-3 space-y-2 border-t border-stone-800 pt-3">
+      <div className="mt-3 space-y-2 border-t border-line pt-3">
         <div className="flex flex-wrap gap-2">
           <button
             onClick={onRunFull}
             disabled={disabled || job.running}
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-amber-600 px-3 py-2.5 text-sm font-semibold text-white shadow-md transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent-strong px-3 py-2.5 text-sm font-semibold text-on-accent shadow-md transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
             {job.running && job.kind === 'full' ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -212,7 +212,7 @@ export function MoveList({
             onClick={onRunQuick}
             disabled={disabled || job.running}
             title="Stockfish only — no Elo estimate"
-            className="flex items-center justify-center gap-2 rounded-lg border border-stone-700 bg-stone-950 px-3 py-2.5 text-sm font-medium text-stone-300 transition-colors hover:bg-stone-800 hover:text-stone-100 disabled:opacity-50"
+            className="flex items-center justify-center gap-2 rounded-lg border border-line-2 bg-canvas px-3 py-2.5 text-sm font-medium text-fg-2 transition-colors hover:bg-surface-2 hover:text-fg disabled:opacity-50"
           >
             <Gauge className="h-4 w-4" />
             <span>Quick</span>
@@ -220,7 +220,7 @@ export function MoveList({
           {job.running && (
             <button
               onClick={onCancel}
-              className="flex items-center justify-center gap-1.5 rounded-lg border border-red-900 bg-red-950/60 px-3 py-2.5 text-sm font-medium text-red-300 hover:bg-red-900/60"
+              className="flex items-center justify-center gap-1.5 rounded-lg border border-danger-line bg-danger-surface px-3 py-2.5 text-sm font-medium text-danger-fg hover:bg-danger/20"
             >
               <XCircle className="h-4 w-4" />
               <span>Cancel</span>
@@ -228,20 +228,20 @@ export function MoveList({
           )}
         </div>
 
-        <p className="text-[11px] leading-relaxed text-stone-500">
+        <p className="text-[11px] leading-relaxed text-fg-subtle">
           Full analysis runs the Stockfish pass <em>and</em> the Maia Elo sweep — the sweep is
           what produces the estimated rating, Great and Brilliant.
         </p>
 
         {job.running && (
           <div className="space-y-1.5">
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-950">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-canvas">
               <div
-                className="h-full bg-amber-500 transition-[width] duration-300"
+                className="h-full bg-accent transition-[width] duration-300"
                 style={{ width: `${Math.round((job.fraction ?? 0) * 100)}%` }}
               />
             </div>
-            <p className="font-mono text-[11px] text-stone-400">
+            <p className="font-mono text-[11px] text-fg-muted">
               {phaseLabel()}
               {job.fraction != null && ` · ${Math.round(job.fraction * 100)}%`}
             </p>
@@ -249,13 +249,13 @@ export function MoveList({
         )}
 
         {job.error && (
-          <p className="rounded-lg bg-red-950/60 px-3 py-2 text-[11px] text-red-300">
+          <p className="rounded-lg bg-danger-surface px-3 py-2 text-[11px] text-danger-fg">
             {job.error}
           </p>
         )}
 
         {!job.running && !job.error && savedMode && (
-          <p className="font-mono text-[11px] text-stone-500">
+          <p className="font-mono text-[11px] text-fg-subtle">
             Showing the saved {savedMode} analysis.
           </p>
         )}

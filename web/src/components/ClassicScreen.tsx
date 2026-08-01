@@ -15,14 +15,14 @@ interface ClassicScreenProps {
 export function ClassicScreen({ title, blurb, features }: ClassicScreenProps) {
   return (
     <div className="flex flex-1 items-center justify-center p-6">
-      <div className="w-full max-w-lg rounded-2xl border border-stone-800 bg-stone-900 p-6 text-stone-100 shadow-xl">
+      <div className="w-full max-w-lg rounded-2xl border border-line bg-surface p-6 text-fg shadow-xl">
         <h2 className="text-lg font-semibold">{title}</h2>
-        <p className="mt-2 text-sm leading-relaxed text-stone-400">{blurb}</p>
+        <p className="mt-2 text-sm leading-relaxed text-fg-muted">{blurb}</p>
 
         <ul className="mt-4 space-y-1.5">
           {features.map((feature) => (
-            <li key={feature} className="flex gap-2 text-xs text-stone-400">
-              <span className="text-amber-500">•</span>
+            <li key={feature} className="flex gap-2 text-xs text-fg-muted">
+              <span className="text-accent">•</span>
               <span>{feature}</span>
             </li>
           ))}
@@ -30,12 +30,12 @@ export function ClassicScreen({ title, blurb, features }: ClassicScreenProps) {
 
         <a
           href="/legacy/"
-          className="mt-6 flex items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-500"
+          className="mt-6 flex items-center justify-center gap-2 rounded-lg bg-accent-strong px-4 py-2.5 text-sm font-semibold text-on-accent transition-colors hover:bg-accent"
         >
           Open the classic UI
           <ExternalLink className="h-4 w-4" />
         </a>
-        <p className="mt-2 text-center text-[11px] text-stone-500">
+        <p className="mt-2 text-center text-[11px] text-fg-subtle">
           Same server, same account, same database.
         </p>
       </div>
