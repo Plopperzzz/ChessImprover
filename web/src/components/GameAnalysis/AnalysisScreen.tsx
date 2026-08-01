@@ -47,9 +47,18 @@ interface AnalysisScreenProps {
    *  the request failed, in which case the account defaults are used. */
   prefs: api.ScreenPrefs | null;
   onOpenSettings: () => void;
+  /** Take the top bar away (D12). Answers whether it applies at this width,
+   *  which is also the answer to "is this the stacked layout?". */
+  onHideHeader: () => boolean;
 }
 
-export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: AnalysisScreenProps) {
+export function AnalysisScreen({
+  user,
+  settings,
+  prefs,
+  onOpenSettings,
+  onHideHeader,
+}: AnalysisScreenProps) {
   const [games, setGames] = useState<GameSummary[]>([]);
   const [gamesLoading, setGamesLoading] = useState(true);
   const [facets, setFacets] = useState<api.Facets | null>(null);
@@ -271,14 +280,45 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
     setNodeId(tree.mainlineIds[tree.mainlineIds.length - 1] ?? ROOT_ID);
   }, [tree]);
 
+  /**
+   * Stepping through a game, on a phone (D12).
+   *
+   * Pressing a step button says what you are doing: reading the game, not the
+   * page around it. So the top bar goes, and the column scrolls until the eval
+   * plot is against the top — which, at the sizes D11 fixed, puts the plot,
+   * the engine's lines, the board and these buttons on screen together and
+   * nothing else.
+   *
+   * Only where the header hides at all, which is the stacked layout; on a
+   * desktop everything is already on screen and there would be no scroll left
+   * to bring the header back with. Scrolling up brings it back, as ever, and
+   * once the game is in place the offset is zero, so a second press moves
+   * nothing.
+   */
+  const evalCardRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const showTheGame = useCallback(() => {
+    if (!onHideHeader()) return;
+    const scroller = scrollerRef.current;
+    const card = evalCardRef.current;
+    if (!scroller || !card) return;
+    // Measured against the scroller rather than the page: the header's own
+    // margin is mid-animation, and both boxes move with it together.
+    const offset = card.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    if (Math.abs(offset) > 4) {
+      scroller.scrollTo({ top: scroller.scrollTop + offset, behavior: 'smooth' });
+    }
+  }, [onHideHeader]);
+
   /** A step taken by pressing something, as against by the keyboard: the same
-   *  move, and then focus back on the board. */
+   *  move, then focus back on the board and the game filling the screen. */
   const step = useCallback(
     (go: () => void) => () => {
       go();
       focusBoard();
+      showTheGame();
     },
-    [focusBoard],
+    [focusBoard, showTheGame],
   );
 
   const selectNode = useCallback(
@@ -475,7 +515,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
 
   return (
     <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
-      <div className="thin-scroll min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
+      <div ref={scrollerRef} className="thin-scroll min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
         {missingEngine && (
           <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs text-fg">
             <span>
@@ -637,7 +677,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
           </div>
 
           <div className="contents xl:flex xl:min-w-0 xl:flex-1 xl:flex-col xl:gap-6">
-            <div className="order-1 min-w-0 xl:order-none">
+            <div ref={evalCardRef} className="order-1 min-w-0 xl:order-none">
               <EvalChart
                 plies={plies}
                 moves={moves}

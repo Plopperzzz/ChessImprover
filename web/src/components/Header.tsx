@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { BarChart3, Bot, LayoutDashboard, LogOut, Puzzle, Settings, ShieldCheck } from 'lucide-react';
 import type { ScreenType, User } from '../types';
 
@@ -8,6 +8,10 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onLogout: () => void;
   user: User;
+  /** Out of the way (D9/D12). Decided by `useHeaderVisibility`, which App
+   *  owns, because stepping through a game asks for it as well as scrolling
+   *  does. */
+  hidden: boolean;
 }
 
 const NAV: { id: ScreenType; label: string; icon: React.ReactNode }[] = [
@@ -17,62 +21,14 @@ const NAV: { id: ScreenType; label: string; icon: React.ReactNode }[] = [
   { id: 'puzzles', label: 'Puzzles', icon: <Puzzle className="h-4 w-4" /> },
 ];
 
-/** Below `lg` the header takes a sixth of a phone's screen, on a page whose
- *  point is a board and the moves beside it. This is the usual answer: it
- *  leaves upwards as you read down and comes back the moment you scroll up.
- *
- *  Scroll events don't bubble, so this listens in the capture phase instead —
- *  every screen scrolls inside its own panel rather than moving the window,
- *  and the header has no way of knowing which panel that is. */
-function useHideOnScroll(): boolean {
-  const [hidden, setHidden] = useState(false);
-
-  useEffect(() => {
-    const narrow = window.matchMedia('(max-width: 1023px)');
-    // Per scroller, because more than one can be scrolled on a screen and
-    // their positions have nothing to do with each other.
-    const lastTop = new WeakMap<EventTarget, number>();
-
-    const onScroll = (event: Event) => {
-      const target = event.target;
-      if (!target) return;
-      const top =
-        target === document
-          ? window.scrollY
-          : ((target as HTMLElement).scrollTop ?? 0);
-      const previous = lastTop.get(target) ?? 0;
-      lastTop.set(target, top);
-      if (!narrow.matches) return;
-      const delta = top - previous;
-      // A few pixels of wobble — a tap that nudges the list, momentum settling
-      // — is not a direction, and flickering the header is worse than leaving
-      // it where it is.
-      if (Math.abs(delta) < 6) return;
-      // Near the top there is nothing to gain by hiding, and hiding there is
-      // what makes a header feel like it's fighting you.
-      setHidden(delta > 0 && top > 64);
-    };
-
-    const onWidthChange = () => setHidden(false);
-    window.addEventListener('scroll', onScroll, true);
-    narrow.addEventListener('change', onWidthChange);
-    return () => {
-      window.removeEventListener('scroll', onScroll, true);
-      narrow.removeEventListener('change', onWidthChange);
-    };
-  }, []);
-
-  return hidden;
-}
-
 export function Header({
   currentScreen,
   onSelectScreen,
   onOpenSettings,
   onLogout,
   user,
+  hidden,
 }: HeaderProps) {
-  const hidden = useHideOnScroll();
   const ref = useRef<HTMLElement>(null);
   const [height, setHeight] = useState(0);
 

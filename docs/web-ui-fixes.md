@@ -20,6 +20,7 @@ The whole UI is about 2,400 lines under `web/src`:
 | `components/SettingsModal.tsx` | the five-pane settings dialog |
 | `components/ThemeToggle.tsx` | the light/system/dark segmented control |
 | `lib/theme.ts` | theme mode, palette, accent, and the chart colours |
+| `lib/useHeaderVisibility.ts` | whether the top bar is on screen, on a phone |
 | `components/Board.tsx` | squares, pieces, highlights, quality badge |
 | `components/GameAnalysis/AnalysisScreen.tsx` | all analysis state, board/eval-bar layout |
 | `components/GameAnalysis/MoveList.tsx` | move table, nav buttons, the analysis buttons |
@@ -540,6 +541,26 @@ buttons on screen together once the header has hidden (D9). A phone shorter
 than about 700px can't fit all four — the board alone is its full width — and
 scrolls instead.
 
+### D12. Stepping through a game clears the screen for it — **done**
+
+D9 waited for a scroll. But pressing a step button already says what you are
+doing: reading the game, not the page around it. So on a phone a step takes
+the header away itself and scrolls the column until the eval plot is against
+the top — which, at D11's sizes, leaves the plot, the engine's lines, the
+board and the step buttons and nothing else. Once it is in place the offset is
+zero, so the presses after the first move nothing.
+
+Two details make it behave. The header's visibility moved out of `Header` into
+`lib/useHeaderVisibility.ts`, owned by `App`, because two things decide it now
+and only one of them is the header's own business. And an explicit `hide()`
+outranks the scroll listener for 800ms: stepping from further down the page
+scrolls *up* to reach the plot, which the listener would otherwise read as
+"bring the header back" — undoing the thing that scroll was for.
+
+It is gated to the same breakpoint as D9, and deliberately: on a desktop
+everything is on screen already, and a page that doesn't scroll would have no
+way left to bring the header back.
+
 ---
 
 ## Suggested order
@@ -562,8 +583,8 @@ scrolls instead.
 7. ~~**B3–B5** — variations, dragging and animation last. It is the largest item
    by a distance and it changes how `Board.tsx` is structured.~~ **Done**, and
    it did: `Board.tsx` is a square grid with a piece layer over it now.
-8. ~~**D1–D11** — a second pass over the same screens at sizes the first review
-   never opened them at.~~ **Done.** D3, D6, D9–D11 are one layout between
+8. ~~**D1–D12** — a second pass over the same screens at sizes the first review
+   never opened them at.~~ **Done.** D3, D6, D9–D12 are one layout between
    them and were done together; D1, D2, D4, D5, D7 and D8 are independent.
 
 ## Needs a decision before starting

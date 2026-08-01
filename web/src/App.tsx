@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as api from './lib/api';
+import { useHeaderVisibility } from './lib/useHeaderVisibility';
 import { useTheme } from './lib/theme';
 import type { EngineSettings, ScreenType, User } from './types';
 import { AnalysisScreen } from './components/GameAnalysis/AnalysisScreen';
@@ -15,6 +16,9 @@ export default function App() {
   // One owner for the theme: the dialog is the only thing that sets it, and
   // everything else reads the CSS tokens it writes onto <html>.
   const theme = useTheme();
+  // Whether the top bar is on screen. Owned here because two things ask for
+  // it: reading down a phone screen, and stepping through a game.
+  const header = useHeaderVisibility();
   const [user, setUser] = useState<User | null>(null);
   const [checking, setChecking] = useState(true);
   const [screen, setScreen] = useState<ScreenType>(
@@ -78,6 +82,7 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         onLogout={handleLogout}
         user={user}
+        hidden={header.hidden}
       />
 
       {screen === 'analysis' && (
@@ -86,6 +91,7 @@ export default function App() {
           settings={settings}
           prefs={prefs}
           onOpenSettings={() => setSettingsOpen(true)}
+          onHideHeader={header.hide}
         />
       )}
       {screen === 'dashboard' && <ProgressScreen />}
