@@ -677,7 +677,11 @@ export function AnalysisScreen({
                       ? null
                       : { square: node.to, quality: currentMove?.classification }
                   }
-                  hintMove={liveActive ? (live.lines[0]?.pv[0] ?? null) : null}
+                  // Never while the lines are stale. They are deliberately kept
+                  // up between positions (B13), and pointing at the previous
+                  // position's best move on this one is worse than pointing at
+                  // nothing: it is a suggestion that isn't for the board.
+                  hintMove={liveActive && !live.stale ? (live.lines[0]?.pv[0] ?? null) : null}
                   // B3-B5: the board plays moves now. Not while a job is
                   // driving it, which would be arguing with the engine over
                   // whose position is on screen.

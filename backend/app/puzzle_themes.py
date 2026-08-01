@@ -399,8 +399,12 @@ def _weak_square_theme(board: chess.Board, move: chess.Move, mover: bool) -> set
 
 
 def _mate_theme(board_after: chess.Board, mover: bool) -> set[str]:
-    """The mating pattern, when the solution move is mate itself."""
-    themes = {"mate", "mateIn1"}
+    """The mating pattern, when the move just played is mate itself.
+
+    `mate` but not `mateInN`: how many moves it took is a property of the
+    line, not of its last move, and the callers add it with `mate_in_theme`.
+    """
+    themes = {"mate"}
     enemy = not mover
     king_square = board_after.king(enemy)
     if king_square is None:
@@ -502,29 +506,97 @@ def position_themes(fen: str) -> list[str]:
 
 def derive_themes(fen: str, solution_uci: str, *, cp_before: float | None = None,
                   cp_after: float | None = None) -> list[str]:
-    """Tag a puzzle built from one of your own games.
+    """Tag a one-move puzzle built from one of your own games.
 
     Takes the position, the move that should have been played, and the
     evaluations the analysis pass already stored. Returns theme keys from the
     same vocabulary the Lichess import uses, so both sources land in one
     picker and one progress table.
 
-    Everything here is derived from a single move. See the module docstring
-    for what that rules out.
+    `derive_line_themes` is the same thing over a whole answer, and is what a
+    multi-move puzzle uses. This stays because a one-move puzzle is still the
+    common case and because the checks in `backend/sims/puzzle_themes_check.py`
+    are written against it.
+    """
+    return derive_line_themes(fen, [solution_uci], cp_before=cp_before,
+                              line_cp=cp_after)
+
+
+def derive_line_themes(fen: str, line: list[str], *, cp_before: float | None = None,
+                       line_cp: float | None = None) -> list[str]:
+    """Tag a puzzle by its whole answer.
+
+    `line` is the puzzle's solution in UCI, yours first and alternating with
+    the opponent's replies -- the shape `puzzle_solve.solve_line` returns and
+    the shape a Lichess row carries.
+
+    Every one of *your* moves is examined in the position it is played in, and
+    the motifs found in any of them belong to the puzzle: the sacrifice on
+    move one and the fork on move three are both what the puzzle is about, and
+    tagging only the first move is how a three-move combination came back
+    labelled 'sacrifice' with no hint of why it worked.
+
+    The themes that are properties of the line rather than of a move -- how
+    long it is, how many moves the mate took, what the position is worth at
+    the end -- are added once, here.
     """
     try:
         board = chess.Board(fen)
-        move = chess.Move.from_uci(solution_uci)
+        moves = [chess.Move.from_uci(uci) for uci in line]
     except ValueError:
         return []
-    if move not in board.legal_moves:
+    if not moves or moves[0] not in board.legal_moves:
         return []
 
-    mover = board.turn
+    solver = board.turn
     themes: set[str] = set()
     themes |= _phase_themes(board)
-    themes |= _weak_square_theme(board, move, mover)
     endgame = "endgame" in themes
+    solver_moves = 0
+    mate_at: int | None = None
+
+    for index, move in enumerate(moves):
+        if move not in board.legal_moves:
+            break
+        yours = board.turn == solver
+        if yours:
+            solver_moves += 1
+            themes |= _move_themes(board, move, endgame)
+        board.push(move)
+        if board.is_checkmate():
+            # Whoever was mated, the pattern is on the board. Only a mate you
+            # deliver is one of your themes.
+            if yours:
+                themes |= _mate_theme(board, solver)
+                mate_at = solver_moves
+            break
+
+    if mate_at is not None:
+        if theme := mate_in_theme(mate_at):
+            themes.add(theme)
+    elif theme := outcome_theme(line_cp):
+        # A mate is not also 'crushing': the mate themes say it, and the
+        # centipawn number behind `crushing` is meaningless once the game is
+        # over.
+        themes.add(theme)
+
+    if theme := length_theme(solver_moves):
+        themes.add(theme)
+    # Defensive when you were the one in trouble beforehand: the lesson is
+    # holding on, not winning.
+    if cp_before is not None and cp_before < -100:
+        themes.add("defensiveMove")
+
+    return sorted(themes & DERIVABLE_THEMES)
+
+
+def _move_themes(board: chess.Board, move: chess.Move, endgame: bool) -> set[str]:
+    """The motifs one move of the solution shows, in the position it is
+    played in. Everything here is a property of that move; what belongs to the
+    line as a whole is added by the caller."""
+    mover = board.turn
+    themes: set[str] = set()
+    themes |= _weak_square_theme(board, move, mover)
 
     captured = board.piece_at(move.to_square)
     captured_value = PIECE_VALUE[captured.piece_type] if captured else 0
@@ -597,15 +669,7 @@ def derive_themes(fen: str, solution_uci: str, *, cp_before: float | None = None
     # nowhere safe to go.
     themes |= _trapped(board_after, mover)
 
-    if theme := outcome_theme(cp_after):
-        themes.add(theme)
-    # Defensive when you were the one in trouble beforehand: the lesson is
-    # holding on, not winning.
-    if cp_before is not None and cp_before < -100:
-        themes.add("defensiveMove")
-
-    themes.add("oneMove")
-    return sorted(themes & DERIVABLE_THEMES)
+    return themes
 
 
 def _discovered(before: chess.Board, after: chess.Board, move: chess.Move,

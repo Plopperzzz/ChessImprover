@@ -220,3 +220,179 @@ export interface BoardPrefs {
   allow_premoves: number;
   eval_bar_side: string;
 }
+
+// --- puzzles --------------------------------------------------------------
+
+/** Which source a puzzle came from. They share a board, a theme vocabulary,
+ *  a picker and a rating; what differs is where the answer lives. */
+export type PuzzleSource = 'own' | 'lichess';
+
+/** Tactic: there is something here, find it. Blunder check: you were fine and
+ *  threw it away, find the move that holds. Only puzzles from your own games
+ *  have a kind -- a Lichess puzzle is always the first. */
+export type PuzzleKind = 'tactic' | 'blunder_check';
+
+export interface PuzzleSetup {
+  /** The position *before* the opponent's move. */
+  fen: string;
+  uci: string;
+  san: string | null;
+}
+
+export interface Puzzle {
+  key: string;
+  source: PuzzleSource;
+  /** Own-game puzzles are numbered; Lichess ones carry their published id. */
+  id: number | string;
+  fen: string;
+  /** Lichess puzzles open on the move before, which is played in so the
+   *  position reads as a moment from a game rather than a diagram. */
+  setup: PuzzleSetup | null;
+  your_color: 'w' | 'b';
+  themes: string[];
+  rating: number | null;
+  rating_rd: number | null;
+  /** How many of your moves the answer is. 0 means the line has never been
+   *  worked out, which is not the same as one. */
+  moves_required: number;
+  attempts: number;
+  solved: boolean;
+
+  // Own-game puzzles only.
+  kind?: PuzzleKind;
+  rating_source?: 'maia' | 'themes' | null;
+  game_id?: number;
+  ply?: number;
+  classification?: string;
+  wp_drop?: number | null;
+  move_number?: number;
+  white?: string | null;
+  black?: string | null;
+  date?: string | null;
+
+  // Lichess puzzles only.
+  game_url?: string | null;
+  opening_tags?: string | null;
+  popularity?: number | null;
+  nb_plays?: number | null;
+}
+
+export interface PuzzleRatingResult {
+  rated: boolean;
+  first_try: boolean;
+  puzzle_rating: number | null;
+  before: number;
+  after: number;
+  delta: number;
+  rd: number;
+  provisional: boolean;
+}
+
+export interface ThemeRating {
+  theme: string;
+  rating: number;
+  rd: number;
+  provisional: boolean;
+  interval: [number, number];
+  attempts: number;
+  solved: number;
+  best: number | null;
+}
+
+export interface PuzzleProgress {
+  overall: ThemeRating;
+  themes: ThemeRating[];
+  attempts: number;
+  solved: number;
+  by_source: { lichess: number; own: number };
+  history: {
+    at: string;
+    solved: boolean;
+    puzzle_rating: number | null;
+    rating: number | null;
+    source: string;
+  }[];
+}
+
+export interface PuzzleStats {
+  total: number;
+  solved: number;
+  attempted: number;
+  blunders: number;
+  rated: number;
+  maia_rated: number;
+  unsolved: number;
+  by_kind: Record<PuzzleKind, number>;
+  multi_move: number;
+  progress: PuzzleProgress;
+  lichess?: LichessImportStatus;
+}
+
+export interface LichessImportStatus {
+  available?: boolean;
+  puzzles: number;
+  imported_at?: string | null;
+  source?: string | null;
+  min_rating?: number;
+  max_rating?: number;
+  /** Present only while an import is going; see `LichessImportPanel`. */
+  running?: LichessImportProgress;
+  last_run?: LichessImportProgress;
+  [key: string]: unknown;
+}
+
+export interface LichessImportProgress {
+  state: string;
+  rows_read: number;
+  rows_kept: number;
+  bytes_read: number;
+  total_bytes: number | null;
+  message: string | null;
+  elapsed_s: number;
+  finished: boolean;
+}
+
+export interface ThemeEntry {
+  key: string;
+  label: string;
+  description: string;
+  derivable: boolean;
+  count: number;
+  progress: ThemeRating | null;
+}
+
+export interface ThemeGroup {
+  key: string;
+  label: string;
+  themes: ThemeEntry[];
+}
+
+/** One move of a revealed or completed answer. */
+export interface LineMove {
+  uci: string;
+  san: string;
+  yours: boolean;
+}
+
+/** What the server says about a move you tried. `done` is the one that
+ *  matters: a correct move in a multi-move line is not the end of it. */
+export interface PuzzleVerdict {
+  correct: boolean;
+  done: boolean;
+  equal_move?: boolean;
+  attempt?: { uci: string; san: string | null; cp?: number | null };
+  expected?: { uci: string; san: string | null };
+  best?: { uci: string; san: string | null; cp?: number | null };
+  reply?: { uci: string; san: string };
+  fen?: string;
+  line?: LineMove[];
+  played?: { uci: string | null; san: string | null };
+  given_up?: number | null;
+  same_as_played?: boolean;
+  moves_played?: number;
+  moves_required?: number;
+  themes?: string[];
+  game_url?: string | null;
+  rating: PuzzleRatingResult | null;
+  progress: PuzzleProgress;
+}

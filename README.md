@@ -33,10 +33,10 @@ by time control into groups you can analyse or delete in bulk. What's next is in
 There is now a second UI, in [`web/`](web/README.md) — React, and a single
 **Full analysis** button that runs the Stockfish pass and the Maia Elo sweep
 together and shows the fitted rating beneath the move list. It covers game
-analysis and the progress view. The classic vanilla-JS UI in `frontend/` is
-unchanged and still holds everything the React one hasn't picked up yet —
-play vs Maia, puzzles, batch runs, the chess.com import and the opening
-explorer. Both are served by the same process, off the same database: the
+analysis, the progress view and puzzles. The classic vanilla-JS UI in
+`frontend/` is unchanged and still holds everything the React one hasn't
+picked up yet — play vs Maia, batch runs, the chess.com import and the
+opening explorer. Both are served by the same process, off the same database: the
 React build at `/`, the classic UI at `/legacy/`.
 
 What was wrong with the React UI's first pass is written down in
@@ -493,8 +493,37 @@ away — there's nothing to set up first — giving you the position you faced,
 oriented to the side you had, with the opponent's name and the date, and
 asking for the move you should have played.
 
-Four decisions, all of them the difference between a useful set and a pile of
-positions:
+**Two kinds of exercise, mixed or on their own.** The same position asks two
+different questions, and they train different things. A **tactic** is "there
+was something here, find it". A **blunder check** is "you were holding this and
+threw it away, find the move that holds" — which at most ratings is worth
+considerably more than seeing another fork. Both are on by default and either
+can be practised alone. The kind is decided when the puzzle is built, off
+evaluations the analysis pass already stored, so it costs no engine time and
+can be a filter; and because it is separate from the motifs, "blunder checks,
+but only the forks" needs no mode of its own.
+
+**The answer is a line, not a move.** Plenty of the ideas in your own games are
+two or three moves deep — the sacrifice is move one and the point of it is move
+three — so Stockfish follows the line as far as it is worth asking for: each
+further move is included only while it is again the *only* move, and the line
+always ends on one of yours. When the puzzle is over the line is played onto
+the board rather than printed, and the step buttons walk it.
+
+**Difficulty is measured, not looked up.** A Lichess puzzle carries a
+difficulty measured against millions of solvers; a puzzle from your own games
+used to borrow one from the imported puzzles sharing its themes, which cannot
+tell a hard fork from an easy one. Maia can answer the actual question: asked
+at every Elo on the sweep's grid whether it would play the line, the Elo where
+that crosses one half *is* the difficulty — and it is the same construct a
+Lichess puzzle rating is, which is what lets one Glicko-2 rating span both
+sources honestly. It declines to answer when the curve doesn't rise, and the
+raw Maia number is stored beside the rating so the correction from "Elo that
+plays this move" to "Elo that solves this puzzle" can be measured later without
+re-running anything. See `backend/app/puzzle_difficulty.py`.
+
+Four more decisions, all of them the difference between a useful set and a pile
+of positions:
 
 - **Building them runs no engine.** The position and the move you played come
   from replaying the stored PGN to that ply, so Rescan over a thousand
@@ -504,9 +533,13 @@ positions:
   searches for the dozen you look at.
 - **Being right is not "you found Stockfish's move".** Several moves are often
   equally good, and a set that fails you for finding the other winning rook
-  teaches nothing. An attempt is graded by evaluating it and comparing win
-  probability with the best move; anything within 3% counts, and the feedback
-  talks about what a move gave up rather than whether it matched.
+  teaches nothing. The *first* move is graded by evaluating it and comparing
+  win probability with the best move; anything within 3% counts, and the
+  feedback talks about what a move gave up rather than whether it matched. The
+  rest of a line is graded against the line, because accepting a
+  different-but-equal move mid-combination would mean re-deriving the whole
+  continuation in the middle of a click. An equally good first move is accepted
+  and ends the puzzle there.
 - **The move you played is hidden until you've tried.** Knowing it turns "find
   the move" into "find the other move". It's revealed with the verdict, which
   is where the lesson is — and if you play it again the panel says so by name.
@@ -514,10 +547,13 @@ positions:
   this made it worse" is not a lesson, and it is the largest source of junk in
   a naive generator. Rescan says how many it left out on those grounds.
 
-Blunders only by default, or blunders and mistakes; random order or worst
-first. Show me plays the answer on the board and leaves the puzzle unsolved —
-a revealed answer isn't one you found, so it comes round again. The eval bar is
-hidden for the duration, for the obvious reason.
+Show me plays the answer on the board and leaves the puzzle unsolved — a
+revealed answer isn't one you found, so it comes round again. The engine is
+hidden for the duration, for the obvious reason, and offered the moment the
+puzzle is over: **Play on from here** hands the board over, so a move played
+anywhere in the answer branches off it and the live engine follows. Those lines
+are deliberately not saved — a puzzle is a position you will be shown again,
+and persisting them would put the answer on the board next time.
 
 #### The Lichess puzzle database
 
@@ -567,12 +603,15 @@ how many puzzles are behind it — a theme with nothing behind it isn't offered
 at all.
 
 Imported puzzles arrive tagged. Puzzles from your own games are tagged here,
-from the position, the move you should have played and the evaluation already
-stored — forks, pins, skewers, hanging pieces, discovered attacks, sacrifices,
-trapped pieces, mates and their patterns, phase and endgame type, promotion,
-en passant, castling, quiet moves, and what the move actually wins. The phase
-tags are applied at Rescan; the rest need the solution, so they appear the
-first time an engine works a puzzle out.
+from the position, the *whole* answer and the evaluation already stored —
+forks, pins, skewers, hanging pieces, discovered attacks, sacrifices, trapped
+pieces, mates and their patterns, phase and endgame type, promotion, en
+passant, castling, quiet moves, how long the line is, and what it actually
+wins. Every one of your moves in the line is examined in the position it is
+played in, so a three-move combination carries the fork on move three as well
+as the sacrifice on move one, and the mate is `mateIn3` rather than `mateIn1`.
+The phase tags are applied at Rescan; the rest need the answer, so they appear
+the first time an engine works a puzzle out.
 
 What is *not* derived for your own games: `deflection`, `attraction`,
 `interference`, `clearance`, `zugzwang`, `intermezzo` and `xRayAttack`. All of

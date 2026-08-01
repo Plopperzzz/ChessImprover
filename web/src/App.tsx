@@ -8,6 +8,7 @@ import { ClassicScreen } from './components/ClassicScreen';
 import { ProgressScreen } from './components/Dashboard/ProgressScreen';
 import { Header } from './components/Header';
 import { LoginScreen } from './components/LoginScreen';
+import { PuzzleScreen } from './components/Puzzles/PuzzleScreen';
 import { SettingsModal } from './components/SettingsModal';
 
 const SCREEN_KEY = 'engine-room:screen';
@@ -108,15 +109,11 @@ export default function App() {
         />
       )}
       {screen === 'puzzles' && (
-        <ClassicScreen
-          title="Puzzles"
-          blurb="Puzzles haven't been rebuilt on this UI yet. They run unchanged in the classic
-                 UI, against the same puzzle store and the same Glicko-2 rating."
-          features={[
-            'Puzzles built from your own mistakes',
-            'The Lichess puzzle database, filtered by theme',
-            'Per-theme progress and a rating across both sources',
-          ]}
+        <PuzzleScreen
+          user={user}
+          settings={settings}
+          prefs={prefs}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       )}
 
