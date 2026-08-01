@@ -26,7 +26,8 @@ The whole UI is about 2,400 lines under `web/src`:
 | `components/GameAnalysis/EvalChart.tsx` | eval plot + live engine lines |
 | `components/GameAnalysis/EloSweepPanel.tsx` | sweep estimates and the match-rate curve |
 | `components/GameAnalysis/GameLibraryPanel.tsx` | right-hand library rail |
-| `components/Dashboard/ProgressScreen.tsx` | strength + trend |
+| `components/Dashboard/ProgressScreen.tsx` | strength, trend, move-quality pie |
+| `components/InfoPopover.tsx` | the `i`-in-a-circle popover |
 | `lib/api.ts` | every `/api` call, typed |
 | `lib/useAnalysisJob.ts` | job start/cancel/attach over `/ws/analysis/{id}` |
 | `lib/useLiveEval.ts` | `/ws/live-eval` session |
@@ -263,56 +264,78 @@ why rather than to loosen the check.
 
 ## C. Progress
 
-### C1. Move "what the fit is unsure about" into an info popover
+### C1. Move "what the fit is unsure about" into an info popover — **done**
 
-Currently a card at the bottom. Should be an `i`-in-a-circle next to the
-**ESTIMATED VS ACTUAL ELO** chart title, opening a popover.
+Now an `i` beside the **ESTIMATED VS ACTUAL ELO** title; the card at the
+bottom is gone. `components/InfoPopover.tsx` is the shared control — click to
+open, outside-click or Escape to close, deliberately not hover, because the
+content is a paragraph and a panel that vanishes when the pointer crosses a
+gap can't be read. C4 uses the same one.
 
-### C2. Configurable time window, snapped to the bucket size
+### C2. Configurable time window, snapped to the bucket size — **done**
 
-`/api/trend` already takes a `window` parameter spelled as a count and unit
-(`8w`, `6m`, `2y`, or `all`) — see `trend.get_trend`. The React screen never
-sends it. The picker should offer windows that make sense for the chosen
-granularity (last 5 days / last 4 weeks / last 4 months), not a fixed list.
+The screen now sends `window`, and offers it in the unit the buckets are drawn
+in: weeks for weekly (4/12/26), months for monthly (3/6/12), years for yearly
+(2/5), each plus *All time*. Changing the bucket size snaps the window to one
+that bucket has an option for, so "26 weeks" can't survive a switch to a
+yearly axis. The panel says what the window actually covered, because
+`trend._apply_window` ends it at your most recent analysed game rather than at
+today.
 
-### C3. Missing the overall calibrated estimate
+While here: the granularity picker offered **Quarterly**, which
+`trend.GRANULARITIES` doesn't accept — every press was a 400. It is Yearly
+now, which is the third bucket the backend actually has.
 
-Unlike B15, **this one needs no backend work**: `/api/strength` already
-returns a `calibration` object with `your_calibrated`,
-`your_calibrated_low/high`, `field_actual` and `offset`.
+### C3. Missing the overall calibrated estimate — **done**
 
-Note the `Strength['calibration']` type in `lib/api.ts` is currently a
-placeholder with the wrong field names — fix it against `strength._calibrate`
-rather than trusting it.
+Under the raw estimate in the header card, in the secondary accent, with its
+own interval and an `i` explaining where the offset came from. When
+`_usable_for_calibration` rejects the fit, the card says which of its reasons
+applied rather than showing nothing — the same honesty B15 asks for.
 
-### C4–C5. Drop the confidence card
+The `Strength['calibration']` type in `lib/api.ts` was a placeholder with the
+wrong field names; it is now a discriminated union on `available`, matching
+`strength._calibrate`.
 
-- Remove it. Fold a concise explanation of confidence into an info `i` beside
-  the **ESTIMATED ELO** header, aligned above the estimate itself.
-- Replace the freed card with a **brilliant move count**.
+### C4–C5. Drop the confidence card — **done**
 
-### C6. Move-quality pie chart, right of the estimate chart
+Gone. The `i` beside **ESTIMATED ELO** now gives the confidence, the
+discriminative-position count behind it, and what "discriminative" means. The
+freed card is the brilliant-move count, which notes how many games were
+quick-analysed — Brilliant can only come out of a swept game, so those
+contribute a structural zero.
 
-**C5 and C6 both need a new endpoint.** No current route aggregates
+### C6. Move-quality pie chart, right of the estimate chart — **done**
+
+A donut to the right of the two trend charts, with a legend carrying counts
+and percentages. Colours come from `lib/quality.ts`, so a blunder is the same
+colour here as on the board and in the move list.
+
+**C5 and C6 both needed a new endpoint**, which is now
+`GET /api/move-quality` (`backend/app/move_quality.py`). No current route aggregates
 classifications: `/api/strength` and `/api/trend` both work from sweep
 matrices and neither touches the `classification` column. The data is all in
 `analysis_moves` (`backend/app/db.py:230`) — a `GROUP BY classification` over
 the user's latest analysis per game, filtered the same way the strength fit
 filters, is enough for both the count and the pie.
 
-Filter it through the same `LibraryFilter` the other two use, or the pie will
-describe a different set of games than the number beside it.
+It counts *your* moves — `analysis_moves` stores no side, so it is a parity
+test against `games.your_color` — over the latest analysis per game, taking
+the same `LibraryFilter` the other two do. It also reports `games_swept` and
+`games_quick_only`, because a library that is mostly quick analyses reads low
+on Great and Brilliant by construction and the count would otherwise look like
+a verdict on your play.
 
-### C7. Remember the last-selected granularity
+### C7. Remember the last-selected granularity — **done**
 
-`ProgressScreen` resets to `month` on every mount. Persist the choice the way
-`App.tsx` persists the current screen in `localStorage`.
+Both the granularity and the window persist, under
+`engine-room:trend-granularity` and `engine-room:trend-window`.
 
-### C8. Split the estimate chart in two
+### C8. Split the estimate chart in two — **done**
 
-Estimated Elo on top, actual Elo below, stacked vertically with independent
-scales. They're on one axis today, which flattens whichever has the smaller
-range.
+Two charts, estimated above actual, each with its own y domain. Only the lower
+one draws the x axis, since they share it. A series with nothing in the window
+says so in place rather than drawing an empty grid.
 
 ---
 
@@ -322,8 +345,10 @@ range.
    secondary accent all depend on a palette existing.~~ **Done** — the tokens
    A6, B2 and B15 were waiting on are in `index.css`.
 2. ~~**B1** — a one-line fix, no reason to wait.~~ **Done.**
-3. **C1, C4–C8** — the Progress screen is self-contained, and C5/C6 share one
-   new endpoint worth writing once.
+3. ~~**C1, C4–C8** — the Progress screen is self-contained, and C5/C6 share one
+   new endpoint worth writing once.~~ **Done**, and C2 and C3 with them — they
+   are the same screen, and leaving them out would have meant touching it
+   twice.
 4. **A3–A6** — the settings dialog, once there is a theme pane to put in it.
 5. **B6–B8, B11, B12, B13, B14** — analysis-screen polish, all independent.
 6. **A7 + B9–B10** — per-screen preferences and sound sets together, since

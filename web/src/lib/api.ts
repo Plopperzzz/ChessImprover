@@ -5,6 +5,7 @@ import type {
   EngineSettings,
   GameDetail,
   GameSummary,
+  MoveQuality as MoveQualityLabel,
   Run,
   SavedAnalysis,
   User,
@@ -169,13 +170,22 @@ export const assetSets = () => request<AssetSet[]>('/api/asset-sets');
 export interface Strength {
   you: EloEstimate & { policy_source?: string };
   field: EloEstimate;
-  calibration: {
-    available: boolean;
-    estimate?: number | null;
-    offset?: number | null;
-    note?: string;
-    [key: string]: unknown;
-  };
+  /** `strength._calibrate`. Your estimate moved onto the scale your opponents'
+   *  header ratings are on, by measuring the gap on the field you played.
+   *  `available: false` carries the reason instead — a fit that couldn't be
+   *  calibrated says why rather than showing a number built on nothing. */
+  calibration:
+    | { available: false; reason: string }
+    | {
+        available: true;
+        field_estimate: number;
+        field_actual: number;
+        field_actual_n: number;
+        offset: number;
+        your_calibrated: number;
+        your_calibrated_low: number | null;
+        your_calibrated_high: number | null;
+      };
   predictability: {
     available: boolean;
     model?: string;
@@ -217,6 +227,29 @@ export interface Trend {
   offset: { n: number; mean: number | null };
   total_games: number;
   skipped: Record<string, number>;
+  /** What `window` actually covered. It ends at the most recent analysed game
+   *  rather than today (`trend._apply_window`), so the panel can say so. */
+  window: {
+    requested: string | null;
+    applied: boolean;
+    excluded: number;
+    start: string | null;
+    end: string | null;
+  };
+}
+
+/** `/api/move-quality` — your moves by classification, over the same slice of
+ *  the library the pooled estimate is fitted on. */
+export interface MoveQualityCounts {
+  counts: Record<MoveQualityLabel, number>;
+  other: number;
+  moves: number;
+  games: number;
+  /** Great and Brilliant only come out of a swept game, so a library that is
+   *  mostly Quick analyses reads low on both by construction. */
+  games_swept: number;
+  games_quick_only: number;
+  skipped: Record<string, number>;
 }
 
 function query(params: Record<string, string | number | undefined | null>): string {
@@ -233,6 +266,9 @@ export const strength = (params: Record<string, string | number | undefined | nu
 
 export const trend = (params: Record<string, string | number | undefined | null> = {}) =>
   request<Trend>(`/api/trend${query(params)}`);
+
+export const moveQuality = (params: Record<string, string | number | undefined | null> = {}) =>
+  request<MoveQualityCounts>(`/api/move-quality${query(params)}`);
 
 // --- websockets -----------------------------------------------------------
 

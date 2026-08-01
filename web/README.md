@@ -71,7 +71,7 @@ Install Node 20 LTS or newer and repeat.
 | Screen | Backed by |
 | --- | --- |
 | **Game Analysis** | `/api/games`, `/api/analysis/*`, `/api/sweep/*`, `/ws/analysis/{job}`, `/ws/live-eval` |
-| **Progress** | `/api/strength`, `/api/trend` |
+| **Progress** | `/api/strength`, `/api/trend`, `/api/move-quality` |
 | **Play Maia**, **Puzzles** | not rebuilt yet — these link across to `/legacy/` |
 
 ### Full analysis
@@ -86,6 +86,15 @@ its own confidence, and the observed-vs-fitted match rate across the grid.
 
 **Quick** is the Stockfish-only pass (`POST /api/analysis/quick`) — it classifies
 moves but produces no rating, because there is no sweep in it.
+
+### Progress
+
+The estimate, its calibrated twin and the trend are all re-fits of stored sweep
+scores. `GET /api/move-quality` is the one addition this UI needed: a
+`GROUP BY classification` over your moves in the latest analysis of each game,
+which feeds both the brilliant-move count and the pie. Great and Brilliant only
+come out of a swept game, so the response says how many games were
+quick-analysed and the screen repeats it under the count.
 
 ## Colours and themes
 
