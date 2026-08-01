@@ -17,9 +17,9 @@ The whole UI is about 2,400 lines under `web/src`:
 | --- | --- |
 | `App.tsx` | auth gate, screen routing, settings modal wiring, theme state |
 | `components/Header.tsx` | top bar, nav, the two icon buttons |
-| `components/SettingsModal.tsx` | the single flat settings dialog |
+| `components/SettingsModal.tsx` | the five-pane settings dialog |
 | `components/ThemeToggle.tsx` | the light/system/dark segmented control |
-| `lib/theme.ts` | theme mode, persistence, and the chart colours |
+| `lib/theme.ts` | theme mode, palette, accent, and the chart colours |
 | `components/Board.tsx` | squares, pieces, highlights, quality badge |
 | `components/GameAnalysis/AnalysisScreen.tsx` | all analysis state, board/eval-bar layout |
 | `components/GameAnalysis/MoveList.tsx` | move table, nav buttons, the analysis buttons |
@@ -50,16 +50,19 @@ Assets that already exist on disk and are not yet used:
 
 ## A. Global: header, theming, settings
 
-### A1. The signed-in account isn't editable
+### A1. The signed-in account isn't editable — **done**
 
-The header shows `display_name` and nothing more. The backend already has
-`PATCH /api/auth/accounts/{id}` (rename, which also re-matches every game's
-`your_color` against the new names) and `DELETE /api/auth/accounts/{id}`.
-The classic UI exposes both from its login screen; the React one exposes
-neither. `lib/api.ts` has no wrapper for either yet.
+Both are in the settings dialog's **Account** pane: rename (display name and
+username together, one `PATCH`) and delete, behind a confirmation that names
+what goes with it — the game, analysis and puzzle counts come from
+`GET /api/auth/accounts`. Deleting the account you are signed into logs you
+out server-side, so the app drops the user it was holding and falls back to the
+picker.
 
-Renaming is not cosmetic here — it is the documented fix for a library that
-imported as `unassigned`, so it needs to be reachable.
+The rename reports what it moved. `reassign_your_colors` returns
+`{changed, assigned, unassigned}` rather than a count, and the panel says which:
+"13 games re-matched: 13 now yours, 0 left unassigned" is the answer to "did
+that fix my library", where a bare "13" is not.
 
 ### A2. No light/dark selector — **done**
 
@@ -89,35 +92,47 @@ Recharts takes colours as props rather than classes, so `useChartTheme()` reads
 the chart tokens back off `<html>` and re-reads them when `data-theme` changes.
 That keeps one definition of every colour in `index.css`.
 
-Still open, and now cheap: **predefined palettes** and the **accent choice**
-(A6a). The accent tokens are already separate from the neutrals, so a palette
-is another pair of blocks keyed on a second attribute — see the comment at the
-top of `index.css`. The secondary accent B15 wants exists as `--er-accent-2`.
+Palettes and the accent choice landed with A6a, as `data-palette` and
+`data-accent` blocks alongside these. The secondary accent B15 wants is
+`--er-accent-2`, and every accent defines one.
 
-### A3–A6. Settings dialog needs a left-hand sub-menu
+### A3–A6. Settings dialog needs a left-hand sub-menu — **done**
 
-`SettingsModal.tsx` is one flat scroll with three `<section>`s. It should be a
-two-pane dialog — sub-menu on the left, panel on the right — with:
+Five panes, in the order listed: **Theme** (the default), **Analysis engine**,
+**Maia engine**, **Board & pieces**, **Account**. The rail is a column on a
+desktop and a horizontal scroller on a phone, where 12rem of sub-menu would
+have taken half the width.
 
-- **Theme** (the default pane)
-- **Analysis engine** — the Stockfish half of the settings row
-- **Maia engine** — the Maia half, including the Elo sweep grid
-- **Board & pieces** — see A7
-- **Account** — A1
+The backend constraint is respected: one `EngineSettings` draft object is
+shared by every pane and sent in a single `PUT`, and the profile fields are
+collected into one patch alongside it. Nothing PUTs per pane.
 
-Note the backend constraint: `PUT /api/settings` takes the **whole**
-`EngineSettings` model and resets any field left out. Splitting one dialog
-into several panes must not turn into several partial PUTs. `api.saveSettings`
-already documents this; keep a single draft object across all panes and send it
-once.
+Theme, palette and accent are deliberately outside that: they are browser
+settings the server never sees, and they apply on click rather than on Save,
+because the point of picking a colour is watching it land. The footer says so.
 
-### A6a. Theme content
+**Board & pieces** holds the global board, piece set and legal-move toggle for
+now; A7's per-screen overrides and B11's sound sets slot into that pane when
+their schema exists.
 
-- Predefined palettes, each defined for both light and dark, rather than free
-  colour pickers.
-- A separate accent-colour choice within the palette. **Keep the current
-  amber/orange as the default** — it's the look the user asked to preserve.
-- A *secondary* accent is also needed, because item B12 calls for it.
+### A6a. Theme content — **done**
+
+Three palettes — **Stone** (warm, the default), **Slate** (cool), **Graphite**
+(neutral) — each defined for both light and dark, and five accents — **Amber**
+(the default, unchanged), Sky, Emerald, Violet, Rose. They are two independent
+choices: `data-palette` sets only neutral tokens and `data-accent` only accent
+ones, so no combination can leave a token undefined.
+
+Each accent carries its own **secondary** (`--er-accent-2`), which is what B15
+and the second chart series read. It travels with the accent rather than being
+a third picker, because the pair has to stay distinguishable — a secondary
+chosen freely could land one hue away from the primary and make two chart
+series look like one.
+
+Palette swatches are split chips: a panel colour against a text colour from the
+same ramp. Three dark circles would have been three identical dots — what
+separates these ramps is temperature, which only shows when two values from one
+of them sit against each other.
 
 ### A7. Global board/piece/audio defaults, overridable per screen
 
@@ -349,7 +364,8 @@ says so in place rather than drawing an empty grid.
    new endpoint worth writing once.~~ **Done**, and C2 and C3 with them — they
    are the same screen, and leaving them out would have meant touching it
    twice.
-4. **A3–A6** — the settings dialog, once there is a theme pane to put in it.
+4. ~~**A3–A6** — the settings dialog, once there is a theme pane to put in it.~~
+   **Done**, with A6a's palettes and A1's account pane in it.
 5. **B6–B8, B11, B12, B13, B14** — analysis-screen polish, all independent.
 6. **A7 + B9–B10** — per-screen preferences and sound sets together, since
    they want the same storage.

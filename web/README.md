@@ -99,10 +99,10 @@ quick-analysed and the screen repeats it under the count.
 ## Colours and themes
 
 Every colour comes from a `--er-*` custom property defined in `src/index.css`,
-once for the dark theme and once for the light one. An `@theme inline` block
-turns each into a Tailwind utility — `--color-surface` gives `bg-surface`,
-`text-surface`, `border-surface` — so switching theme is one `data-theme`
-attribute on `<html>`, written by `src/lib/theme.ts`.
+once per theme. An `@theme inline` block turns each into a Tailwind utility —
+`--color-surface` gives `bg-surface`, `text-surface`, `border-surface` — so
+changing the look is changing an attribute on `<html>`, never a class on a
+component.
 
 **Don't reach for a palette shade** (`bg-stone-900`, `text-amber-500`) in a
 component: use a token, and add one to `index.css` if none fits. The three
@@ -110,10 +110,23 @@ places that legitimately don't follow the theme — the board's own squares, the
 eval bar, and the classification badges in `lib/quality.ts` — say so in a
 comment where they are.
 
-The theme is chosen in the settings dialog (Light / System / Dark) and kept in
-`localStorage`; the backend stores nothing about it. Charts read their colours
-through `useChartTheme()`, because recharts takes colours as props rather than
-as classes.
+Three attributes on `<html>` decide the look, all written by `lib/theme.ts` and
+all kept in `localStorage` — the backend stores none of them:
+
+| Attribute | Values | Sets |
+| --- | --- | --- |
+| `data-theme` | `light`, `dark` | which block of values applies |
+| `data-palette` | `stone`, `slate`, `graphite` | the neutral ramp only |
+| `data-accent` | `amber`, `sky`, `emerald`, `violet`, `rose` | the accent tokens only |
+
+Palette and accent are independent on purpose: a palette block must never set
+an accent token, and vice versa, or the two pickers stop being separate
+choices. Each accent brings its own secondary (`--er-accent-2`) so the two
+colours on a chart can't end up a hue apart.
+
+All three are chosen in the settings dialog's Theme pane and apply on click.
+Charts read their colours through `useChartTheme()`, because recharts takes
+colours as props rather than as classes.
 
 ## Not ported from the classic UI
 

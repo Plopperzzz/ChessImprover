@@ -111,8 +111,8 @@ export default function App() {
         onSaved={setSettings}
         user={user}
         onProfileSaved={setUser}
-        themeMode={theme.mode}
-        onChangeTheme={theme.setMode}
+        onLoggedOut={() => setUser(null)}
+        theme={theme}
       />
     </div>
   );

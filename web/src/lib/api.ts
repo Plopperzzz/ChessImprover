@@ -53,6 +53,34 @@ export const me = () => request<User>('/api/auth/me');
 export const createAccount = (username: string, display_name: string) =>
   request<User>('/api/auth/accounts', json({ username, display_name }));
 
+/** Renaming is not cosmetic: the display name is what decides which side of
+ *  each game was yours, so the backend re-matches the whole library against
+ *  the new names and reports which games moved. This is the documented fix for
+ *  a library that imported as `unassigned`.
+ *
+ *  `rematched` is the tally from `pgn_parse.reassign_your_colors`: `changed` is
+ *  every game whose side moved, of which `assigned` are now yours and
+ *  `unassigned` no longer match either name. Games you set by hand are left
+ *  alone and counted in none of them. */
+export const renameAccount = (
+  id: number,
+  patch: { username?: string; display_name?: string },
+) =>
+  request<User & { rematched: { changed: number; assigned: number; unassigned: number } }>(
+    `/api/auth/accounts/${id}`,
+    { ...json(patch), method: 'PATCH' },
+  );
+
+/** Takes the games, analyses and puzzles with it, by the schema's cascades.
+ *  Deleting the account you are signed into logs you out server-side. */
+export const deleteAccount = (id: number) =>
+  request<{
+    ok: boolean;
+    display_name: string;
+    deleted: { games: number; analyses: number; puzzles: number };
+    logged_out: boolean;
+  }>(`/api/auth/accounts/${id}`, { method: 'DELETE' });
+
 // --- library --------------------------------------------------------------
 
 export interface GameFilter {

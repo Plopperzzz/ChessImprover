@@ -4,20 +4,25 @@
  * Palette
  * -------
  * Every colour in the UI comes from one of the `--er-*` variables below, and
- * nothing outside this file names a Tailwind palette shade. The two blocks are
- * the same set of tokens with different values, so switching the theme is one
- * attribute on <html> (`lib/theme.ts` writes it) rather than a `dark:` variant
- * on every element.
+ * nothing outside this file names a Tailwind palette shade. The blocks are the
+ * same set of tokens with different values, so switching the look is three
+ * attributes on <html> (`lib/theme.ts` writes them) rather than a `dark:`
+ * variant on every element:
+ *
+ *   data-theme    light | dark          the surfaces and text
+ *   data-palette  stone | slate | …     which neutral ramp those come from
+ *   data-accent   amber | sky | …       the highlight colour, chosen separately
  *
  * The `@theme inline` block below is what turns them into utilities:
  * `--color-surface` becomes `bg-surface`, `text-surface`, `border-surface` and
  * so on, and because the utility resolves to `var(--er-…)` it re-reads on a
  * theme change with no re-render.
  *
- * Adding a *palette* (A6) means adding another pair of blocks keyed on a second
- * attribute, e.g. `[data-palette='slate'][data-theme='dark']`; the accent
- * tokens are already separate from the neutrals so an accent can be chosen
- * independently of the surface colours.
+ * The base block below is the default look — stone neutrals, amber accent — so
+ * only the *other* palettes and accents need blocks of their own. Adding one is
+ * adding a light/dark pair keyed on the attribute; a palette must not set an
+ * accent token, and an accent must not set a neutral, or the two choices stop
+ * being independent.
  */
 
 :root,
@@ -111,6 +116,168 @@
 :root {
   --er-eval-white: #f5f5f4;
   --er-eval-black: #1c1917;
+}
+
+/* --- palettes: the neutral ramp, chosen independently of the accent -------
+ *
+ * Stone is the default and lives in the two blocks above. These carry the same
+ * tokens at the same lightness, only cooler — so nothing needs re-checking for
+ * contrast when one is picked.
+ */
+
+[data-palette='slate'][data-theme='dark'] {
+  --er-canvas: #080b11;
+  --er-surface: #151b26;
+  --er-surface-2: #1f2937;
+  --er-surface-3: #374151;
+  --er-line: #1f2937;
+  --er-line-2: #374151;
+  --er-fg-strong: #ffffff;
+  --er-fg: #f1f5f9;
+  --er-fg-2: #cbd5e1;
+  --er-fg-muted: #94a3b8;
+  --er-fg-subtle: #64748b;
+  --er-fg-faint: #475569;
+  --er-chart-grid: #1f2937;
+  --er-chart-axis: #94a3b8;
+  --er-chart-line: #e2e8f0;
+}
+
+[data-palette='slate'][data-theme='light'] {
+  --er-canvas: #f6f8fa;
+  --er-surface: #ffffff;
+  --er-surface-2: #eef1f5;
+  --er-surface-3: #dde3ea;
+  --er-line: #e1e6ec;
+  --er-line-2: #c3ccd7;
+  --er-fg-strong: #0f172a;
+  --er-fg: #1e293b;
+  --er-fg-2: #334155;
+  --er-fg-muted: #52627a;
+  --er-fg-subtle: #64748b;
+  --er-fg-faint: #94a3b8;
+  --er-chart-grid: #e1e6ec;
+  --er-chart-axis: #64748b;
+  --er-chart-line: #475569;
+}
+
+[data-palette='graphite'][data-theme='dark'] {
+  --er-canvas: #0a0a0a;
+  --er-surface: #181818;
+  --er-surface-2: #262626;
+  --er-surface-3: #404040;
+  --er-line: #262626;
+  --er-line-2: #404040;
+  --er-fg-strong: #ffffff;
+  --er-fg: #f5f5f5;
+  --er-fg-2: #d4d4d4;
+  --er-fg-muted: #a3a3a3;
+  --er-fg-subtle: #737373;
+  --er-fg-faint: #525252;
+  --er-chart-grid: #262626;
+  --er-chart-axis: #a3a3a3;
+  --er-chart-line: #e5e5e5;
+}
+
+[data-palette='graphite'][data-theme='light'] {
+  --er-canvas: #fafafa;
+  --er-surface: #ffffff;
+  --er-surface-2: #f0f0f0;
+  --er-surface-3: #e0e0e0;
+  --er-line: #e4e4e4;
+  --er-line-2: #c8c8c8;
+  --er-fg-strong: #0a0a0a;
+  --er-fg: #171717;
+  --er-fg-2: #404040;
+  --er-fg-muted: #525252;
+  --er-fg-subtle: #737373;
+  --er-fg-faint: #a3a3a3;
+  --er-chart-grid: #e4e4e4;
+  --er-chart-axis: #737373;
+  --er-chart-line: #525252;
+}
+
+/* --- accents -------------------------------------------------------------
+ *
+ * Amber is the default and lives in the two blocks above. Each accent carries
+ * its own secondary (`--er-accent-2`): it is the *other* colour on a chart and
+ * the calibrated estimate's, so it has to stay distinguishable from whichever
+ * primary it is paired with rather than being one hue rotation away from it.
+ *
+ * Light-theme values are a step darker than dark-theme ones throughout, so an
+ * accent fill still carries white text on a white page.
+ */
+
+[data-accent='sky'][data-theme='dark'] {
+  --er-accent: #38bdf8;
+  --er-accent-strong: #0ea5e9;
+  --er-accent-soft: #7dd3fc;
+  --er-accent-deep: #075985;
+  --er-on-accent: #04202e;
+  --er-accent-2: #fbbf24;
+}
+
+[data-accent='sky'][data-theme='light'] {
+  --er-accent: #0284c7;
+  --er-accent-strong: #0369a1;
+  --er-accent-soft: #0ea5e9;
+  --er-accent-deep: #075985;
+  --er-on-accent: #ffffff;
+  --er-accent-2: #b45309;
+}
+
+[data-accent='emerald'][data-theme='dark'] {
+  --er-accent: #34d399;
+  --er-accent-strong: #10b981;
+  --er-accent-soft: #6ee7b7;
+  --er-accent-deep: #065f46;
+  --er-on-accent: #052e21;
+  --er-accent-2: #c084fc;
+}
+
+[data-accent='emerald'][data-theme='light'] {
+  --er-accent: #059669;
+  --er-accent-strong: #047857;
+  --er-accent-soft: #10b981;
+  --er-accent-deep: #064e3b;
+  --er-on-accent: #ffffff;
+  --er-accent-2: #7c3aed;
+}
+
+[data-accent='violet'][data-theme='dark'] {
+  --er-accent: #a78bfa;
+  --er-accent-strong: #8b5cf6;
+  --er-accent-soft: #c4b5fd;
+  --er-accent-deep: #5b21b6;
+  --er-on-accent: #ffffff;
+  --er-accent-2: #fbbf24;
+}
+
+[data-accent='violet'][data-theme='light'] {
+  --er-accent: #7c3aed;
+  --er-accent-strong: #6d28d9;
+  --er-accent-soft: #8b5cf6;
+  --er-accent-deep: #4c1d95;
+  --er-on-accent: #ffffff;
+  --er-accent-2: #b45309;
+}
+
+[data-accent='rose'][data-theme='dark'] {
+  --er-accent: #fb7185;
+  --er-accent-strong: #e11d48;
+  --er-accent-soft: #fda4af;
+  --er-accent-deep: #881337;
+  --er-on-accent: #ffffff;
+  --er-accent-2: #38bdf8;
+}
+
+[data-accent='rose'][data-theme='light'] {
+  --er-accent: #e11d48;
+  --er-accent-strong: #be123c;
+  --er-accent-soft: #f43f5e;
+  --er-accent-deep: #881337;
+  --er-on-accent: #ffffff;
+  --er-accent-2: #0284c7;
 }
 
 @theme inline {
