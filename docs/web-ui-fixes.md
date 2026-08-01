@@ -200,18 +200,26 @@ because there was nowhere to put a move that leaves the mainline. So:
   rebuilding the grid from the FEN each time — worth knowing before starting,
   because `Board.tsx` currently does exactly the latter.
 
-### B6–B8. Move-quality icons
+### B6–B8. Move-quality icons — **done**
 
-Replace the text glyphs in `lib/quality.ts` (`!!`, `?`, `★` …) with the SVGs
-in `assets/icons/classification/`. The file names already match the labels
-one-to-one, so this is a mapping change, not new art.
+`lib/quality.ts` now carries an `icon` per classification, derived from the
+label because the file names match one-to-one. The board draws it at 35×35
+centred **on** the square's top-right corner, the move table at 25×25, and the
+per-side summary at 16×16 beside its count.
 
-- On the board: positioned **on** the top-right corner of the square (i.e.
-  straddling it, not inset), **35×35**.
-- In the move table: the same icons at **25×25**.
+Two things worth knowing:
 
-Keep `lib/quality.ts` as the single source — the chart, board and table all
-read from it, which is what stops them drifting.
+- **At the board's edges the icon tucks inside.** The board clips to its
+  rounded border, so an icon straddling the top rank or the h file would be
+  sliced in half; those two edges hold it in instead. Everywhere else it
+  straddles as asked.
+- **35px is capped at 52% of a square.** On a phone-sized board 35px spans
+  most of three squares.
+
+The colours in `quality.ts` were re-taken from the icons' own fills, so the
+chart dots and the Progress pie now match the icon beside them rather than
+being a second opinion about what colour a blunder is. The Tailwind `badge`
+classes are gone — nothing rendered them once the icons landed.
 
 ### B9–B10. Audio
 
@@ -225,39 +233,45 @@ Moving the existing files into `default/` will break the classic UI's audio
 paths unless it's updated in the same change; check `frontend/js/` before
 moving anything.
 
-### B11. Nav buttons belong under the board
+### B11. Nav buttons belong under the board — **done**
 
-The four step buttons live at the bottom of `MoveList.tsx`. They should sit
-directly beneath the board in `AnalysisScreen.tsx`. Keyboard nav (arrows,
-Home/End) is already wired and should keep working.
+Moved into `AnalysisScreen`, directly under the board and its name plate.
+Keyboard nav is untouched and still works.
 
-### B12. Game library table
+### B12. Game library table — **first bullet done**
 
-- Fixed height and internally scrollable. It currently grows with the flex
-  column, so a long library pushes the upload controls off-screen.
-- Needs a **database selection**. Ambiguous as written — most likely the
+- ~~Fixed height and internally scrollable.~~ **Done.** The cause was one
+  level up: `App.tsx` sized the page with `min-h-screen`, so the row holding
+  the two columns had no height to divide and both grew instead of scrolling
+  inside themselves. It is `h-screen` now, the rail is full height on a
+  desktop, and the list is capped at 55vh in the stacked layout where there is
+  no row height to share. The upload controls stay on screen either way.
+- Needs a **database selection**. Still ambiguous — most likely the
   `collections` groups the backend already has (`GET /api/collections`), which
-  the panel currently exposes only as a filter dropdown. Confirm before
-  building.
+  the panel currently exposes only as a filter dropdown. **Waiting on an
+  answer.**
 - **One bullet in the original request was cut off mid-sentence** ("the game
-  library …"). Ask before assuming.
+  library …"). **Waiting on an answer.**
 
-### B13. Engine lines must not collapse between moves
+### B13. Engine lines must not collapse between moves — **done**
 
-`useLiveEval` clears `lines` to `[]` on every new position, so the panel
-empties and the card shrinks while Stockfish starts the next search — the
-whole column jumps. At minimum reserve the height; ideally keep the previous
-lines on screen and swap them for the new ones as they arrive.
+Both halves of it. `useLiveEval` no longer clears on request: it tracks which
+sequence the lines on screen belong to, holds them while the next search
+starts, and replaces them when that search's first `info` arrives — which is
+what the sequence number was already there to tell it. The held set is flagged
+`stale`, and the panel dims it slightly and says "searching…".
 
-The sequence-number machinery to do this properly is already there — the hook
-knows which position each `info` belongs to, so it can hold the old set until
-the first line of the new one lands rather than clearing on request.
+The chart above was also sized by whether there were lines *yet*, so it grew
+and shrank between moves; it now keys off whether the engine panel is open.
+Before the first search of a session lands, three empty rows hold the space the
+lines will take.
 
-### B14. Sweep card: reveal detail on hover
+### B14. Sweep card: reveal detail on hover — **done**
 
-The estimate cards in `EloSweepPanel.tsx` always show the full list of the
-fit's caveats, which is a wall of text. It should appear only when hovering
-that player's card.
+The card shows a one-line count — "3 things the fit is unsure about" — and the
+list itself slides over the card on hover. Done with `group-hover` rather than
+state, which gets keyboard focus for free: the card is focusable when it has
+caveats, so tabbing to it reveals them too.
 
 ### B15. Sweep card is missing the calibrated estimate
 
@@ -366,7 +380,8 @@ says so in place rather than drawing an empty grid.
    twice.
 4. ~~**A3–A6** — the settings dialog, once there is a theme pane to put in it.~~
    **Done**, with A6a's palettes and A1's account pane in it.
-5. **B6–B8, B11, B12, B13, B14** — analysis-screen polish, all independent.
+5. ~~**B6–B8, B11, B12, B13, B14** — analysis-screen polish, all independent.~~
+   **Done**, except the two B12 bullets that need an answer first.
 6. **A7 + B9–B10** — per-screen preferences and sound sets together, since
    they want the same storage.
 7. **B3–B5** — variations, dragging and animation last. It is the largest item
@@ -375,6 +390,7 @@ says so in place rather than drawing an empty grid.
 ## Needs a decision before starting
 
 - **B12**: what "database selection" means — collections, or something else.
+  *(Everything else in B12 has landed; this is the only part left.)*
 - **B12**: the truncated bullet in the original request.
 - **A7**: schema shape for per-screen preferences (extra columns vs. a table).
 - **B15**: what to show when one game can't support a calibrated estimate.

@@ -112,7 +112,7 @@ export function GameLibraryPanel({
   }
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-l border-line bg-surface/60 lg:w-80 xl:w-96">
+    <aside className="flex w-full shrink-0 flex-col border-l border-line bg-surface/60 lg:h-full lg:w-80 xl:w-96">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
           <Database className="h-4 w-4 text-accent" />
@@ -215,7 +215,11 @@ export function GameLibraryPanel({
         )}
       </div>
 
-      <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
+      {/* B12: fixed height, scrolling inside. The cap is what holds the
+          stacked (narrow) layout together, where there is no row height to
+          divide and a 300-game library would otherwise push the upload
+          controls off the bottom of the page. */}
+      <div className="thin-scroll max-h-[55vh] min-h-0 flex-1 overflow-y-auto lg:max-h-none">
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-xs text-fg-subtle">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading games…

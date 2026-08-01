@@ -62,7 +62,11 @@ export default function App() {
   if (!user) return <LoginScreen onLogin={setUser} />;
 
   return (
-    <div className="flex min-h-screen flex-col bg-canvas font-sans text-fg">
+    // h-screen, not min-h-screen: both columns of the analysis screen scroll
+    // inside themselves, which only works when the row they sit in has a
+    // height to divide. With min-h- the page grew instead and the library's
+    // upload controls ended up below the fold (B12).
+    <div className="flex h-screen flex-col overflow-hidden bg-canvas font-sans text-fg">
       <Header
         currentScreen={screen}
         onSelectScreen={setScreen}

@@ -2,28 +2,39 @@ import type { MoveQuality } from '../types';
 
 export interface QualityStyle {
   label: string;
-  /** Short glyph shown on the board badge and beside the move. */
+  /** The icon in `assets/icons/classification/`, served at this URL. The file
+   *  names are the backend's classification labels one-to-one, which is why
+   *  this is derived rather than listed. */
+  icon: string;
+  /** Short glyph. Every classification is drawn as its icon now, so this is
+   *  the icon's `alt` — what a browser shows if the SVG fails to load, and
+   *  what a screen reader reads. */
   symbol: string;
-  /** Tailwind classes for the filled badge. */
-  badge: string;
-  /** Hex, for the chart and anything that needs a raw colour. */
+  /** Hex, for the chart dots and the move-quality pie. Taken from the icon's
+   *  own fill, so a blunder is the same red wherever it is drawn. */
   color: string;
 }
 
+const iconUrl = (name: MoveQuality) => `/assets/icons/classification/${name}.svg`;
+
 /** One table for every place a classification is drawn -- move list, board
- *  badge, eval chart dot, the summary counts. The labels are the backend's;
- *  only the presentation lives here. */
+ *  badge, eval chart dot, the summary counts, the Progress pie. The labels are
+ *  the backend's; only the presentation lives here.
+ *
+ *  Keeping this as the single source is what stops the four from drifting: the
+ *  icon and the colour beside it are the same classification's, because they
+ *  come from the same row. */
 export const QUALITY: Record<MoveQuality, QualityStyle> = {
-  brilliant: { label: 'Brilliant', symbol: '!!', badge: 'bg-cyan-500 text-white', color: '#06b6d4' },
-  great: { label: 'Great', symbol: '!', badge: 'bg-blue-500 text-white', color: '#3b82f6' },
-  best: { label: 'Best', symbol: '★', badge: 'bg-emerald-500 text-white', color: '#10b981' },
-  excellent: { label: 'Excellent', symbol: '✓', badge: 'bg-teal-500 text-white', color: '#14b8a6' },
-  good: { label: 'Good', symbol: '', badge: 'bg-stone-600 text-white', color: '#78716c' },
-  book: { label: 'Book', symbol: '📖', badge: 'bg-amber-700 text-amber-100', color: '#b45309' },
-  inaccuracy: { label: 'Inaccuracy', symbol: '?!', badge: 'bg-amber-500 text-stone-950', color: '#f59e0b' },
-  mistake: { label: 'Mistake', symbol: '?', badge: 'bg-orange-600 text-white', color: '#ea580c' },
-  miss: { label: 'Miss', symbol: '✖', badge: 'bg-rose-700 text-white', color: '#be123c' },
-  blunder: { label: 'Blunder', symbol: '??', badge: 'bg-red-600 text-white', color: '#dc2626' },
+  brilliant: { label: 'Brilliant', icon: iconUrl('brilliant'), symbol: '!!', color: '#26c2a3' },
+  great: { label: 'Great', icon: iconUrl('great'), symbol: '!', color: '#749bbf' },
+  best: { label: 'Best', icon: iconUrl('best'), symbol: '★', color: '#81b64c' },
+  excellent: { label: 'Excellent', icon: iconUrl('excellent'), symbol: '✓', color: '#81b64c' },
+  good: { label: 'Good', icon: iconUrl('good'), symbol: '', color: '#95b776' },
+  book: { label: 'Book', icon: iconUrl('book'), symbol: '📖', color: '#d5a47d' },
+  inaccuracy: { label: 'Inaccuracy', icon: iconUrl('inaccuracy'), symbol: '?!', color: '#f7c631' },
+  mistake: { label: 'Mistake', icon: iconUrl('mistake'), symbol: '?', color: '#ffa459' },
+  miss: { label: 'Miss', icon: iconUrl('miss'), symbol: '✖', color: '#ff7769' },
+  blunder: { label: 'Blunder', icon: iconUrl('blunder'), symbol: '??', color: '#fa412d' },
 };
 
 /** Display order for the per-side summary, best first. */

@@ -1,14 +1,5 @@
 import { useEffect, useRef } from 'react';
-import {
-  ChevronFirst,
-  ChevronLast,
-  ChevronLeft,
-  ChevronRight,
-  Gauge,
-  Loader2,
-  Sparkles,
-  XCircle,
-} from 'lucide-react';
+import { Gauge, Loader2, Sparkles, XCircle } from 'lucide-react';
 import type { AnalysisMove, MoveQuality } from '../../types';
 import type { Ply } from '../../lib/chess';
 import { QUALITY, QUALITY_ORDER, styleFor } from '../../lib/quality';
@@ -48,14 +39,14 @@ function SideSummary({ name, tally }: { name: string; tally: Map<MoveQuality, nu
       {shown.length === 0 ? (
         <div className="mt-1 font-mono text-[11px] text-fg-subtle">not analysed</div>
       ) : (
-        <div className="mt-1.5 flex flex-wrap gap-1">
+        <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1">
           {shown.map((q) => (
             <span
               key={q}
               title={QUALITY[q].label}
-              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${QUALITY[q].badge}`}
+              className="inline-flex items-center gap-1 font-mono text-[11px] text-fg-2"
             >
-              {QUALITY[q].symbol || QUALITY[q].label[0]}
+              <img src={QUALITY[q].icon} alt={QUALITY[q].label} className="h-4 w-4" />
               <span className="font-bold">{tally.get(q)}</span>
             </span>
           ))}
@@ -113,13 +104,13 @@ export function MoveList({
           }`}
         >
           <span className="truncate">{ply.san}</span>
-          {q?.symbol && (
-            <span
+          {q && (
+            <img
+              src={q.icon}
+              alt={q.symbol || q.label}
               title={q.label}
-              className={`ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded px-0.5 text-[9px] font-bold ${q.badge}`}
-            >
-              {q.symbol}
-            </span>
+              className="ml-auto h-[25px] w-[25px] shrink-0"
+            />
           )}
         </button>
       </td>
@@ -165,33 +156,6 @@ export function MoveList({
             </tbody>
           </table>
         )}
-      </div>
-
-      <div className="mt-3 flex items-center justify-center gap-1 border-t border-line pt-3">
-        {[
-          { icon: <ChevronFirst className="h-4 w-4" />, to: 0, label: 'Start' },
-          {
-            icon: <ChevronLeft className="h-4 w-4" />,
-            to: Math.max(0, currentPlyIndex - 1),
-            label: 'Previous',
-          },
-          {
-            icon: <ChevronRight className="h-4 w-4" />,
-            to: Math.min(plies.length, currentPlyIndex + 1),
-            label: 'Next',
-          },
-          { icon: <ChevronLast className="h-4 w-4" />, to: plies.length, label: 'End' },
-        ].map((btn) => (
-          <button
-            key={btn.label}
-            title={btn.label}
-            disabled={plies.length === 0}
-            onClick={() => onSelectPly(btn.to)}
-            className="flex h-8 w-9 items-center justify-center rounded-lg bg-canvas text-fg-2 ring-1 ring-line hover:bg-surface-2 hover:text-fg disabled:opacity-40"
-          >
-            {btn.icon}
-          </button>
-        ))}
       </div>
 
       <div className="mt-3 space-y-2 border-t border-line pt-3">

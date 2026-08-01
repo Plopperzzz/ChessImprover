@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FlipVertical2, Search, Settings2 } from 'lucide-react';
+import {
+  ChevronFirst,
+  ChevronLast,
+  ChevronLeft,
+  ChevronRight,
+  FlipVertical2,
+  Search,
+  Settings2,
+} from 'lucide-react';
 import * as api from '../../lib/api';
 import { fenAt, formatEval, parsePgn, winProb, yourSide, type Ply } from '../../lib/chess';
 import { useAnalysisJob, type JobResult } from '../../lib/useAnalysisJob';
@@ -338,6 +346,37 @@ export function AnalysisScreen({ user, settings, onOpenSettings }: AnalysisScree
 
             {plate(bottomName, bottomElo, 'bottom')}
 
+            {/* B11: these lived at the bottom of the move list, a column away
+                from the board they move. The keyboard bindings above (arrows,
+                Home/End) do the same thing and still work. */}
+            <div className="flex items-center justify-center gap-1.5">
+              {[
+                { icon: <ChevronFirst className="h-4 w-4" />, to: 0, label: 'Start' },
+                {
+                  icon: <ChevronLeft className="h-4 w-4" />,
+                  to: Math.max(0, plyIndex - 1),
+                  label: 'Previous',
+                },
+                {
+                  icon: <ChevronRight className="h-4 w-4" />,
+                  to: Math.min(plies.length, plyIndex + 1),
+                  label: 'Next',
+                },
+                { icon: <ChevronLast className="h-4 w-4" />, to: plies.length, label: 'End' },
+              ].map((btn) => (
+                <button
+                  key={btn.label}
+                  title={btn.label}
+                  aria-label={btn.label}
+                  disabled={plies.length === 0}
+                  onClick={() => setPlyIndex(btn.to)}
+                  className="flex h-9 w-11 items-center justify-center rounded-lg border border-line bg-surface text-fg-2 transition-colors hover:bg-surface-2 hover:text-fg disabled:opacity-40"
+                >
+                  {btn.icon}
+                </button>
+              ))}
+            </div>
+
             {jobFen && (
               <p className="text-center font-mono text-[11px] text-fg-subtle">
                 following the engine…
@@ -353,6 +392,7 @@ export function AnalysisScreen({ user, settings, onOpenSettings }: AnalysisScree
               onSelectPly={setPlyIndex}
               liveActive={liveActive && !job.state.running}
               engineLines={live.lines}
+              linesStale={live.stale}
               liveError={live.error}
             />
 

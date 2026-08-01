@@ -201,13 +201,36 @@ export function Board({
                     />
                   ))}
 
-                {markerStyle && marker?.square === square && markerStyle.symbol && (
-                  <div
+                {markerStyle && marker?.square === square && (
+                  <img
+                    src={markerStyle.icon}
+                    alt={markerStyle.symbol || markerStyle.label}
                     title={markerStyle.label}
-                    className={`absolute top-0.5 right-0.5 z-20 flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold shadow ring-1 ring-white/40 sm:h-5 sm:w-5 sm:text-[10px] ${markerStyle.badge}`}
-                  >
-                    {markerStyle.symbol}
-                  </div>
+                    draggable={false}
+                    className="pointer-events-none absolute z-20 drop-shadow-md"
+                    style={{
+                      // Straddling the corner rather than inset in it: the icon
+                      // is centred on the square's top-right corner, which is
+                      // where a move badge is expected to sit.
+                      //
+                      // Except on the board's own edges. The board clips to its
+                      // rounded border, so an icon hanging over the top rank or
+                      // the h file would be sliced in half; those tuck inside
+                      // instead. Which rank and file that is depends on the
+                      // flip, and `rankIdx`/`fileIdx` are already in drawn
+                      // order rather than board order.
+                      top: rankIdx === 0 ? '4%' : 0,
+                      right: fileIdx === 7 ? '4%' : 0,
+                      transform: `translate(${fileIdx === 7 ? '0' : '50%'}, ${
+                        rankIdx === 0 ? '0' : '-50%'
+                      })`,
+                      // 35px is the size asked for; the cap keeps it under half
+                      // a square on a phone-sized board, where 35px would sit
+                      // across three of them.
+                      width: 'min(35px, 52%)',
+                      height: 'min(35px, 52%)',
+                    }}
+                  />
                 )}
               </div>
             );

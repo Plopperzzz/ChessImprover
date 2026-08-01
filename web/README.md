@@ -133,6 +133,12 @@ joining them is the secondary**: the points are measurements, the line is
 drawn. That is the trend charts and the sweep curve. The calibrated estimate
 uses the secondary too, being a figure derived from another one.
 
+Move classifications are the exception, and deliberately so: they come from
+`lib/quality.ts`, which pairs each label with its icon in
+`assets/icons/classification/` and with that icon's own fill colour. A blunder
+is the same red on the board, in the move list, on the eval chart and in the
+Progress pie because all four read that one table.
+
 ## Not ported from the classic UI
 
 These still work, at `/legacy/`, and are not duplicated here:
