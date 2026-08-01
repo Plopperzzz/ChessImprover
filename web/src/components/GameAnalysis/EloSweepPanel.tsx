@@ -162,6 +162,10 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
               name === 'fit' ? 'fitted' : 'observed',
             ]}
           />
+          {/* Fitted curve in the secondary accent, observations in the
+              primary below: the same split the trend charts use — measured
+              points in the accent, the drawn line joining them in its
+              secondary. */}
           <Line
             type="monotone"
             dataKey="fit"

@@ -128,6 +128,11 @@ All three are chosen in the settings dialog's Theme pane and apply on click.
 Charts read their colours through `useChartTheme()`, because recharts takes
 colours as props rather than as classes.
 
+Where a plot draws both, **the points are the primary accent and the line
+joining them is the secondary**: the points are measurements, the line is
+drawn. That is the trend charts and the sweep curve. The calibrated estimate
+uses the secondary too, being a figure derived from another one.
+
 ## Not ported from the classic UI
 
 These still work, at `/legacy/`, and are not duplicated here:
