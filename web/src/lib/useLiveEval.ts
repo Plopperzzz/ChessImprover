@@ -22,9 +22,17 @@ interface Info {
  * board has already moved off. Scores come back mover-relative, and are
  * flipped here into white's perspective -- the eval bar has to mean the same
  * thing regardless of whose turn it is.
+ *
+ * Asking for a new position does *not* clear the lines (B13). Stockfish takes
+ * a moment to produce its first `info`, and emptying the list in the meantime
+ * collapsed the panel and jumped the whole column on every arrow key. The
+ * previous position's lines stay up, flagged `stale`, and are replaced when the
+ * first line of the new search lands -- which is what the sequence number was
+ * already there to tell us.
  */
 export function useLiveEval(active: boolean, fen: string | null, multipv: number) {
   const [lines, setLines] = useState<EngineLine[]>([]);
+  const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
 
@@ -32,6 +40,9 @@ export function useLiveEval(active: boolean, fen: string | null, multipv: number
   const seq = useRef(0);
   const byRank = useRef(new Map<number, EngineLine>());
   const searchFen = useRef<string | null>(null);
+  /** Which sequence the lines in `byRank` belong to. Not the same as `seq`,
+   *  which is the search that has been *asked for*. */
+  const shown = useRef<number | null>(null);
 
   const publish = useCallback(() => {
     setLines([...byRank.current.values()].sort((a, b) => a.rank - b.rank));
@@ -43,7 +54,9 @@ export function useLiveEval(active: boolean, fen: string | null, multipv: number
       socket.current = null;
       setConnected(false);
       setLines([]);
+      setStale(false);
       byRank.current.clear();
+      shown.current = null;
       return;
     }
 
@@ -65,6 +78,14 @@ export function useLiveEval(active: boolean, fen: string | null, multipv: number
         return;
       }
       if (msg.type !== 'info' || msg.seq !== seq.current) return;
+
+      // First line of the search we asked for: now, and not before, the
+      // previous position's lines are replaced rather than shown alongside.
+      if (shown.current !== msg.seq) {
+        byRank.current.clear();
+        shown.current = msg.seq;
+        setStale(false);
+      }
 
       // Mover-relative -> white-relative.
       const flip = searchFen.current ? searchFen.current.split(' ')[1] === 'b' : false;
@@ -88,14 +109,15 @@ export function useLiveEval(active: boolean, fen: string | null, multipv: number
     };
   }, [active, publish]);
 
-  // New position: bump the sequence, clear the stale lines, ask for this one.
+  // New position: bump the sequence and ask for it. What is on screen belongs
+  // to the previous one until the engine says otherwise, so it is marked stale
+  // rather than thrown away.
   useEffect(() => {
     const ws = socket.current;
     if (!active || !fen || !ws || ws.readyState !== WebSocket.OPEN) return;
     seq.current += 1;
     searchFen.current = fen;
-    byRank.current.clear();
-    setLines([]);
+    setStale(byRank.current.size > 0);
     ws.send(JSON.stringify({ type: 'position', fen, seq: seq.current }));
   }, [active, fen, connected]);
 
@@ -103,10 +125,9 @@ export function useLiveEval(active: boolean, fen: string | null, multipv: number
     const ws = socket.current;
     if (!active || !ws || ws.readyState !== WebSocket.OPEN) return;
     seq.current += 1;
-    byRank.current.clear();
-    setLines([]);
+    setStale(byRank.current.size > 0);
     ws.send(JSON.stringify({ type: 'multipv', lines: multipv, seq: seq.current }));
   }, [active, multipv, connected]);
 
-  return { lines, error, connected };
+  return { lines, stale, error, connected };
 }

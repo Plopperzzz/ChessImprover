@@ -97,6 +97,44 @@ CREATE TABLE IF NOT EXISTS uploads (
     uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- A line you played that the game didn't (B3). One row per *line* rather than
+-- per move: a line is what a person means by "that variation", and the common
+-- case -- play four moves, keep them -- is one insert.
+--
+-- parent_id NULL means it branches off the game's mainline after `start_ply`
+-- half-moves; otherwise it branches off another line after `start_ply` moves of
+-- that line. The self-referencing cascade is what makes deleting a variation
+-- take its nested ones with it.
+CREATE TABLE IF NOT EXISTS variations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES variations(id) ON DELETE CASCADE,
+    start_ply INTEGER NOT NULL,
+    moves_json TEXT NOT NULL,       -- SAN, in order, from the anchor
+    label TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_variations_game ON variations(user_id, game_id);
+
+-- Board, pieces and sounds per screen, over the top of the defaults on `users`.
+--
+-- A table rather than nine more columns on `users` (A7): three screens times
+-- three kinds of asset is nine today, and every screen or asset kind added
+-- later is another migration on the table that holds accounts. NULL means
+-- "follow the default" and is the normal state -- a row exists only for a
+-- screen someone has actually overridden, so the defaults keep working for
+-- everyone who never opens that pane.
+CREATE TABLE IF NOT EXISTS screen_prefs (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    screen TEXT NOT NULL,           -- 'analysis' | 'puzzles' | 'play'
+    board_set TEXT,
+    piece_set TEXT,
+    sound_set TEXT,
+    PRIMARY KEY (user_id, screen)
+);
+
 -- One row per parsed game. batch_index is stable across the whole multi-file
 -- upload batch that produced it (assigned at parse time, not on later re-fetch).
 CREATE TABLE IF NOT EXISTS games (
@@ -591,6 +629,7 @@ def init_db():
         _ensure_column(conn, "users", "show_legal_moves", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "users", "allow_premoves", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "users", "eval_bar_side", "TEXT NOT NULL DEFAULT 'top'")
+        _ensure_column(conn, "users", "sound_set", "TEXT NOT NULL DEFAULT 'default'")
         _split_asset_set(conn)
         _ensure_column(conn, "engine_settings", "maia_options_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "engine_settings", "great_max_drop", "REAL NOT NULL DEFAULT 0.02")

@@ -53,6 +53,34 @@ export const me = () => request<User>('/api/auth/me');
 export const createAccount = (username: string, display_name: string) =>
   request<User>('/api/auth/accounts', json({ username, display_name }));
 
+/** Renaming is not cosmetic: the display name is what decides which side of
+ *  each game was yours, so the backend re-matches the whole library against
+ *  the new names and reports which games moved. This is the documented fix for
+ *  a library that imported as `unassigned`.
+ *
+ *  `rematched` is the tally from `pgn_parse.reassign_your_colors`: `changed` is
+ *  every game whose side moved, of which `assigned` are now yours and
+ *  `unassigned` no longer match either name. Games you set by hand are left
+ *  alone and counted in none of them. */
+export const renameAccount = (
+  id: number,
+  patch: { username?: string; display_name?: string },
+) =>
+  request<User & { rematched: { changed: number; assigned: number; unassigned: number } }>(
+    `/api/auth/accounts/${id}`,
+    { ...json(patch), method: 'PATCH' },
+  );
+
+/** Takes the games, analyses and puzzles with it, by the schema's cascades.
+ *  Deleting the account you are signed into logs you out server-side. */
+export const deleteAccount = (id: number) =>
+  request<{
+    ok: boolean;
+    display_name: string;
+    deleted: { games: number; analyses: number; puzzles: number };
+    logged_out: boolean;
+  }>(`/api/auth/accounts/${id}`, { method: 'DELETE' });
+
 // --- library --------------------------------------------------------------
 
 export interface GameFilter {
@@ -94,6 +122,90 @@ export const uploadGames = (files: File[], pasted: string) => {
     body: form,
   });
 };
+
+// --- chess.com ------------------------------------------------------------
+
+export interface ChesscomMonth {
+  year: number;
+  month: number;
+  /** 'YYYY-MM', which is also what `chesscomImport` takes back. */
+  label: string;
+  /** How many of that month's games are already in the library. */
+  imported: number;
+  /** Over, and already read — nothing can be added to it, so an import in
+   *  `new` mode skips it without a request. */
+  settled: boolean;
+  checked_at: string | null;
+}
+
+export const chesscomArchives = (username: string) =>
+  request<{
+    username: string;
+    months: ChesscomMonth[];
+    settled: number;
+    to_check: number;
+  }>('/api/games/chesscom/archives', json({ username }));
+
+export interface ChesscomImport {
+  username: string;
+  added: number;
+  /** Games the archive carried that the library already had, matched on
+   *  chess.com's permanent `Link` (`games.external_id`). */
+  skipped: number;
+  with_clocks: number;
+  /** Months actually downloaded, as against skipped or answered 304. */
+  downloaded: number;
+  settled: number;
+  unchanged: number;
+  /** Months the server's per-request cap didn't reach. Ask again with these:
+   *  only the server knows which months cost a request. */
+  remaining: string[];
+  months: { month: string; added: number; skipped: number; state: string }[];
+}
+
+/** `mode: 'new'` is the everyday one — finished months already read are not
+ *  requested, everything else is requested conditionally, and a game already
+ *  held is never stored twice. `'refetch'` turns the first two off, which is
+ *  how you get back games deleted from the library. */
+export const chesscomImport = (body: {
+  username: string;
+  months: string[];
+  collection_id?: number | null;
+  mode?: 'new' | 'refetch';
+}) => request<ChesscomImport>('/api/games/chesscom/import', json(body));
+
+// --- variations -----------------------------------------------------------
+
+/** A line you played that the game didn't. One row is a whole line, in SAN,
+ *  from where it leaves its parent to wherever it ends. `parent_id` null means
+ *  it branches off the mainline after `start_ply` half-moves; otherwise off
+ *  another line after `start_ply` moves of that line. */
+export interface Variation {
+  id: number;
+  game_id: number;
+  parent_id: number | null;
+  start_ply: number;
+  moves: string[];
+  label: string | null;
+  created_at: string;
+}
+
+export const listVariations = (gameId: number) =>
+  request<Variation[]>(`/api/games/${gameId}/variations`);
+
+export const createVariation = (
+  gameId: number,
+  body: { parent_id?: number | null; start_ply: number; moves: string[]; label?: string },
+) => request<Variation>(`/api/games/${gameId}/variations`, json(body));
+
+/** Replaces the line — which is how a variation grows, rather than each move
+ *  becoming a row of its own. */
+export const updateVariation = (id: number, body: { moves?: string[]; label?: string }) =>
+  request<Variation>(`/api/variations/${id}`, { ...json(body), method: 'PUT' });
+
+/** Takes the lines nested inside it too. */
+export const deleteVariation = (id: number) =>
+  request<{ ok: boolean; deleted: number }>(`/api/variations/${id}`, { method: 'DELETE' });
 
 // --- runs -----------------------------------------------------------------
 
@@ -164,6 +276,43 @@ export interface AssetSet {
   has_board: boolean;
 }
 export const assetSets = () => request<AssetSet[]>('/api/asset-sets');
+
+export interface AudioSet {
+  name: string;
+  /** Which of the named sounds this set actually ships. */
+  sounds: string[];
+  /** False when it carries the board sounds but not the puzzle/clock ones,
+   *  which fall back to the default set's copies. */
+  complete: boolean;
+}
+export const audioSets = () => request<AudioSet[]>('/api/audio-sets');
+
+/** Which screen draws with what (A7). `defaults` are the account's, `screens`
+ *  are the per-screen overrides where `null` means "follow the default", and
+ *  `effective` is the two resolved — computed server-side so both front ends
+ *  can't disagree about what a screen should look like. */
+export interface ScreenPrefs {
+  defaults: { board_set: string; piece_set: string; sound_set: string };
+  screens: Record<
+    ScreenPrefName,
+    { board_set: string | null; piece_set: string | null; sound_set: string | null }
+  >;
+  effective: Record<
+    ScreenPrefName,
+    { board_set: string; piece_set: string; sound_set: string }
+  >;
+}
+
+export type ScreenPrefName = 'analysis' | 'puzzles' | 'play';
+
+export const screenPrefs = () => request<ScreenPrefs>('/api/settings/screens');
+
+/** An empty string clears an override, putting that kind back on the default;
+ *  an omitted field leaves it alone. */
+export const putScreenPrefs = (
+  screen: ScreenPrefName,
+  patch: { board_set?: string; piece_set?: string; sound_set?: string },
+) => request<ScreenPrefs>(`/api/settings/screens/${screen}`, { ...json(patch), method: 'PUT' });
 
 // --- progress -------------------------------------------------------------
 

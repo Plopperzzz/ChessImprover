@@ -39,11 +39,15 @@ function SideEstimate({
   isYou: boolean;
 }) {
   const bound = estimate.bound;
+  // B14: the caveats are a wall of text next to a three-digit number, and they
+  // are read once. `group-hover` rather than state, so the card also reveals
+  // them on keyboard focus without a second code path.
   return (
     <div
-      className={`rounded-xl border p-3 ${
+      className={`group relative rounded-xl border p-3 ${
         isYou ? 'border-accent-deep/60 bg-accent/10' : 'border-line bg-canvas/70'
       }`}
+      tabIndex={estimate.reasons.length > 0 ? 0 : undefined}
     >
       <div className="flex items-baseline justify-between gap-2">
         <span className="truncate text-xs font-semibold text-fg-2">
@@ -88,14 +92,21 @@ function SideEstimate({
       )}
 
       {estimate.reasons.length > 0 && (
-        <ul className="mt-2 space-y-1">
-          {estimate.reasons.map((reason) => (
-            <li key={reason} className="flex gap-1.5 text-[11px] leading-snug text-fg-muted">
-              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-fg-faint" />
-              <span>{reason}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <p className="mt-2 flex items-center gap-1.5 text-[10px] text-fg-subtle transition-opacity group-hover:opacity-0 group-focus:opacity-0">
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            {estimate.reasons.length} thing{estimate.reasons.length === 1 ? '' : 's'} the fit is
+            unsure about
+          </p>
+          <ul className="pointer-events-none absolute inset-x-0 bottom-0 z-20 space-y-1 rounded-xl border border-line bg-surface p-3 opacity-0 shadow-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus:pointer-events-auto group-focus:opacity-100">
+            {estimate.reasons.map((reason) => (
+              <li key={reason} className="flex gap-1.5 text-[11px] leading-snug text-fg-2">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-fg-faint" />
+                <span>{reason}</span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );
@@ -162,6 +173,10 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
               name === 'fit' ? 'fitted' : 'observed',
             ]}
           />
+          {/* Fitted curve in the secondary accent, observations in the
+              primary below: the same split the trend charts use — measured
+              points in the accent, the drawn line joining them in its
+              secondary. */}
           <Line
             type="monotone"
             dataKey="fit"

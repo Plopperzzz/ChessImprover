@@ -114,19 +114,27 @@ function Picker({
 
 /** One chart per series (C8). They were on a single axis, which flattened
  *  whichever of the two had the smaller range — an estimate that moved 300
- *  points and a rating that moved 40 are both worth seeing move. */
+ *  points and a rating that moved 40 are both worth seeing move.
+ *
+ *  Points and line are coloured separately, and the split is the house rule
+ *  everywhere a plot draws both: the **points** are the primary accent, because
+ *  they are the measurements, and the **line** joining them is the secondary,
+ *  because it is drawn rather than measured. The sweep curve in
+ *  `EloSweepPanel` reads the same way round. */
 function TrendChart({
   data,
   dataKey,
   name,
-  colour,
+  lineColour,
+  dotColour,
   palette,
   showAxis,
 }: {
   data: { label: string; estimated: number | null; actual: number | null }[];
   dataKey: 'estimated' | 'actual';
   name: string;
-  colour: string;
+  lineColour: string;
+  dotColour: string;
   palette: ReturnType<typeof useChartTheme>;
   showAxis: boolean;
 }) {
@@ -166,10 +174,11 @@ function TrendChart({
               type="monotone"
               dataKey={dataKey}
               name={name}
-              stroke={colour}
+              stroke={lineColour}
               strokeWidth={2}
               connectNulls
-              dot={{ r: 3 }}
+              dot={{ r: 3, fill: dotColour, stroke: dotColour }}
+              activeDot={{ r: 4, fill: dotColour, stroke: dotColour }}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -500,7 +509,8 @@ export function ProgressScreen() {
                       data={chart}
                       dataKey="estimated"
                       name="Maia estimate"
-                      colour={palette.accent}
+                      lineColour={palette.accent2}
+                      dotColour={palette.accent}
                       palette={palette}
                       showAxis={false}
                     />
@@ -509,11 +519,16 @@ export function ProgressScreen() {
                     <p className="mb-1 text-[10px] tracking-wider text-fg-subtle uppercase">
                       Actual rating
                     </p>
+                    {/* The rating your provider published is the reference
+                        the estimate is read against, not a second accent
+                        series — it takes the neutral plot colour so the two
+                        charts don't end up drawn in the same two colours. */}
                     <TrendChart
                       data={chart}
                       dataKey="actual"
                       name="Actual rating"
-                      colour={palette.accent2}
+                      lineColour={palette.line}
+                      dotColour={palette.axis}
                       palette={palette}
                       showAxis
                     />

@@ -70,7 +70,7 @@ Install Node 20 LTS or newer and repeat.
 
 | Screen | Backed by |
 | --- | --- |
-| **Game Analysis** | `/api/games`, `/api/analysis/*`, `/api/sweep/*`, `/ws/analysis/{job}`, `/ws/live-eval` |
+| **Game Analysis** | `/api/games`, `/api/games/chesscom/*`, `/api/games/{id}/variations`, `/api/analysis/*`, `/api/sweep/*`, `/ws/analysis/{job}`, `/ws/live-eval` |
 | **Progress** | `/api/strength`, `/api/trend`, `/api/move-quality` |
 | **Play Maia**, **Puzzles** | not rebuilt yet — these link across to `/legacy/` |
 
@@ -96,13 +96,51 @@ which feeds both the brilliant-move count and the pie. Great and Brilliant only
 come out of a swept game, so the response says how many games were
 quick-analysed and the screen repeats it under the count.
 
+### Variations
+
+Play a move the game didn't and it branches. `lib/moveTree.ts` holds the tree —
+the same model as the classic UI's `explorer.js`, including its two rules:
+`children[0]` continues the line you are on, and a mainline node is never
+edited or deleted.
+
+Branches are saved as you make them, one row per *line*
+(`backend/app/variations.py`). Replaying a move already in the tree navigates
+instead of branching; a move at the tip of a saved line extends that row; a
+move anywhere else starts a new one, hanging off the mainline or off the line
+you are standing in. The server replays every line before storing it, so a
+saved variation always plays out.
+
+The board animates because pieces have identities that survive a move
+(`lib/pieces.ts`) — the grid is not rebuilt from the FEN, so a move is one
+element arriving at new coordinates and CSS can tween it.
+
+## Boards, pieces and sounds
+
+`GET /api/settings/screens` answers "what does this screen draw with": the
+account defaults, the per-screen overrides, and the two resolved into
+`effective`. The resolution happens on the server because the classic UI reads
+the same preferences — a rule kept in one browser is one the other gets subtly
+wrong. `PUT /api/settings/screens/{screen}` patches one screen, where an
+omitted field means "leave alone" and `""` means "back to the default".
+
+Sounds live in `assets/audio/<set>/`, one subdirectory per set with the same
+file names inside each; `default` is the original flat directory. `lib/sound.ts`
+plays them, reading the event name rather than the file so a set can restyle
+without every caller learning about it. A set only has to carry the four board
+sounds; anything else it omits falls back to the default set's copy.
+
+The React UI sounds a move when you step onto it, chosen from the SAN, and
+never while an analysis job is walking the game. Mute is the `sound` key in
+`localStorage` — the key the classic UI already used, so muting in one mutes
+both.
+
 ## Colours and themes
 
 Every colour comes from a `--er-*` custom property defined in `src/index.css`,
-once for the dark theme and once for the light one. An `@theme inline` block
-turns each into a Tailwind utility — `--color-surface` gives `bg-surface`,
-`text-surface`, `border-surface` — so switching theme is one `data-theme`
-attribute on `<html>`, written by `src/lib/theme.ts`.
+once per theme. An `@theme inline` block turns each into a Tailwind utility —
+`--color-surface` gives `bg-surface`, `text-surface`, `border-surface` — so
+changing the look is changing an attribute on `<html>`, never a class on a
+component.
 
 **Don't reach for a palette shade** (`bg-stone-900`, `text-amber-500`) in a
 component: use a token, and add one to `index.css` if none fits. The three
@@ -110,10 +148,46 @@ places that legitimately don't follow the theme — the board's own squares, the
 eval bar, and the classification badges in `lib/quality.ts` — say so in a
 comment where they are.
 
-The theme is chosen in the settings dialog (Light / System / Dark) and kept in
-`localStorage`; the backend stores nothing about it. Charts read their colours
-through `useChartTheme()`, because recharts takes colours as props rather than
-as classes.
+Three attributes on `<html>` decide the look, all written by `lib/theme.ts` and
+all kept in `localStorage` — the backend stores none of them:
+
+| Attribute | Values | Sets |
+| --- | --- | --- |
+| `data-theme` | `light`, `dark` | which block of values applies |
+| `data-palette` | `stone`, `slate`, `graphite` | the neutral ramp only |
+| `data-accent` | `amber`, `sky`, `emerald`, `violet`, `rose` | the accent tokens only |
+
+Palette and accent are independent on purpose: a palette block must never set
+an accent token, and vice versa, or the two pickers stop being separate
+choices. Each accent brings its own secondary (`--er-accent-2`) so the two
+colours on a chart can't end up a hue apart.
+
+All three are chosen in the settings dialog's Theme pane and apply on click.
+Charts read their colours through `useChartTheme()`, because recharts takes
+colours as props rather than as classes.
+
+Where a plot draws both, **the points are the primary accent and the line
+joining them is the secondary**: the points are measurements, the line is
+drawn. That is the trend charts and the sweep curve. The calibrated estimate
+uses the secondary too, being a figure derived from another one.
+
+Move classifications are the exception, and deliberately so: they come from
+`lib/quality.ts`, which pairs each label with its icon in
+`assets/icons/classification/` and with that icon's own fill colour. A blunder
+is the same red on the board, in the move list, on the eval chart and in the
+Progress pie because all four read that one table.
+
+### Getting games from chess.com
+
+*Get new* in the library rail downloads what chess.com has and the library
+doesn't. It re-downloads nothing: `chesscom.import_months` skips a month that
+is over and already read, requests everything else conditionally, and matches
+games it does receive against chess.com's permanent link before storing them.
+The sync loops because the server caps downloads per request and returns the
+months it didn't reach.
+
+Picking months by hand, and re-fetching games deleted from the library
+(`mode: 'refetch'`), are still classic-UI only.
 
 ## Not ported from the classic UI
 
@@ -121,7 +195,7 @@ These still work, at `/legacy/`, and are not duplicated here:
 
 - Play vs Maia3, and puzzles (own-mistakes and the Lichess database)
 - Batch analysis over many games
-- The chess.com import and collection/group management
+- Month-by-month chess.com picking, and collection/group management
 - The opening database explorer
 - Bulk delete, colour re-matching, and the per-engine UCI option editor
 

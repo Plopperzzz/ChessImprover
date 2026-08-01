@@ -39,10 +39,16 @@ play vs Maia, puzzles, batch runs, the chess.com import and the opening
 explorer. Both are served by the same process, off the same database: the
 React build at `/`, the classic UI at `/legacy/`.
 
-The React UI is a first pass, and what's wrong with it is written down in
-[`docs/web-ui-fixes.md`](docs/web-ui-fixes.md) — theming, variations, drag and
-animation, sound, and the settings dialog are all still to do. That file is
+What was wrong with the React UI's first pass is written down in
+[`docs/web-ui-fixes.md`](docs/web-ui-fixes.md), which is now largely worked
+through: theming with light/dark and pickable palettes, the five-pane settings
+dialog, the rebuilt Progress screen, move-quality icons, sounds, per-screen
+board and piece sets, and variations with drag and animation. That file is
 defects and polish; `docs/TODO.md` remains the feature list.
+
+Variations are in both front ends now, and the React one persists them: a line
+you play off the game is saved as you make it, redrawn when you come back, and
+deletable — taking any lines nested inside it with it.
 
 ### The four tabs
 
@@ -1089,8 +1095,14 @@ server serves the classic UI at `/` instead, so the build step is optional
 and nothing breaks if you skip it -- see [`web/README.md`](web/README.md).
 
 The classic UI is always available at `http://<server>:8000/legacy/`, and is
-still the only place Play vs Maia, puzzles, batch analysis, the chess.com
-import and the opening explorer live.
+still the only place Play vs Maia, puzzles, batch analysis, month-by-month
+chess.com picking and the opening explorer live.
+
+Boards, piece sets and sound sets are shared by both: they are stored per
+account, with an optional override per screen (`screen_prefs`), so a board
+chosen in one front end is the board the other draws. Sound sets are
+subdirectories of `assets/audio/` holding the same file names — drop another
+directory in beside `default/` and it appears in the picker.
 
 Re-run the `pip install -r requirements.txt` line after a `git pull` that adds
 a dependency. Downloading games from chess.com added `httpx`, and the server

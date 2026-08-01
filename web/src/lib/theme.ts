@@ -5,12 +5,43 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 /** What is actually on screen once `system` has been resolved. */
 export type ResolvedTheme = 'light' | 'dark';
 
+/** Which neutral ramp the surfaces and text come from. Defined for both
+ *  themes, so picking one is not picking a light or a dark look. */
+export type Palette = 'stone' | 'slate' | 'graphite';
+/** The highlight colour, chosen independently of the palette. */
+export type Accent = 'amber' | 'sky' | 'emerald' | 'violet' | 'rose';
+
 const THEME_KEY = 'engine-room:theme';
+const PALETTE_KEY = 'engine-room:palette';
+const ACCENT_KEY = 'engine-room:accent';
 
 export const THEME_MODES: { value: ThemeMode; label: string }[] = [
   { value: 'light', label: 'Light' },
   { value: 'system', label: 'System' },
   { value: 'dark', label: 'Dark' },
+];
+
+/** `swatch` is a panel colour and a text colour from the ramp, painted as a
+ *  split chip. One dark circle per palette would be three near-identical dots —
+ *  the difference between these is temperature, which only shows when a light
+ *  and a dark value from the same ramp sit against each other. */
+export const PALETTES: {
+  value: Palette;
+  label: string;
+  note: string;
+  swatch: [string, string];
+}[] = [
+  { value: 'stone', label: 'Stone', note: 'Warm grey', swatch: ['#1c1917', '#a8a29e'] },
+  { value: 'slate', label: 'Slate', note: 'Cool grey', swatch: ['#151b26', '#94a3b8'] },
+  { value: 'graphite', label: 'Graphite', note: 'Neutral grey', swatch: ['#181818', '#a3a3a3'] },
+];
+
+export const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
+  { value: 'amber', label: 'Amber', swatch: '#f59e0b' },
+  { value: 'sky', label: 'Sky', swatch: '#38bdf8' },
+  { value: 'emerald', label: 'Emerald', swatch: '#10b981' },
+  { value: 'violet', label: 'Violet', swatch: '#8b5cf6' },
+  { value: 'rose', label: 'Rose', swatch: '#f43f5e' },
 ];
 
 const prefersDark = () =>
@@ -21,26 +52,46 @@ export function storedMode(): ThemeMode {
   return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system';
 }
 
+export function storedPalette(): Palette {
+  const saved = localStorage.getItem(PALETTE_KEY);
+  return PALETTES.some((p) => p.value === saved) ? (saved as Palette) : 'stone';
+}
+
+/** Amber is the default deliberately — it is the look the app shipped with. */
+export function storedAccent(): Accent {
+  const saved = localStorage.getItem(ACCENT_KEY);
+  return ACCENTS.some((a) => a.value === saved) ? (saved as Accent) : 'amber';
+}
+
 export function resolve(mode: ThemeMode): ResolvedTheme {
   if (mode === 'system') return prefersDark() ? 'dark' : 'light';
   return mode;
 }
 
-/** Writes the attribute `index.css` keys its palette off. Exported because
- *  `main.tsx` calls it before the first render — doing it in an effect would
- *  paint the default theme first and flash. */
-export function applyTheme(mode: ThemeMode): ResolvedTheme {
+/** Writes the three attributes `index.css` keys its palette off. Exported
+ *  because `main.tsx` calls it before the first render — doing it in an effect
+ *  would paint the default look first and flash. */
+export function applyTheme(
+  mode: ThemeMode,
+  palette: Palette = storedPalette(),
+  accent: Accent = storedAccent(),
+): ResolvedTheme {
   const resolved = resolve(mode);
-  document.documentElement.dataset.theme = resolved;
+  const root = document.documentElement;
+  root.dataset.theme = resolved;
+  root.dataset.palette = palette;
+  root.dataset.accent = accent;
   return resolved;
 }
 
 /**
- * The single owner of the theme. `App` calls it once and passes the setter to
+ * The single owner of the look. `App` calls it once and passes the setters to
  * the settings dialog; everything else just reads the CSS tokens.
  */
 export function useTheme() {
   const [mode, setModeState] = useState<ThemeMode>(storedMode);
+  const [palette, setPaletteState] = useState<Palette>(storedPalette);
+  const [accent, setAccentState] = useState<Accent>(storedAccent);
   const [resolved, setResolved] = useState<ResolvedTheme>(() => resolve(storedMode()));
 
   const setMode = useCallback((next: ThemeMode) => {
@@ -48,20 +99,32 @@ export function useTheme() {
     setModeState(next);
   }, []);
 
-  useEffect(() => setResolved(applyTheme(mode)), [mode]);
+  const setPalette = useCallback((next: Palette) => {
+    localStorage.setItem(PALETTE_KEY, next);
+    setPaletteState(next);
+  }, []);
+
+  const setAccent = useCallback((next: Accent) => {
+    localStorage.setItem(ACCENT_KEY, next);
+    setAccentState(next);
+  }, []);
+
+  useEffect(() => setResolved(applyTheme(mode, palette, accent)), [mode, palette, accent]);
 
   // On `system`, the OS can change under us — at sunset, or when the user
   // flips it in another window.
   useEffect(() => {
     if (mode !== 'system') return;
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => setResolved(applyTheme('system'));
+    const onChange = () => setResolved(applyTheme('system', palette, accent));
     media.addEventListener('change', onChange);
     return () => media.removeEventListener('change', onChange);
-  }, [mode]);
+  }, [mode, palette, accent]);
 
-  return { mode, setMode, resolved };
+  return { mode, setMode, palette, setPalette, accent, setAccent, resolved };
 }
+
+export type ThemeState = ReturnType<typeof useTheme>;
 
 /** The chart tokens, as literal colours.
  *
@@ -109,7 +172,7 @@ export function useChartTheme(): ChartTheme {
     const observer = new MutationObserver(() => setTheme(readChartTheme()));
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['data-theme'],
+      attributeFilter: ['data-theme', 'data-palette', 'data-accent'],
     });
     return () => observer.disconnect();
   }, []);

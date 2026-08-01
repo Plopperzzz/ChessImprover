@@ -1,24 +1,19 @@
-import { useEffect, useRef } from 'react';
-import {
-  ChevronFirst,
-  ChevronLast,
-  ChevronLeft,
-  ChevronRight,
-  Gauge,
-  Loader2,
-  Sparkles,
-  XCircle,
-} from 'lucide-react';
+import { Fragment, useEffect, useRef } from 'react';
+import { Gauge, Loader2, Sparkles, Trash2, XCircle } from 'lucide-react';
 import type { AnalysisMove, MoveQuality } from '../../types';
 import type { Ply } from '../../lib/chess';
+import { ROOT_ID, type MoveTree, type TreeNode } from '../../lib/moveTree';
 import { QUALITY, QUALITY_ORDER, styleFor } from '../../lib/quality';
 import type { JobState } from '../../lib/useAnalysisJob';
 
 interface MoveListProps {
   plies: Ply[];
   moves: Map<number, AnalysisMove>;
-  currentPlyIndex: number;
-  onSelectPly: (index: number) => void;
+  /** The game as a tree: the mainline, and the lines played off it. */
+  tree: MoveTree;
+  currentNodeId: string;
+  onSelectNode: (nodeId: string) => void;
+  onDeleteVariation: (variationId: number) => void;
   white: string;
   black: string;
   job: JobState;
@@ -48,14 +43,14 @@ function SideSummary({ name, tally }: { name: string; tally: Map<MoveQuality, nu
       {shown.length === 0 ? (
         <div className="mt-1 font-mono text-[11px] text-fg-subtle">not analysed</div>
       ) : (
-        <div className="mt-1.5 flex flex-wrap gap-1">
+        <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1">
           {shown.map((q) => (
             <span
               key={q}
               title={QUALITY[q].label}
-              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${QUALITY[q].badge}`}
+              className="inline-flex items-center gap-1 font-mono text-[11px] text-fg-2"
             >
-              {QUALITY[q].symbol || QUALITY[q].label[0]}
+              <img src={QUALITY[q].icon} alt={QUALITY[q].label} className="h-4 w-4" />
               <span className="font-bold">{tally.get(q)}</span>
             </span>
           ))}
@@ -65,11 +60,94 @@ function SideSummary({ name, tally }: { name: string; tally: Map<MoveQuality, nu
   );
 }
 
+/** A variation, written the way a book would: `12… Nf6 13. O-O`, with the
+ *  move number repeated at the start because a line rarely begins on white's
+ *  move. Nested lines indent again. */
+function VariationLine({
+  tree,
+  headId,
+  currentNodeId,
+  onSelectNode,
+  onDeleteVariation,
+  depth,
+}: {
+  tree: MoveTree;
+  headId: string;
+  currentNodeId: string;
+  onSelectNode: (nodeId: string) => void;
+  onDeleteVariation: (variationId: number) => void;
+  depth: number;
+}) {
+  // The line runs until it forks or ends; a fork below it becomes its own
+  // indented line, which is how nesting draws itself.
+  const line: TreeNode[] = [];
+  const branches: string[] = [];
+  let node: TreeNode | undefined = tree.nodes[headId];
+  while (node) {
+    line.push(node);
+    branches.push(...node.children.slice(1));
+    node = node.children[0] ? tree.nodes[node.children[0]] : undefined;
+  }
+  const variationId = line[0]?.variationId ?? null;
+
+  return (
+    <div className={depth > 0 ? 'ml-3 border-l border-line pl-2' : ''}>
+      <div className="group/line flex flex-wrap items-center gap-x-1 gap-y-0.5 py-0.5">
+        {line.map((move, index) => {
+          const current = move.id === currentNodeId;
+          const showNumber = index === 0 || move.color === 'w';
+          return (
+            <button
+              key={move.id}
+              data-current={current}
+              onClick={() => onSelectNode(move.id)}
+              className={`rounded px-1 py-0.5 font-mono text-[11px] transition-colors ${
+                current ? 'bg-accent-strong/90 text-on-accent' : 'text-fg-muted hover:text-fg'
+              }`}
+            >
+              {showNumber && (
+                <span className="text-fg-subtle">
+                  {Math.floor((move.ply - 1) / 2) + 1}
+                  {move.color === 'w' ? '.' : '…'}{' '}
+                </span>
+              )}
+              {move.san}
+            </button>
+          );
+        })}
+        {variationId != null && (
+          <button
+            onClick={() => onDeleteVariation(variationId)}
+            title="Delete this variation"
+            aria-label="Delete this variation"
+            className="ml-1 rounded p-0.5 text-fg-faint opacity-0 transition-opacity group-hover/line:opacity-100 hover:text-danger-fg focus:opacity-100"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+      {branches.map((branchId) => (
+        <VariationLine
+          key={branchId}
+          tree={tree}
+          headId={branchId}
+          currentNodeId={currentNodeId}
+          onSelectNode={onSelectNode}
+          onDeleteVariation={onDeleteVariation}
+          depth={depth + 1}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function MoveList({
   plies,
   moves,
-  currentPlyIndex,
-  onSelectPly,
+  tree,
+  currentNodeId,
+  onSelectNode,
+  onDeleteVariation,
   white,
   black,
   job,
@@ -85,7 +163,7 @@ export function MoveList({
     listRef.current
       ?.querySelector('[data-current="true"]')
       ?.scrollIntoView({ block: 'nearest' });
-  }, [currentPlyIndex]);
+  }, [currentNodeId]);
 
   const rows: { moveNumber: number; white?: Ply; black?: Ply }[] = [];
   for (const ply of plies) {
@@ -98,28 +176,45 @@ export function MoveList({
     else row.black = ply;
   }
 
+  /** Lines that leave the mainline at this move pair, drawn under the row they
+   *  branch from — where a book would put them. `children[0]` is the mainline
+   *  continuing, so the branches are everything after it. */
+  const branchesAfter = (row: { white?: Ply; black?: Ply }): string[] => {
+    const out: string[] = [];
+    for (const ply of [row.white, row.black]) {
+      if (!ply) continue;
+      const node = tree.nodes[tree.mainlineIds[ply.ply - 1] ?? ''];
+      if (node) out.push(...node.children.slice(1));
+    }
+    // The root's branches -- a line played before the game's first move -- have
+    // no row to sit under, so the first row adopts them.
+    if (row === rows[0]) out.unshift(...(tree.nodes[ROOT_ID]?.children.slice(1) ?? []));
+    return out;
+  };
+
   const cell = (ply?: Ply) => {
     if (!ply) return <td className="px-2 py-1" />;
     const move = moves.get(ply.ply);
     const q = styleFor(move?.classification);
-    const current = ply.ply === currentPlyIndex;
+    const nodeId = tree.mainlineIds[ply.ply - 1] ?? ROOT_ID;
+    const current = nodeId === currentNodeId;
     return (
       <td className="p-0">
         <button
           data-current={current}
-          onClick={() => onSelectPly(ply.ply)}
+          onClick={() => onSelectNode(nodeId)}
           className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left font-mono text-xs transition-colors ${
             current ? 'bg-accent-strong/90 text-on-accent' : 'text-fg-2 hover:bg-surface-2'
           }`}
         >
           <span className="truncate">{ply.san}</span>
-          {q?.symbol && (
-            <span
+          {q && (
+            <img
+              src={q.icon}
+              alt={q.symbol || q.label}
               title={q.label}
-              className={`ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded px-0.5 text-[9px] font-bold ${q.badge}`}
-            >
-              {q.symbol}
-            </span>
+              className="ml-auto h-[25px] w-[25px] shrink-0"
+            />
           )}
         </button>
       </td>
@@ -153,45 +248,40 @@ export function MoveList({
         ) : (
           <table className="w-full table-fixed">
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.moveNumber}>
-                  <td className="w-9 py-1 pr-1 text-right font-mono text-[11px] text-fg-subtle">
-                    {row.moveNumber}.
-                  </td>
-                  {cell(row.white)}
-                  {cell(row.black)}
-                </tr>
-              ))}
+              {rows.map((row) => {
+                const branches = branchesAfter(row);
+                return (
+                  <Fragment key={row.moveNumber}>
+                    <tr>
+                      <td className="w-9 py-1 pr-1 text-right font-mono text-[11px] text-fg-subtle">
+                        {row.moveNumber}.
+                      </td>
+                      {cell(row.white)}
+                      {cell(row.black)}
+                    </tr>
+                    {branches.length > 0 && (
+                      <tr>
+                        <td colSpan={3} className="pb-1 pl-2">
+                          {branches.map((branchId) => (
+                            <VariationLine
+                              key={branchId}
+                              tree={tree}
+                              headId={branchId}
+                              currentNodeId={currentNodeId}
+                              onSelectNode={onSelectNode}
+                              onDeleteVariation={onDeleteVariation}
+                              depth={0}
+                            />
+                          ))}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         )}
-      </div>
-
-      <div className="mt-3 flex items-center justify-center gap-1 border-t border-line pt-3">
-        {[
-          { icon: <ChevronFirst className="h-4 w-4" />, to: 0, label: 'Start' },
-          {
-            icon: <ChevronLeft className="h-4 w-4" />,
-            to: Math.max(0, currentPlyIndex - 1),
-            label: 'Previous',
-          },
-          {
-            icon: <ChevronRight className="h-4 w-4" />,
-            to: Math.min(plies.length, currentPlyIndex + 1),
-            label: 'Next',
-          },
-          { icon: <ChevronLast className="h-4 w-4" />, to: plies.length, label: 'End' },
-        ].map((btn) => (
-          <button
-            key={btn.label}
-            title={btn.label}
-            disabled={plies.length === 0}
-            onClick={() => onSelectPly(btn.to)}
-            className="flex h-8 w-9 items-center justify-center rounded-lg bg-canvas text-fg-2 ring-1 ring-line hover:bg-surface-2 hover:text-fg disabled:opacity-40"
-          >
-            {btn.icon}
-          </button>
-        ))}
       </div>
 
       <div className="mt-3 space-y-2 border-t border-line pt-3">

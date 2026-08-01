@@ -21,6 +21,9 @@ interface EvalChartProps {
   onSelectPly: (index: number) => void;
   liveActive: boolean;
   engineLines: EngineLine[];
+  /** The lines on screen belong to the previous position — the engine hasn't
+   *  reported on this one yet (B13). */
+  linesStale: boolean;
   liveError: string | null;
 }
 
@@ -35,6 +38,7 @@ export function EvalChart({
   onSelectPly,
   liveActive,
   engineLines,
+  linesStale,
   liveError,
 }: EvalChartProps) {
   const chart = useChartTheme();
@@ -54,7 +58,10 @@ export function EvalChart({
   });
 
   const analysed = data.some((d) => d.cp != null);
-  const chartHeight = liveActive && engineLines.length > 0 ? 'h-36' : 'h-48 sm:h-56';
+  // Sized by whether the engine panel is *open*, not by whether it currently
+  // has lines in it: keying off the line count made the plot grow and shrink
+  // between every move while Stockfish started its next search.
+  const chartHeight = liveActive ? 'h-36' : 'h-48 sm:h-56';
 
   return (
     <div className="flex flex-col rounded-2xl border border-line bg-surface/90 p-4 text-fg shadow-xl">
@@ -159,15 +166,26 @@ export function EvalChart({
             <span className="text-[11px] font-semibold tracking-wider text-fg-muted uppercase">
               Live engine
             </span>
+            {linesStale && engineLines.length > 0 && (
+              <span className="font-mono text-[10px] text-fg-subtle">searching…</span>
+            )}
           </div>
           {liveError ? (
             <p className="rounded-lg bg-danger-surface px-3 py-2 text-[11px] text-danger-fg">
               {liveError}
             </p>
           ) : engineLines.length === 0 ? (
-            <p className="text-[11px] text-fg-subtle">Thinking…</p>
-          ) : (
+            // Only before the first search of a session lands. The rows are
+            // drawn empty rather than skipped so the card is already the height
+            // it will be, and nothing below it moves when they fill.
             <div className="space-y-1">
+              {Array.from({ length: 3 }, (_, i) => (
+                <div key={i} className="h-[26px] rounded-lg bg-canvas/40" />
+              ))}
+              <p className="pt-0.5 text-[11px] text-fg-subtle">Thinking…</p>
+            </div>
+          ) : (
+            <div className={`space-y-1 transition-opacity ${linesStale ? 'opacity-60' : ''}`}>
               {engineLines.map((line) => (
                 <div
                   key={line.rank}

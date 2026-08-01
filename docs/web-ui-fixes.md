@@ -17,9 +17,9 @@ The whole UI is about 2,400 lines under `web/src`:
 | --- | --- |
 | `App.tsx` | auth gate, screen routing, settings modal wiring, theme state |
 | `components/Header.tsx` | top bar, nav, the two icon buttons |
-| `components/SettingsModal.tsx` | the single flat settings dialog |
+| `components/SettingsModal.tsx` | the five-pane settings dialog |
 | `components/ThemeToggle.tsx` | the light/system/dark segmented control |
-| `lib/theme.ts` | theme mode, persistence, and the chart colours |
+| `lib/theme.ts` | theme mode, palette, accent, and the chart colours |
 | `components/Board.tsx` | squares, pieces, highlights, quality badge |
 | `components/GameAnalysis/AnalysisScreen.tsx` | all analysis state, board/eval-bar layout |
 | `components/GameAnalysis/MoveList.tsx` | move table, nav buttons, the analysis buttons |
@@ -31,7 +31,10 @@ The whole UI is about 2,400 lines under `web/src`:
 | `lib/api.ts` | every `/api` call, typed |
 | `lib/useAnalysisJob.ts` | job start/cancel/attach over `/ws/analysis/{id}` |
 | `lib/useLiveEval.ts` | `/ws/live-eval` session |
-| `lib/quality.ts` | the classification → colour/symbol table |
+| `lib/moveTree.ts` | the game as a tree: mainline, branches, saved lines |
+| `lib/pieces.ts` | piece identity across positions, which is what animates |
+| `lib/sound.ts` | the sounds a board makes |
+| `lib/quality.ts` | the classification → icon/colour table |
 | `lib/chess.ts` | PGN parsing, FEN walking, eval formatting |
 
 Assets that already exist on disk and are not yet used:
@@ -44,22 +47,26 @@ Assets that already exist on disk and are not yet used:
   and listed by `GET /api/board-images`.
 - `assets/sets/{name}/{w,b}{k,q,r,b,n,p}.png` — piece sets, listed by
   `GET /api/asset-sets` with `has_board` / `has_pieces` flags.
-- `assets/audio/*.{mp3,webm}` — currently one flat directory, no sets.
+- ~~`assets/audio/*.{mp3,webm}` — currently one flat directory, no sets.~~
+  Now `assets/audio/<set>/`, listed by `GET /api/audio-sets`.
 
 ---
 
 ## A. Global: header, theming, settings
 
-### A1. The signed-in account isn't editable
+### A1. The signed-in account isn't editable — **done**
 
-The header shows `display_name` and nothing more. The backend already has
-`PATCH /api/auth/accounts/{id}` (rename, which also re-matches every game's
-`your_color` against the new names) and `DELETE /api/auth/accounts/{id}`.
-The classic UI exposes both from its login screen; the React one exposes
-neither. `lib/api.ts` has no wrapper for either yet.
+Both are in the settings dialog's **Account** pane: rename (display name and
+username together, one `PATCH`) and delete, behind a confirmation that names
+what goes with it — the game, analysis and puzzle counts come from
+`GET /api/auth/accounts`. Deleting the account you are signed into logs you
+out server-side, so the app drops the user it was holding and falls back to the
+picker.
 
-Renaming is not cosmetic here — it is the documented fix for a library that
-imported as `unassigned`, so it needs to be reachable.
+The rename reports what it moved. `reassign_your_colors` returns
+`{changed, assigned, unassigned}` rather than a count, and the panel says which:
+"13 games re-matched: 13 now yours, 0 left unassigned" is the answer to "did
+that fix my library", where a bare "13" is not.
 
 ### A2. No light/dark selector — **done**
 
@@ -89,48 +96,71 @@ Recharts takes colours as props rather than classes, so `useChartTheme()` reads
 the chart tokens back off `<html>` and re-reads them when `data-theme` changes.
 That keeps one definition of every colour in `index.css`.
 
-Still open, and now cheap: **predefined palettes** and the **accent choice**
-(A6a). The accent tokens are already separate from the neutrals, so a palette
-is another pair of blocks keyed on a second attribute — see the comment at the
-top of `index.css`. The secondary accent B15 wants exists as `--er-accent-2`.
+Palettes and the accent choice landed with A6a, as `data-palette` and
+`data-accent` blocks alongside these. The secondary accent B15 wants is
+`--er-accent-2`, and every accent defines one.
 
-### A3–A6. Settings dialog needs a left-hand sub-menu
+### A3–A6. Settings dialog needs a left-hand sub-menu — **done**
 
-`SettingsModal.tsx` is one flat scroll with three `<section>`s. It should be a
-two-pane dialog — sub-menu on the left, panel on the right — with:
+Five panes, in the order listed: **Theme** (the default), **Analysis engine**,
+**Maia engine**, **Board & pieces**, **Account**. The rail is a column on a
+desktop and a horizontal scroller on a phone, where 12rem of sub-menu would
+have taken half the width.
 
-- **Theme** (the default pane)
-- **Analysis engine** — the Stockfish half of the settings row
-- **Maia engine** — the Maia half, including the Elo sweep grid
-- **Board & pieces** — see A7
-- **Account** — A1
+The backend constraint is respected: one `EngineSettings` draft object is
+shared by every pane and sent in a single `PUT`, and the profile fields are
+collected into one patch alongside it. Nothing PUTs per pane.
 
-Note the backend constraint: `PUT /api/settings` takes the **whole**
-`EngineSettings` model and resets any field left out. Splitting one dialog
-into several panes must not turn into several partial PUTs. `api.saveSettings`
-already documents this; keep a single draft object across all panes and send it
-once.
+Theme, palette and accent are deliberately outside that: they are browser
+settings the server never sees, and they apply on click rather than on Save,
+because the point of picking a colour is watching it land. The footer says so.
 
-### A6a. Theme content
+**Board & pieces** holds the account defaults, A7's per-screen overrides and
+the sound settings.
 
-- Predefined palettes, each defined for both light and dark, rather than free
-  colour pickers.
-- A separate accent-colour choice within the palette. **Keep the current
-  amber/orange as the default** — it's the look the user asked to preserve.
-- A *secondary* accent is also needed, because item B12 calls for it.
+### A6a. Theme content — **done**
 
-### A7. Global board/piece/audio defaults, overridable per screen
+Three palettes — **Stone** (warm, the default), **Slate** (cool), **Graphite**
+(neutral) — each defined for both light and dark, and five accents — **Amber**
+(the default, unchanged), Sky, Emerald, Violet, Rose. They are two independent
+choices: `data-palette` sets only neutral tokens and `data-accent` only accent
+ones, so no combination can leave a token undefined.
 
-Right now `user.board_set` / `user.piece_set` are global and there is no
-per-screen override at all. Wanted: a global default, overridden
-independently on Game Analysis, Puzzles and Play vs Maia — a different board,
-piece set and sound set per screen.
+Each accent carries its own **secondary** (`--er-accent-2`), which is what B15
+and the second chart series read. It travels with the accent rather than being
+a third picker, because the pair has to stay distinguishable — a secondary
+chosen freely could land one hue away from the primary and make two chart
+series look like one.
 
-The backend today stores exactly one `board_set` / `piece_set` / `asset_set`
-per user (`auth.USER_FIELDS`, `PUT /api/settings/profile`), so **this needs a
-schema change** — either three more columns per screen or a small
-`screen_prefs` table. Worth designing once with sound sets (B11) included,
-since they want the same treatment.
+Palette swatches are split chips: a panel colour against a text colour from the
+same ramp. Three dark circles would have been three identical dots — what
+separates these ramps is temperature, which only shows when two values from one
+of them sit against each other.
+
+### A7. Global board/piece/audio defaults, overridable per screen — **done**
+
+A `screen_prefs` table, not nine more columns on `users`. Three screens times
+three kinds of asset is nine today, and every screen or asset kind added later
+would be another migration on the table that holds accounts. `NULL` means
+"follow the default" and is the normal state — a row exists only for a screen
+someone has actually overridden, and a row that ends up overriding nothing is
+deleted rather than left behind, so *reset* leaves no trace.
+
+`GET /api/settings/screens` returns three things: the account `defaults`, the
+per-screen overrides, and the `effective` resolution of the two. Effective is
+computed server-side because both front ends draw the same boards, and a
+resolution rule that lives in one browser is one the other gets subtly wrong.
+`PUT /api/settings/screens/{screen}` takes a patch, where an omitted field
+means "leave alone" and `""` means "back to the default" — a distinction the UI
+has to be able to make, and the reason it isn't spelled as a JSON null.
+
+The Board & pieces pane is now defaults on top and a screen × kind grid under
+it. Puzzles and Play vs Maia are still classic-UI screens, and the preferences
+apply there too, since both front ends read them.
+
+`backend/sims/screen_prefs_check.py` covers the absence rules, which are the
+part that rots quietly: a screen following the default has to keep following it
+when the default changes later.
 
 ---
 
@@ -163,86 +193,148 @@ needs its own, containing:
   hard edge.
 - sound set (B11)
 
-### B3–B5. Pieces can't be moved, no variations, no dragging
+### B3–B5. Pieces can't be moved, no variations, no dragging — **done**
 
-These are one piece of work, not three.
+One piece of work, as the item says, and it came apart in the order the item
+lists.
 
-`AnalysisScreen` passes `interactive={false}` to the board — deliberately,
-because there was nowhere to put a move that leaves the mainline. So:
+**Variations.** `lib/moveTree.ts` is modelled on the classic UI's
+`frontend/js/explorer.js` and keeps its two load-bearing rules: `children[0]`
+is the move that continues the line, so stepping forward never wanders into a
+branch by accident; and `mainline` is fixed when a node is made and never
+changes, which is what makes "delete this variation" a safe button — the game
+as played can be added to but not edited.
 
-- **Variations** are the blocker. Playing a move that isn't the game's next
-  move should branch; the branch should show in the move table, be
-  deletable, and be persistable to the database and still deletable after.
-  The classic UI has a full move tree already (see the README's variation
-  notes and `frontend/js/app.js`) — read how it models the tree before
-  designing a second one. Persisting them needs a new table and endpoints;
-  nothing stores variations today.
-- **Dragging**: pointer-events drag, piece snapping to the cursor centre on
-  press, `cursor: grab` over pieces and `grabbing` while held. Currently
-  click-to-select-then-click-to-move only.
-- **Animation**: pieces teleport. Moves need to tween between squares, which
-  means the board must key pieces by identity across renders rather than
-  rebuilding the grid from the FEN each time — worth knowing before starting,
-  because `Board.tsx` currently does exactly the latter.
+The new part is that lines have identities on the server. A row in `variations`
+is a *whole line* rather than a move — one row per line, because a line is what
+a person means by "that variation", and because the common case (play four
+moves, keep them) is then one insert. `parent_id` is what makes nesting work,
+and the self-referencing cascade is what makes deleting a line take its nested
+ones with it, which the classic UI does by hand in `deleteVariation`.
 
-### B6–B8. Move-quality icons
+Playing a move that is already in the tree navigates to it rather than
+branching — otherwise stepping through the game by hand slowly fills the table
+with duplicates of itself. Anything else branches and is written immediately: a
+variation you have to remember to save is a variation you lose. At the tip of a
+saved line the move extends that row; anywhere else it starts a new one.
 
-Replace the text glyphs in `lib/quality.ts` (`!!`, `?`, `★` …) with the SVGs
-in `assets/icons/classification/`. The file names already match the labels
-one-to-one, so this is a mapping change, not new art.
+Every line is replayed server-side before it is stored, and a line that doesn't
+play out is refused with the move that failed. A stored variation that cannot
+be reached is worse than none: months later it is indistinguishable from a bug
+in the board.
 
-- On the board: positioned **on** the top-right corner of the square (i.e.
-  straddling it, not inset), **35×35**.
-- In the move table: the same icons at **25×25**.
+**Dragging.** Pointer events, the piece following the cursor's centre,
+`cursor: grab` over a piece you can move and `grabbing` while held. A press
+that doesn't travel is still a click, so click-to-move works through the same
+handlers. Promotion is asked rather than assumed — chess.js reports four moves
+to the same square, and defaulting to a queen quietly loses games where a
+knight was the point.
 
-Keep `lib/quality.ts` as the single source — the chart, board and table all
-read from it, which is what stops them drifting.
+**Animation.** The board no longer rebuilds its grid from the FEN. The squares
+are a grid; the pieces are a layer of positioned elements above it, each with
+an identity carried between positions by `lib/pieces.ts` — matching by square,
+by the move that was played, and by the rook a castling king drags along with
+it. A promotion keeps the piece's identity and changes its type, so the pawn
+*becomes* a queen instead of one vanishing as another appears. Because the
+element survives, moving it is a change of coordinates, and the tween is CSS's
+problem. Jumping to an arbitrary ply deliberately passes no move, so unrelated
+positions snap rather than sliding pieces along paths they never took.
 
-### B9–B10. Audio
+### B6–B8. Move-quality icons — **done**
 
-Nothing is wired up: the React UI plays no sound at all. The files exist but
-sit in one flat `assets/audio/`. To make sets selectable they need
-subdirectories — `assets/audio/default/`, `assets/audio/space/`, … — with the
-same file names inside each, and a listing endpoint alongside
-`/api/asset-sets`.
+`lib/quality.ts` now carries an `icon` per classification, derived from the
+label because the file names match one-to-one. The board draws it at 35×35
+centred **on** the square's top-right corner, the move table at 25×25, and the
+per-side summary at 16×16 beside its count.
 
-Moving the existing files into `default/` will break the classic UI's audio
-paths unless it's updated in the same change; check `frontend/js/` before
-moving anything.
+Two things worth knowing:
 
-### B11. Nav buttons belong under the board
+- **At the board's edges the icon tucks inside.** The board clips to its
+  rounded border, so an icon straddling the top rank or the h file would be
+  sliced in half; those two edges hold it in instead. Everywhere else it
+  straddles as asked.
+- **35px is capped at 52% of a square.** On a phone-sized board 35px spans
+  most of three squares.
 
-The four step buttons live at the bottom of `MoveList.tsx`. They should sit
-directly beneath the board in `AnalysisScreen.tsx`. Keyboard nav (arrows,
-Home/End) is already wired and should keep working.
+The colours in `quality.ts` were re-taken from the icons' own fills, so the
+chart dots and the Progress pie now match the icon beside them rather than
+being a second opinion about what colour a blunder is. The Tailwind `badge`
+classes are gone — nothing rendered them once the icons landed.
 
-### B12. Game library table
+### B9–B10. Audio — **done**
 
-- Fixed height and internally scrollable. It currently grows with the flex
-  column, so a long library pushes the upload controls off-screen.
-- Needs a **database selection**. Ambiguous as written — most likely the
-  `collections` groups the backend already has (`GET /api/collections`), which
-  the panel currently exposes only as a filter dropdown. Confirm before
-  building.
-- **One bullet in the original request was cut off mid-sentence** ("the game
-  library …"). Ask before assuming.
+The files moved into `assets/audio/default/` (moved, not copied — it is the
+same set), `GET /api/audio-sets` lists the subdirectories, and `lib/sound.ts`
+plays them. A set has to carry the four board sounds to be offered at all; the
+puzzle and clock sounds are optional and fall back to the default set's copies,
+so a set can restyle a piece landing without having to ship a puzzle jingle.
 
-### B13. Engine lines must not collapse between moves
+The React UI now makes a sound when you step onto a move — read off the SAN, so
+a capture, a check, a castle and a promotion each sound like themselves, and a
+brilliant move gets its own. Never while an analysis job is running, which
+walks a hundred positions and would be unbearable. Mute is the `sound` key in
+`localStorage`, which is the one the classic UI already used, so muting in
+either UI mutes both.
 
-`useLiveEval` clears `lines` to `[]` on every new position, so the panel
-empties and the card shrinks while Stockfish starts the next search — the
-whole column jumps. At minimum reserve the height; ideally keep the previous
-lines on screen and swap them for the new ones as they arrive.
+The classic UI was updated in the same change, as the item asks: it plays from
+`assets/audio/<set>/` and follows the account's `sound_set`, so a set chosen in
+either front end is heard in both.
 
-The sequence-number machinery to do this properly is already there — the hook
-knows which position each `info` belongs to, so it can hold the old set until
-the first line of the new one lands rather than clearing on request.
+### B11. Nav buttons belong under the board — **done**
 
-### B14. Sweep card: reveal detail on hover
+Moved into `AnalysisScreen`, directly under the board and its name plate.
+Keyboard nav is untouched and still works.
 
-The estimate cards in `EloSweepPanel.tsx` always show the full list of the
-fit's caveats, which is a wall of text. It should appear only when hovering
-that player's card.
+### B12. Game library table — **done**
+
+- ~~Fixed height and internally scrollable.~~ **Done.** The cause was one
+  level up: `App.tsx` sized the page with `min-h-screen`, so the row holding
+  the two columns had no height to divide and both grew instead of scrolling
+  inside themselves. It is `h-screen` now, the rail is full height on a
+  desktop, and the list is capped at 55vh in the stacked layout where there is
+  no row height to share. The upload controls stay on screen either way.
+- ~~Needs a **database selection**.~~ **Dropped** — asked, and the group
+  dropdown as it stands is what was wanted.
+- ~~The bullet cut off mid-sentence.~~ It was **download only the new games
+  from chess.com**, which is now the *Get new* button under Upload PGN.
+
+The backend already had the whole of it (`chesscom.import_months`), and the
+point of the button is that it doesn't re-download: a month that is over and
+already read is not requested at all, everything else is requested
+conditionally so an unchanged archive answers 304 with no body, and a game
+already held is matched on chess.com's permanent link (`games.external_id`).
+Pressing it on an up-to-date library is one archive lookup and one import call
+that adds nothing.
+
+The sync loops because the server caps *downloads* per request and hands back
+the months it didn't reach — five years of archive is a handful of requests
+rather than one that outlives its own timeout. The username defaults to your
+display name (it is the name games are matched against already) and is stored
+under `cc:username`, the same key the classic UI uses, so the two agree about
+who you are.
+
+Month-by-month picking, and re-fetching games deleted from the library, stay
+in the classic UI — the rail links across to it.
+
+### B13. Engine lines must not collapse between moves — **done**
+
+Both halves of it. `useLiveEval` no longer clears on request: it tracks which
+sequence the lines on screen belong to, holds them while the next search
+starts, and replaces them when that search's first `info` arrives — which is
+what the sequence number was already there to tell it. The held set is flagged
+`stale`, and the panel dims it slightly and says "searching…".
+
+The chart above was also sized by whether there were lines *yet*, so it grew
+and shrank between moves; it now keys off whether the engine panel is open.
+Before the first search of a session lands, three empty rows hold the space the
+lines will take.
+
+### B14. Sweep card: reveal detail on hover — **done**
+
+The card shows a one-line count — "3 things the fit is unsure about" — and the
+list itself slides over the card on hover. Done with `group-hover` rather than
+state, which gets keyboard focus for free: the card is focusable when it has
+caveats, so tabbing to it reveals them too.
 
 ### B15. Sweep card is missing the calibrated estimate
 
@@ -349,16 +441,22 @@ says so in place rather than drawing an empty grid.
    new endpoint worth writing once.~~ **Done**, and C2 and C3 with them — they
    are the same screen, and leaving them out would have meant touching it
    twice.
-4. **A3–A6** — the settings dialog, once there is a theme pane to put in it.
-5. **B6–B8, B11, B12, B13, B14** — analysis-screen polish, all independent.
-6. **A7 + B9–B10** — per-screen preferences and sound sets together, since
-   they want the same storage.
-7. **B3–B5** — variations, dragging and animation last. It is the largest item
-   by a distance and it changes how `Board.tsx` is structured.
+4. ~~**A3–A6** — the settings dialog, once there is a theme pane to put in it.~~
+   **Done**, with A6a's palettes and A1's account pane in it.
+5. ~~**B6–B8, B11, B12, B13, B14** — analysis-screen polish, all independent.~~
+   **Done.**
+6. ~~**A7 + B9–B10** — per-screen preferences and sound sets together, since
+   they want the same storage.~~ **Done**, and they did want the same storage:
+   `sound_set` is a column beside `board_set`/`piece_set` in both places.
+7. ~~**B3–B5** — variations, dragging and animation last. It is the largest item
+   by a distance and it changes how `Board.tsx` is structured.~~ **Done**, and
+   it did: `Board.tsx` is a square grid with a piece layer over it now.
 
 ## Needs a decision before starting
 
-- **B12**: what "database selection" means — collections, or something else.
-- **B12**: the truncated bullet in the original request.
-- **A7**: schema shape for per-screen preferences (extra columns vs. a table).
+- ~~**B12**: what "database selection" means~~ — answered: no change wanted.
+- ~~**B12**: the truncated bullet~~ — answered: the chess.com "get new games"
+  button, now built.
+- ~~**A7**: schema shape for per-screen preferences~~ — decided: a
+  `screen_prefs` table, for the reasons under A7 above.
 - **B15**: what to show when one game can't support a calibrated estimate.
