@@ -135,16 +135,19 @@ since they want the same treatment.
 
 ## B. Game Analysis
 
-### B1. Last-move highlight paints over the piece
+### B1. Last-move highlight paints over the piece — **done**
 
-Real bug, and the cause is specific: in `Board.tsx` the highlight, hint,
+Real bug, and the cause was specific: in `Board.tsx` the highlight, hint,
 selection and target-dot layers are all `position: absolute`, while the piece
-`<img>` is static in-flow. Positioned elements paint above non-positioned
+`<img>` was static in-flow. Positioned elements paint above non-positioned
 siblings in the same stacking context regardless of DOM order, so the piece
-ends up behind its own highlight.
+ended up behind its own highlight.
 
-Fix: give the piece `relative z-10` (and keep the quality badge above it at
-`z-20`, which it already is).
+The piece — both the `<img>` and the unicode fallback — now carries
+`relative z-10`. Two neighbours had to move up with it, because they were only
+above the piece by virtue of being positioned at all: the rank/file
+coordinates, and the target ring drawn around a capturable piece, both now at
+`z-20`. The quality badge was already there.
 
 ### B2. Board settings dialog is just the global one
 
@@ -318,7 +321,7 @@ range.
 1. ~~**A2 (theming)** first, and properly. A6, B2's eval-bar restyle and B15's
    secondary accent all depend on a palette existing.~~ **Done** — the tokens
    A6, B2 and B15 were waiting on are in `index.css`.
-2. **B1** — a one-line fix, no reason to wait.
+2. ~~**B1** — a one-line fix, no reason to wait.~~ **Done.**
 3. **C1, C4–C8** — the Progress screen is self-contained, and C5/C6 share one
    new endpoint worth writing once.
 4. **A3–A6** — the settings dialog, once there is a theme pane to put in it.

@@ -1030,6 +1030,28 @@ your build advertises.
 
 ## Running it
 
+From the repo root, in two steps:
+
+```
+python build.py     # backend virtualenv + dependencies, then the React UI
+python run.py       # http://0.0.0.0:8000
+```
+
+`build.py` is also what to run after a `git pull`: it re-installs
+`backend/requirements.txt` (a missing new dependency stops the server booting)
+and rebuilds `web/dist`, which is not in git — until it is rebuilt, the server
+keeps serving the previously built React UI, or the classic one if it has never
+been built. `--backend` and `--web` do one half; `--clean` throws away
+`web/node_modules` first, which is the fix for the npm native-binding bug
+below.
+
+`run.py` uses the interpreter in `backend/.venv` whether or not one is active
+in your shell, and takes `--port`, `--host`, `--reload` and
+`--stockfish <path>`. Both scripts are standard-library Python and work the
+same on Windows and Linux.
+
+The manual equivalent, if you'd rather see every step:
+
 **Linux / macOS:**
 
 ```bash
