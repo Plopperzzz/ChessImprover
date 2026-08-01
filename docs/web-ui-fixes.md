@@ -127,10 +127,11 @@ choices: `data-palette` sets only neutral tokens and `data-accent` only accent
 ones, so no combination can leave a token undefined.
 
 Each accent carries its own **secondary** (`--er-accent-2`), which is what B15
-and the second chart series read. It travels with the accent rather than being
-a third picker, because the pair has to stay distinguishable — a secondary
-chosen freely could land one hue away from the primary and make two chart
-series look like one.
+reads. It travels with the accent rather than being a third picker, because
+the pair has to stay distinguishable — a secondary chosen freely could land
+one hue away from the primary and make two things that mean different things
+look like one. It is *not* a chart's second series: D2 draws a plot's line as
+a lighter tint of its own dots.
 
 Palette swatches are split chips: a panel colour against a text colour from the
 same ramp. Three dark circles would have been three identical dots — what
@@ -291,8 +292,9 @@ Keyboard nav is untouched and still works.
   level up: `App.tsx` sized the page with `min-h-screen`, so the row holding
   the two columns had no height to divide and both grew instead of scrolling
   inside themselves. It is `h-screen` now, the rail is full height on a
-  desktop, and the list is capped at 55vh in the stacked layout where there is
-  no row height to share. The upload controls stay on screen either way.
+  desktop, and on a phone the panel is a full-screen sheet (D3), which is a
+  fixed height for the same reason. The upload controls stay on screen either
+  way.
 - ~~Needs a **database selection**.~~ **Dropped** — asked, and the group
   dropdown as it stands is what was wanted.
 - ~~The bullet cut off mid-sentence.~~ It was **download only the new games
@@ -431,6 +433,115 @@ says so in place rather than drawing an empty grid.
 
 ---
 
+## D. Second pass: the phone, the ultrawide, and what A–C left behind
+
+A–C were written from a review at one window size. This round is the same
+screens looked at on a phone and on a monitor twice as wide as it is tall,
+plus four things the earlier passes got subtly wrong.
+
+### D1. Focus leaves the board on every step — **done**
+
+Stepping through a game with the buttons, or clicking a move in the list, left
+focus on the control that was pressed. The next Space re-fired it, and on a
+phone the browser scrolled to the button rather than to the board that had
+just changed. The board wrapper is `tabIndex={-1}` now — out of the tab order,
+but able to hold focus — and everything that moves the board puts focus back
+on it with `preventScroll`. Keyboard nav is unchanged; it was always a window
+listener and never depended on what had focus.
+
+The move list was the other half of it: its "keep the current move in view"
+used `scrollIntoView`, which walks up every ancestor, so on a narrow screen it
+dragged the page down to the move list. It scrolls its own container and
+nothing else now.
+
+### D2. The line in a plot is a lighter tint of its dots — **done**
+
+B15 put the *line* in the secondary accent and the *dots* in the primary,
+which read as two quantities on one chart. One hue at two lightnesses instead:
+the dots keep the series colour and the line is `lighten()`ed
+(`lib/theme.ts`). Applies to both trend charts and to the sweep curve in
+`EloSweepPanel`. `--er-accent-2` stays what it was, for the calibrated
+estimate and the engine's hint on the board — it is just no longer a chart's
+second series.
+
+### D3. The library doesn't collapse properly on a phone — **done**
+
+Collapsed, it became a 44px vertical rail below the board; open, a block you
+had to scroll past. Both are desktop shapes. Below `lg` it is a full-screen
+sheet with an X, and what's left when it's closed is a floating LIBRARY button
+over the board. It opens closed on a phone, since opening over the board would
+hide the thing the screen is for. The rail, the column and everything about
+the desktop layout are untouched.
+
+### D4. Estimated Elo on every row of the library — **done**
+
+The estimate only appeared on games swept *this session*, because it was
+client-side state. `GET /api/games` carries `estimated_elo` now — your side's
+number from the sweep, by the same precedence `load_for_game` uses, so a row
+and the open game can't disagree. A game with no sweep reports null and the
+row draws dashes, which keeps every row the same height and the numbers in a
+column. `backend/sims/library_estimates_check.py` covers whose estimate it is
+and which sweep it comes from.
+
+### D5. The board is bounded by the short side of the screen — **done**
+
+Half of an ultrawide is far taller than the screen, and the board — being
+square — grew to fill it, so the plates and the step buttons ended up below
+the fold. The board column is capped at `min(100%, calc(100svh - 15rem))`,
+15rem being what the two name plates and the step buttons take. On a phone the
+width binds instead and the cap does nothing.
+
+### D6. No eval bar on a phone — **done**
+
+It is 20px of a screen the board wants all of, and with the engine on, the
+lines above the board print the same number. Hidden below `lg`; the board
+takes the full width.
+
+### D7. Time control filter on the trend — **done**
+
+The same speeds the library filters by, offered from the same facets endpoint,
+passed to `/api/trend` — which has always accepted a `LibraryFilter`. Rapid
+and bullet are different games and a trend pooled over both is two lines drawn
+as one. The filter is on the chart only: the pooled estimate above it is your
+strength, not a per-speed figure.
+
+### D8. The delete-variation button is invisible — **done**
+
+It was `opacity-0` until hover, over a 12px icon — hover doesn't exist on a
+touch screen, and on a desktop you had to find it by guessing. Always drawn
+now, muted, in a 24px target.
+
+### D9. The header gets out of the way on a phone — **done**
+
+It is a sixth of a phone's screen on a page whose point is a board. Below
+`lg` it leaves upwards as you scroll down and comes back the moment you scroll
+up, as a negative margin of its own measured height so the content moves up
+into the space rather than sliding under it. It stopped being `sticky` in the
+same change: the app shell doesn't scroll, so sticking meant nothing except
+pinning the header in place against exactly this.
+
+Scroll is watched in the capture phase, because every screen scrolls inside
+its own panel rather than moving the window and scroll events don't bubble.
+
+### D10. The eval plot goes above the board on a phone — **done**
+
+With the engine lines still at the bottom of it, so the evaluation of the
+position and the lines that produced it are the first thing on the screen and
+the board is directly under them. The right-hand column is `display: contents`
+below `xl`, which is what lets the plot be ordered above the board while the
+move list stays below it, without duplicating any of the three panels.
+
+### D11. …and short enough that all four fit at once — **done**
+
+The plot is `h-20` on a phone with the engine open and `h-28` without, against
+`h-36`/`h-56` on a desktop, and the card's padding tightens with it. On a
+390×844 phone that puts the plot, three engine lines, the board and the step
+buttons on screen together once the header has hidden (D9). A phone shorter
+than about 700px can't fit all four — the board alone is its full width — and
+scrolls instead.
+
+---
+
 ## Suggested order
 
 1. ~~**A2 (theming)** first, and properly. A6, B2's eval-bar restyle and B15's
@@ -451,6 +562,9 @@ says so in place rather than drawing an empty grid.
 7. ~~**B3–B5** — variations, dragging and animation last. It is the largest item
    by a distance and it changes how `Board.tsx` is structured.~~ **Done**, and
    it did: `Board.tsx` is a square grid with a piece layer over it now.
+8. ~~**D1–D11** — a second pass over the same screens at sizes the first review
+   never opened them at.~~ **Done.** D3, D6, D9–D11 are one layout between
+   them and were done together; D1, D2, D4, D5, D7 and D8 are independent.
 
 ## Needs a decision before starting
 

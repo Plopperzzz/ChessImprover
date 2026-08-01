@@ -179,6 +179,36 @@ def load_for_game(user_id: int, game_id: int) -> dict | None:
     }
 
 
+def estimated_elos(user_id: int) -> dict[int, dict]:
+    """{game_id: results} for every game that has a saved Elo sweep, so the
+    library can show the estimate on every row rather than only on the game
+    that happens to be open.
+
+    Same precedence as `load_for_game`: a full run outranks a bare sweep, and
+    the most recent wins after that. One query for the whole library -- the
+    picker draws hundreds of rows and cannot afford a lookup per row.
+    """
+    with db_cursor() as conn:
+        rows = conn.execute(
+            """SELECT game_id, results_json FROM run_games
+               WHERE user_id = ? AND results_json IS NOT NULL
+               ORDER BY game_id, (mode = 'full') DESC, analyzed_at DESC, id DESC""",
+            (user_id,),
+        ).fetchall()
+    out: dict[int, dict] = {}
+    for row in rows:
+        # Ordered so the first row seen for a game is the one to keep.
+        if row["game_id"] in out:
+            continue
+        try:
+            results = json.loads(row["results_json"])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(results, dict):
+            out[row["game_id"]] = results
+    return out
+
+
 def analyzed_game_ids(user_id: int) -> dict[int, str]:
     """{game_id: mode} for games with a saved analysis, so the picker can mark
     them without a request per row. The most complete mode a game has is the

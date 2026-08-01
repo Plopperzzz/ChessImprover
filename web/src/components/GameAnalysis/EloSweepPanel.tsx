@@ -11,7 +11,7 @@ import {
   ZAxis,
 } from 'recharts';
 import type { EloEstimate, SweepResults } from '../../types';
-import { useChartTheme } from '../../lib/theme';
+import { lighten, useChartTheme } from '../../lib/theme';
 
 interface EloSweepPanelProps {
   results: SweepResults | null;
@@ -173,14 +173,14 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
               name === 'fit' ? 'fitted' : 'observed',
             ]}
           />
-          {/* Fitted curve in the secondary accent, observations in the
-              primary below: the same split the trend charts use — measured
-              points in the accent, the drawn line joining them in its
-              secondary. */}
+          {/* Fitted curve in a lighter tint of the accent the observations
+              below are drawn in: the same split the trend charts use —
+              measured points in full strength, the drawn line joining them
+              lightened, so both read as the one series. */}
           <Line
             type="monotone"
             dataKey="fit"
-            stroke={chart.accent2}
+            stroke={lighten(chart.accent)}
             strokeWidth={2}
             dot={false}
             connectNulls

@@ -14,7 +14,7 @@ import {
 } from 'recharts';
 import * as api from '../../lib/api';
 import { QUALITY, QUALITY_ORDER } from '../../lib/quality';
-import { useChartTheme } from '../../lib/theme';
+import { lighten, useChartTheme } from '../../lib/theme';
 import { InfoPopover } from '../InfoPopover';
 
 /** The buckets `trend.GRANULARITIES` accepts. Quarterly used to be offered
@@ -50,6 +50,20 @@ const WINDOWS: Record<string, { value: string; label: string }[]> = {
 
 const GRANULARITY_KEY = 'engine-room:trend-granularity';
 const WINDOW_KEY = 'engine-room:trend-window';
+const SPEED_KEY = 'engine-room:trend-speed';
+
+/** The time controls `/api/trend` will accept, spelled the way the library
+ *  panel spells them (`pgn_parse.FILTER_SPEEDS`). Which of them are *offered*
+ *  comes from the facets — a bullet button is noise to someone who has never
+ *  played one. */
+const SPEED_LABEL: Record<string, string> = {
+  bullet: 'Bullet',
+  blitz: 'Blitz',
+  rapid: 'Rapid',
+  classical: 'Classical',
+  daily: 'Daily',
+  unknown: 'Unknown',
+};
 
 function storedGranularity(): string {
   const saved = localStorage.getItem(GRANULARITY_KEY);
@@ -59,6 +73,14 @@ function storedGranularity(): string {
 function storedWindow(granularity: string): string {
   const saved = localStorage.getItem(WINDOW_KEY);
   return WINDOWS[granularity].some((w) => w.value === saved) ? (saved as string) : 'all';
+}
+
+/** '' is every time control, and is what an unrecognised or missing value
+ *  falls back to — a stored 'bullet' from a library that has since been
+ *  replaced would otherwise plot an empty chart. */
+function storedSpeed(): string {
+  const saved = localStorage.getItem(SPEED_KEY);
+  return saved && saved in SPEED_LABEL ? saved : '';
 }
 
 function Stat({
@@ -116,16 +138,16 @@ function Picker({
  *  whichever of the two had the smaller range — an estimate that moved 300
  *  points and a rating that moved 40 are both worth seeing move.
  *
- *  Points and line are coloured separately, and the split is the house rule
- *  everywhere a plot draws both: the **points** are the primary accent, because
- *  they are the measurements, and the **line** joining them is the secondary,
- *  because it is drawn rather than measured. The sweep curve in
- *  `EloSweepPanel` reads the same way round. */
+ *  Points and line are coloured separately: the **points** carry the series'
+ *  colour, because they are the measurements, and the **line** joining them is
+ *  a lighter tint of that same colour, because it is drawn rather than
+ *  measured. One hue per series — the line used to be the secondary accent,
+ *  which read as a second quantity. The sweep curve in `EloSweepPanel` reads
+ *  the same way round. */
 function TrendChart({
   data,
   dataKey,
   name,
-  lineColour,
   dotColour,
   palette,
   showAxis,
@@ -133,12 +155,12 @@ function TrendChart({
   data: { label: string; estimated: number | null; actual: number | null }[];
   dataKey: 'estimated' | 'actual';
   name: string;
-  lineColour: string;
   dotColour: string;
   palette: ReturnType<typeof useChartTheme>;
   showAxis: boolean;
 }) {
   const empty = data.every((row) => row[dataKey] == null);
+  const lineColour = lighten(dotColour);
   return (
     <div className="h-32 w-full sm:h-36">
       {empty ? (
@@ -271,6 +293,8 @@ export function ProgressScreen() {
   const palette = useChartTheme();
   const [granularity, setGranularity] = useState(storedGranularity);
   const [window_, setWindow] = useState(() => storedWindow(storedGranularity()));
+  const [speed, setSpeed] = useState(storedSpeed);
+  const [facets, setFacets] = useState<api.Facets | null>(null);
   const [strength, setStrength] = useState<api.Strength | null>(null);
   const [trend, setTrend] = useState<api.Trend | null>(null);
   const [quality, setQuality] = useState<api.MoveQualityCounts | null>(null);
@@ -281,6 +305,12 @@ export function ProgressScreen() {
   // would have reset the current screen without App.tsx's localStorage.
   useEffect(() => localStorage.setItem(GRANULARITY_KEY, granularity), [granularity]);
   useEffect(() => localStorage.setItem(WINDOW_KEY, window_), [window_]);
+  useEffect(() => localStorage.setItem(SPEED_KEY, speed), [speed]);
+
+  // Which time controls this library actually has games in, for the filter.
+  useEffect(() => {
+    api.gameFacets().then(setFacets).catch(() => setFacets(null));
+  }, []);
 
   /** Changing the bucket size snaps the window to one this bucket has an
    *  option for: '26 weeks' has no meaning on a yearly axis. */
@@ -293,7 +323,14 @@ export function ProgressScreen() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([api.strength(), api.trend({ granularity, window: window_ }), api.moveQuality()])
+    // The time control filters the *trend* only. The pooled estimate above is
+    // your strength, which isn't a per-speed thing; the chart is where asking
+    // "and what about only my rapid games?" makes sense.
+    Promise.all([
+      api.strength(),
+      api.trend({ granularity, window: window_, speed: speed || null }),
+      api.moveQuality(),
+    ])
       .then(([s, t, q]) => {
         if (cancelled) return;
         setStrength(s);
@@ -305,7 +342,15 @@ export function ProgressScreen() {
     return () => {
       cancelled = true;
     };
-  }, [granularity, window_]);
+  }, [granularity, window_, speed]);
+
+  const speedOptions = [
+    { value: '', label: 'All' },
+    ...(facets?.speeds ?? []).map((s) => ({
+      value: s.speed,
+      label: SPEED_LABEL[s.speed] ?? s.speed,
+    })),
+  ];
 
   const you = strength?.you;
   const calibration = strength?.calibration;
@@ -483,6 +528,15 @@ export function ProgressScreen() {
                   )}
                 </h3>
                 <div className="flex flex-wrap items-center gap-3">
+                  {/* D7: the same time controls the game library filters by.
+                      Rapid and bullet are different games — a trend pooled
+                      over both is two lines drawn as one. */}
+                  {speedOptions.length > 1 && (
+                    <>
+                      <Picker options={speedOptions} value={speed} onChange={setSpeed} />
+                      <span className="h-4 w-px bg-line" aria-hidden />
+                    </>
+                  )}
                   {/* C2: the window the backend has always accepted, offered
                       in the unit the buckets are drawn in. */}
                   <Picker options={WINDOWS[granularity]} value={window_} onChange={setWindow} />
@@ -496,8 +550,10 @@ export function ProgressScreen() {
               </div>
 
               {chart.length === 0 ? (
-                <div className="flex h-64 items-center justify-center text-center text-xs text-fg-subtle">
-                  Nothing to plot yet — run a Full analysis on a few games first.
+                <div className="flex h-64 items-center justify-center px-6 text-center text-xs text-fg-subtle">
+                  {speed
+                    ? `No swept ${(SPEED_LABEL[speed] ?? speed).toLowerCase()} games in this window — the sweep has run on other time controls.`
+                    : 'Nothing to plot yet — run a Full analysis on a few games first.'}
                 </div>
               ) : (
                 <div className="mt-4 space-y-3">
@@ -509,7 +565,6 @@ export function ProgressScreen() {
                       data={chart}
                       dataKey="estimated"
                       name="Maia estimate"
-                      lineColour={palette.accent2}
                       dotColour={palette.accent}
                       palette={palette}
                       showAxis={false}
@@ -522,12 +577,11 @@ export function ProgressScreen() {
                     {/* The rating your provider published is the reference
                         the estimate is read against, not a second accent
                         series — it takes the neutral plot colour so the two
-                        charts don't end up drawn in the same two colours. */}
+                        charts don't end up drawn in the same colour. */}
                     <TrendChart
                       data={chart}
                       dataKey="actual"
                       name="Actual rating"
-                      lineColour={palette.line}
                       dotColour={palette.axis}
                       palette={palette}
                       showAxis

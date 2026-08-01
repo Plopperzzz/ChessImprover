@@ -57,7 +57,10 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
   const [runs, setRuns] = useState<Run[]>([]);
   const [runId, setRunId] = useState<number | null>(null);
   const [filter, setFilter] = useState<api.GameFilter>({});
-  const [libraryCollapsed, setLibraryCollapsed] = useState(false);
+  // Open beside the board is the desktop default it has always been; on a
+  // phone the panel is a full-screen sheet, and opening on top of the board
+  // would hide the thing the screen is for.
+  const [libraryCollapsed, setLibraryCollapsed] = useState(() => window.innerWidth < 1024);
 
   const [game, setGame] = useState<GameDetail | null>(null);
   const [plies, setPlies] = useState<Ply[]>([]);
@@ -237,6 +240,22 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
   const engineReady = Boolean(settings?.stockfish_binary);
   const maiaReady = Boolean(settings?.maia_binary);
 
+  /**
+   * Put focus back where the game is (B11 follow-up).
+   *
+   * Every control that moves the board — the four step buttons, a move in the
+   * list, a click on the eval plot — is a button, and a clicked button keeps
+   * focus. That left the board looking at a control instead of at itself: the
+   * next Space or Enter re-fired whatever was last pressed, and on a phone the
+   * browser scrolled to the focused button rather than to the position that
+   * had just changed. `preventScroll` because the point is *not* to move the
+   * page; the board is already where the reader is looking.
+   */
+  const boardRef = useRef<HTMLDivElement>(null);
+  const focusBoard = useCallback(() => {
+    boardRef.current?.focus({ preventScroll: true });
+  }, []);
+
   /** Stepping follows the line you are on: `children[0]` is the move that
    *  continues it, so walking forward never wanders into a variation by
    *  accident. Same rule the classic UI's tree keeps. */
@@ -251,6 +270,24 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
   const toMainlineEnd = useCallback(() => {
     setNodeId(tree.mainlineIds[tree.mainlineIds.length - 1] ?? ROOT_ID);
   }, [tree]);
+
+  /** A step taken by pressing something, as against by the keyboard: the same
+   *  move, and then focus back on the board. */
+  const step = useCallback(
+    (go: () => void) => () => {
+      go();
+      focusBoard();
+    },
+    [focusBoard],
+  );
+
+  const selectNode = useCallback(
+    (id: string) => {
+      setNodeId(id);
+      focusBoard();
+    },
+    [focusBoard],
+  );
 
   const keyNav = useCallback(
     (event: KeyboardEvent) => {
@@ -304,8 +341,8 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
 
   /** Where a ply on the mainline lives in the tree, for the eval chart. */
   const goToPly = useCallback(
-    (ply: number) => setNodeId(ply <= 0 ? ROOT_ID : (tree.mainlineIds[ply - 1] ?? ROOT_ID)),
-    [tree],
+    (ply: number) => selectNode(ply <= 0 ? ROOT_ID : (tree.mainlineIds[ply - 1] ?? ROOT_ID)),
+    [tree, selectNode],
   );
 
   /**
@@ -328,7 +365,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
 
       const existing = childFor(tree, nodeId, from, to);
       if (existing) {
-        setNodeId(existing.id);
+        selectNode(existing.id);
         return;
       }
 
@@ -366,7 +403,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
         },
       );
       setTree(grown.tree);
-      setNodeId(grown.node.id);
+      selectNode(grown.node.id);
       setVariationError(null);
 
       try {
@@ -400,7 +437,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
         );
       }
     },
-    [game, job.state.running, tree, nodeId, plies],
+    [game, job.state.running, tree, nodeId, plies, selectNode],
   );
 
   const dropVariation = useCallback(
@@ -438,7 +475,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
 
   return (
     <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
-      <div className="thin-scroll min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className="thin-scroll min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
         {missingEngine && (
           <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs text-fg">
             <span>
@@ -457,8 +494,26 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
           </div>
         )}
 
-        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-12">
-          <div className="flex flex-col xl:col-span-6">
+        {/* Two columns from `xl`, one below it. The single column is not just
+            the two stacked: the eval plot comes *first* there, above the board
+            (D10), which is why the second column is `display: contents` on a
+            narrow screen — its children become items of this flex column and
+            can be ordered individually, instead of the whole column having to
+            move as one block. */}
+        <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-6 xl:flex-row xl:items-start">
+          <div
+            className="order-2 flex w-full min-w-0 flex-col xl:order-none xl:flex-1"
+            style={{
+              // The board is square, so its width is also its height. On an
+              // ultrawide monitor half the page is far taller than the screen,
+              // and the board has to be bounded by the *short* side of the
+              // viewport instead: 15rem is what the plates above and below it
+              // and the step buttons under those take. `min()` keeps this from
+              // ever widening the column on a phone, where 100svh is the long
+              // side and the width is what binds.
+              maxWidth: 'min(100%, calc(100svh - 15rem))',
+            }}
+          >
             <div className="flex items-center justify-between gap-2 pb-1">
               {plate(topName, topElo, 'top')}
               <div className="flex items-center gap-1.5">
@@ -497,7 +552,10 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
             </div>
 
             <div className="flex items-stretch gap-2">
-              <div className="flex w-5 shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-canvas">
+              {/* No bar on a phone: it is 20px of a screen the board wants all
+                  of, and the number it draws is the same number the engine
+                  lines above the board already print (D6). */}
+              <div className="hidden w-5 shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-canvas lg:flex">
                 <div className="py-1 text-center font-mono text-[9px] font-bold text-fg-muted">
                   {formatEval(barCp)}
                 </div>
@@ -512,7 +570,10 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
                 </div>
               </div>
 
-              <div className="min-w-0 flex-1">
+              {/* Focusable, so there is somewhere for focus to *be* that isn't
+                  a button that moves the board. Never tabbed to: -1 keeps it
+                  out of the tab order while still accepting `focus()`. */}
+              <div ref={boardRef} tabIndex={-1} className="min-w-0 flex-1 outline-none">
                 <Board
                   fen={boardFen}
                   flipped={flipped}
@@ -554,7 +615,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
                   title={btn.label}
                   aria-label={btn.label}
                   disabled={plies.length === 0}
-                  onClick={btn.go}
+                  onClick={step(btn.go)}
                   className="flex h-9 w-11 items-center justify-center rounded-lg border border-line bg-surface text-fg-2 transition-colors hover:bg-surface-2 hover:text-fg disabled:opacity-40"
                 >
                   {btn.icon}
@@ -575,42 +636,48 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
             )}
           </div>
 
-          <div className="flex min-w-0 flex-col gap-6 xl:col-span-6">
-            <EvalChart
-              plies={plies}
-              moves={moves}
-              currentPlyIndex={plyIndex}
-              onSelectPly={goToPly}
-              liveActive={liveActive && !job.state.running}
-              engineLines={live.lines}
-              linesStale={live.stale}
-              liveError={live.error}
-            />
+          <div className="contents xl:flex xl:min-w-0 xl:flex-1 xl:flex-col xl:gap-6">
+            <div className="order-1 min-w-0 xl:order-none">
+              <EvalChart
+                plies={plies}
+                moves={moves}
+                currentPlyIndex={plyIndex}
+                onSelectPly={goToPly}
+                liveActive={liveActive && !job.state.running}
+                engineLines={live.lines}
+                linesStale={live.stale}
+                liveError={live.error}
+              />
+            </div>
 
-            <MoveList
-              plies={plies}
-              moves={moves}
-              tree={tree}
-              currentNodeId={nodeId}
-              onSelectNode={setNodeId}
-              onDeleteVariation={dropVariation}
-              white={whiteName}
-              black={blackName}
-              job={job.state}
-              disabled={!game}
-              savedMode={savedMode}
-              onRunFull={() => game && job.start('full', game.id, runId)}
-              onRunQuick={() => game && job.start('quick', game.id, runId)}
-              onCancel={() => void job.cancel()}
-            />
+            <div className="order-3 min-w-0 xl:order-none">
+              <MoveList
+                plies={plies}
+                moves={moves}
+                tree={tree}
+                currentNodeId={nodeId}
+                onSelectNode={selectNode}
+                onDeleteVariation={dropVariation}
+                white={whiteName}
+                black={blackName}
+                job={job.state}
+                disabled={!game}
+                savedMode={savedMode}
+                onRunFull={() => game && job.start('full', game.id, runId)}
+                onRunQuick={() => game && job.start('quick', game.id, runId)}
+                onCancel={() => void job.cancel()}
+              />
+            </div>
 
-            <EloSweepPanel
-              results={sweep}
-              modelNote={modelNote}
-              yourColor={yourSide(game?.your_color)}
-              whiteName={whiteName}
-              blackName={blackName}
-            />
+            <div className="order-4 min-w-0 xl:order-none">
+              <EloSweepPanel
+                results={sweep}
+                modelNote={modelNote}
+                yourColor={yourSide(game?.your_color)}
+                whiteName={whiteName}
+                blackName={blackName}
+              />
+            </div>
           </div>
         </div>
       </div>

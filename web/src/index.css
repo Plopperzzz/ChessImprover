@@ -200,9 +200,13 @@
 /* --- accents -------------------------------------------------------------
  *
  * Amber is the default and lives in the two blocks above. Each accent carries
- * its own secondary (`--er-accent-2`): it is the *other* colour on a chart and
- * the calibrated estimate's, so it has to stay distinguishable from whichever
- * primary it is paired with rather than being one hue rotation away from it.
+ * its own secondary (`--er-accent-2`): the calibrated estimate's colour, and
+ * the engine's own marks on a board it isn't playing on, so it has to stay
+ * distinguishable from whichever primary it is paired with rather than being
+ * one hue rotation away from it. A chart's second *series* is not what it is
+ * for — a plot's line and its dots are one hue at two lightnesses
+ * (`lib/theme.ts`'s `lighten`), so a second colour there would say there were
+ * two quantities on screen.
  *
  * Light-theme values are a step darker than dark-theme ones throughout, so an
  * accent fill still carries white text on a white page.

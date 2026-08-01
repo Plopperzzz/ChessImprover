@@ -12,7 +12,7 @@ from .pgn_parse import (
     parse_games_from_text,
     reassign_your_colors,
 )
-from .runs import analyzed_game_ids
+from .runs import analyzed_game_ids, estimated_elos
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 
@@ -174,9 +174,23 @@ def list_games(filters: LibraryFilter = Depends(library_filter),
         ):
             membership.setdefault(row["game_id"], []).append(row["collection_id"])
     # One lookup for the whole list rather than a request per row, so the
-    # picker can mark which games already have a saved analysis.
+    # picker can mark which games already have a saved analysis, and show the
+    # Elo the sweep estimated for your side without opening the game first.
     analysed = analyzed_game_ids(user["id"])
+    sweeps = estimated_elos(user["id"])
+
+    def estimate_for(row) -> int | None:
+        results = sweeps.get(row["id"])
+        side = row["your_color"]
+        if not results or side not in ("w", "b"):
+            return None
+        value = (results.get(side) or {}).get("estimate")
+        return int(value) if isinstance(value, (int, float)) else None
+
     return [{**dict(r), "analyzed": analysed.get(r["id"]),
+             # None means "no sweep has been run", which the picker draws as a
+             # placeholder rather than leaving the row a different height.
+             "estimated_elo": estimate_for(r),
              "collection_ids": membership.get(r["id"], [])} for r in rows]
 
 

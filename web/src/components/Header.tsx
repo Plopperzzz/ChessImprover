@@ -1,3 +1,4 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { BarChart3, Bot, LayoutDashboard, LogOut, Puzzle, Settings, ShieldCheck } from 'lucide-react';
 import type { ScreenType, User } from '../types';
 
@@ -16,6 +17,54 @@ const NAV: { id: ScreenType; label: string; icon: React.ReactNode }[] = [
   { id: 'puzzles', label: 'Puzzles', icon: <Puzzle className="h-4 w-4" /> },
 ];
 
+/** Below `lg` the header takes a sixth of a phone's screen, on a page whose
+ *  point is a board and the moves beside it. This is the usual answer: it
+ *  leaves upwards as you read down and comes back the moment you scroll up.
+ *
+ *  Scroll events don't bubble, so this listens in the capture phase instead —
+ *  every screen scrolls inside its own panel rather than moving the window,
+ *  and the header has no way of knowing which panel that is. */
+function useHideOnScroll(): boolean {
+  const [hidden, setHidden] = useState(false);
+
+  useEffect(() => {
+    const narrow = window.matchMedia('(max-width: 1023px)');
+    // Per scroller, because more than one can be scrolled on a screen and
+    // their positions have nothing to do with each other.
+    const lastTop = new WeakMap<EventTarget, number>();
+
+    const onScroll = (event: Event) => {
+      const target = event.target;
+      if (!target) return;
+      const top =
+        target === document
+          ? window.scrollY
+          : ((target as HTMLElement).scrollTop ?? 0);
+      const previous = lastTop.get(target) ?? 0;
+      lastTop.set(target, top);
+      if (!narrow.matches) return;
+      const delta = top - previous;
+      // A few pixels of wobble — a tap that nudges the list, momentum settling
+      // — is not a direction, and flickering the header is worse than leaving
+      // it where it is.
+      if (Math.abs(delta) < 6) return;
+      // Near the top there is nothing to gain by hiding, and hiding there is
+      // what makes a header feel like it's fighting you.
+      setHidden(delta > 0 && top > 64);
+    };
+
+    const onWidthChange = () => setHidden(false);
+    window.addEventListener('scroll', onScroll, true);
+    narrow.addEventListener('change', onWidthChange);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      narrow.removeEventListener('change', onWidthChange);
+    };
+  }, []);
+
+  return hidden;
+}
+
 export function Header({
   currentScreen,
   onSelectScreen,
@@ -23,8 +72,34 @@ export function Header({
   onLogout,
   user,
 }: HeaderProps) {
+  const hidden = useHideOnScroll();
+  const ref = useRef<HTMLElement>(null);
+  const [height, setHeight] = useState(0);
+
+  // Its own height, so hiding it is a negative margin of exactly that much:
+  // the header leaves the flex column rather than sliding over the content and
+  // leaving a band of empty page behind it. Measured rather than assumed —
+  // the mobile nav row makes it a different height on a phone.
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => setHeight(element.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  // Deliberately not `sticky`: the app shell doesn't scroll — each screen
+  // scrolls inside itself — so sticking meant nothing, except that it pinned
+  // the header to the top of the shell's scrollport and so survived the
+  // negative margin that is supposed to take it away.
   return (
-    <header className="sticky top-0 z-40 border-b border-line/80 bg-canvas/95 text-fg backdrop-blur-md">
+    <header
+      ref={ref}
+      style={{ marginTop: hidden && height ? -height : 0 }}
+      className="z-40 shrink-0 border-b border-line/80 bg-canvas/95 text-fg backdrop-blur-md transition-[margin-top] duration-200 ease-out"
+    >
       <div className="mx-auto flex h-16 max-w-[1800px] items-center justify-between gap-4 px-4 sm:px-6">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-accent-strong to-accent-deep shadow-md ring-1 ring-accent/30">

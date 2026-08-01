@@ -116,13 +116,16 @@ function VariationLine({
           );
         })}
         {variationId != null && (
+          // Always drawn, not revealed on hover: hover doesn't exist on a
+          // touch screen, and an invisible control on a 12px target was one
+          // people had to find by guessing where it was.
           <button
             onClick={() => onDeleteVariation(variationId)}
             title="Delete this variation"
             aria-label="Delete this variation"
-            className="ml-1 rounded p-0.5 text-fg-faint opacity-0 transition-opacity group-hover/line:opacity-100 hover:text-danger-fg focus:opacity-100"
+            className="ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-fg-muted transition-colors hover:bg-danger-surface hover:text-danger-fg focus-visible:bg-danger-surface focus-visible:text-danger-fg"
           >
-            <Trash2 className="h-3 w-3" />
+            <Trash2 className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
@@ -159,10 +162,19 @@ export function MoveList({
 }: MoveListProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Scrolls the list, and only the list. `scrollIntoView` walks up the
+  // ancestors too, so stepping through a game on a narrow screen dragged the
+  // whole page down to the move list and took the board off screen.
   useEffect(() => {
-    listRef.current
-      ?.querySelector('[data-current="true"]')
-      ?.scrollIntoView({ block: 'nearest' });
+    const list = listRef.current;
+    const current = list?.querySelector<HTMLElement>('[data-current="true"]');
+    if (!list || !current) return;
+    const listBox = list.getBoundingClientRect();
+    const moveBox = current.getBoundingClientRect();
+    if (moveBox.top < listBox.top) list.scrollTop -= listBox.top - moveBox.top;
+    else if (moveBox.bottom > listBox.bottom) {
+      list.scrollTop += moveBox.bottom - listBox.bottom;
+    }
   }, [currentNodeId]);
 
   const rows: { moveNumber: number; white?: Ply; black?: Ply }[] = [];
