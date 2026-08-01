@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Database, Download, Square } from 'lucide-react';
 import * as api from '../../lib/api';
 import type { LichessImportStatus } from '../../types';
+import { CollapsibleCard } from '../CollapsibleCard';
 
 type Status = LichessImportStatus;
 
@@ -88,12 +89,21 @@ export function LichessImportPanel({ onImported }: { onImported: () => void }) {
       : null;
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-4">
-      <div className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-fg-2 uppercase">
-        <Database className="h-4 w-4 text-accent" />
-        Lichess puzzle database
-      </div>
-
+    <CollapsibleCard
+      title="Lichess puzzle database"
+      icon={<Database className="h-4 w-4 text-accent" />}
+      // Folded, the one thing worth knowing is whether there is anything in
+      // it -- and, while an import is going, that it is still going.
+      summary={
+        running
+          ? `importing — ${running.rows_kept.toLocaleString()} kept`
+          : status?.puzzles
+            ? `${status.puzzles.toLocaleString()} imported`
+            : 'nothing imported yet'
+      }
+      storageKey="engine-room:lichess-import-open"
+    >
+    <div className="p-4">
       <p className="mb-3 text-[11px] leading-relaxed text-fg-subtle">
         Several million puzzles, each with motifs and a rating measured against real
         solvers. Importing all of it takes a while and about a gigabyte, so the filters
@@ -215,5 +225,6 @@ export function LichessImportPanel({ onImported }: { onImported: () => void }) {
 
       {error && <p className="mt-2 text-[11px] text-danger-fg">{error}</p>}
     </div>
+    </CollapsibleCard>
   );
 }

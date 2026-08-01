@@ -1,5 +1,6 @@
-import { TrendingDown, TrendingUp } from 'lucide-react';
+import { BarChart3, TrendingDown, TrendingUp } from 'lucide-react';
 import type { PuzzleProgress, PuzzleRatingResult } from '../../types';
+import { CollapsibleCard } from '../CollapsibleCard';
 
 interface PuzzleRatingProps {
   progress: PuzzleProgress | null;
@@ -81,11 +82,13 @@ export function PuzzleThemeProgress({ progress }: { progress: PuzzleProgress | n
   const top = Math.max(...themes.map((t) => t.rating), 1);
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-3">
-      <div className="mb-2 text-xs font-semibold tracking-wide text-fg-2 uppercase">
-        Your motifs
-      </div>
-      <div className="flex flex-col gap-1.5">
+    <CollapsibleCard
+      title="Your motifs"
+      icon={<BarChart3 className="h-4 w-4 text-accent" />}
+      summary={`${themes.length} rated`}
+      storageKey="engine-room:puzzle-progress-open"
+    >
+      <div className="flex flex-col gap-1.5 p-3">
         {themes.map((theme) => (
           <div key={theme.theme} className="flex items-center gap-2 text-[11px]">
             <span className="w-28 shrink-0 truncate text-fg-2" title={theme.theme}>
@@ -105,6 +108,6 @@ export function PuzzleThemeProgress({ progress }: { progress: PuzzleProgress | n
           </div>
         ))}
       </div>
-    </div>
+    </CollapsibleCard>
   );
 }

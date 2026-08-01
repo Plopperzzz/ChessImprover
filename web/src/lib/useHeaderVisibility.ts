@@ -6,6 +6,17 @@ import { NARROW } from './media';
  *  hidden, and it must not be read back as "the reader wants it again". */
 const PIN_MS = 800;
 
+/** What the header is worth, when it can't be measured. Only reached before
+ *  the bar has rendered, which is also before there is anything to scroll. */
+const ASSUMED_HEADER_HEIGHT = 120;
+
+/** Its real height — unchanged while it is hidden, since it leaves by taking a
+ *  negative margin rather than by collapsing. */
+function headerHeight(): number {
+  const bar = document.querySelector('header');
+  return bar ? bar.getBoundingClientRect().height : ASSUMED_HEADER_HEIGHT;
+}
+
 export interface HeaderVisibility {
   hidden: boolean;
   /**
@@ -59,9 +70,40 @@ export function useHeaderVisibility(): HeaderVisibility {
       // — is not a direction, and flickering the header is worse than leaving
       // it where it is.
       if (Math.abs(delta) < 6) return;
+      if (delta < 0) {
+        setHidden(false);
+        return;
+      }
       // Near the top there is nothing to gain by hiding, and hiding there is
       // what makes a header feel like it's fighting you.
-      setHidden(delta > 0 && top > 64);
+      if (top <= 64) {
+        setHidden(false);
+        return;
+      }
+      /**
+       * ...and not when hiding would move the page by itself.
+       *
+       * The header leaves by taking a negative margin, so hiding it hands its
+       * height back to the scroller and *shortens the scroll range by the same
+       * amount*. Within that distance of the bottom the position no longer
+       * exists and the browser clamps it — which arrives as a scroll upwards,
+       * which brings the header back, which lengthens the range again, which
+       * lets you scroll down again. On a screen with only a couple of hundred
+       * pixels of travel (the Puzzles tab, on a phone) that loop never
+       * settles: the page visibly fights being scrolled to the bottom.
+       *
+       * Requiring room for the whole header below the current position is
+       * exactly the condition for the clamp not to happen.
+       */
+      const scroller =
+        target === document
+          ? document.scrollingElement
+          : (target as HTMLElement);
+      if (scroller) {
+        const remaining = scroller.scrollHeight - scroller.clientHeight - top;
+        if (remaining <= headerHeight()) return;
+      }
+      setHidden(true);
     };
 
     const onWidthChange = () => setHidden(false);

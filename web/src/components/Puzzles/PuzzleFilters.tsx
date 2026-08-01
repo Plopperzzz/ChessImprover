@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronDown, ShieldAlert, Swords } from 'lucide-react';
+import { ShieldAlert, Swords, Tags } from 'lucide-react';
 import * as api from '../../lib/api';
 import type { PuzzleKind, PuzzleSource, PuzzleStats, ThemeGroup } from '../../types';
+import { CollapsibleCard } from '../CollapsibleCard';
 
 interface PuzzleFiltersProps {
   source: PuzzleSource;
@@ -52,7 +53,6 @@ export function PuzzleFilters({
 }: PuzzleFiltersProps) {
   const [groups, setGroups] = useState<ThemeGroup[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     api
@@ -84,9 +84,9 @@ export function PuzzleFilters({
   const total = groups.reduce((n, group) => n + group.themes.length, 0);
 
   return (
-    <div className="rounded-xl border border-line bg-surface">
+    <>
       {source === 'own' && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-line p-3">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3">
           {(Object.keys(KIND_LABELS) as PuzzleKind[]).map((kind) => {
             const on = kinds.includes(kind);
             const count = stats?.by_kind?.[kind];
@@ -113,23 +113,13 @@ export function PuzzleFilters({
         </div>
       )}
 
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-semibold tracking-wide text-fg-2 uppercase"
+      <CollapsibleCard
+        title="Motifs"
+        icon={<Tags className="h-4 w-4 text-accent" />}
+        summary={themes.length ? `${themes.length} chosen` : 'all'}
+        storageKey={`engine-room:puzzle-motifs-open:${source}`}
       >
-        <span>
-          Motifs{' '}
-          <span className="font-normal text-fg-subtle normal-case">
-            {themes.length ? `${themes.length} chosen` : 'all'}
-          </span>
-        </span>
-        <ChevronDown
-          className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-
-      {open && (
-        <div className="max-h-72 overflow-y-auto border-t border-line p-3 thin-scroll">
+        <div className="max-h-72 overflow-y-auto p-3 thin-scroll">
           <div className="mb-2 flex items-center justify-between gap-2">
             <button
               onClick={() => onChangeThemes([])}
@@ -201,7 +191,7 @@ export function PuzzleFilters({
             </div>
           ))}
         </div>
-      )}
-    </div>
+      </CollapsibleCard>
+    </>
   );
 }
