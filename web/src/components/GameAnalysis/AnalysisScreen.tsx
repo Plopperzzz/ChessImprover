@@ -439,6 +439,7 @@ export function AnalysisScreen({ user, settings, onOpenSettings }: AnalysisScree
         estimates={estimates}
         collapsed={libraryCollapsed}
         onToggleCollapsed={() => setLibraryCollapsed((v) => !v)}
+        user={user}
       />
     </main>
   );

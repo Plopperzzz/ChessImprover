@@ -238,7 +238,7 @@ moving anything.
 Moved into `AnalysisScreen`, directly under the board and its name plate.
 Keyboard nav is untouched and still works.
 
-### B12. Game library table — **first bullet done**
+### B12. Game library table — **done**
 
 - ~~Fixed height and internally scrollable.~~ **Done.** The cause was one
   level up: `App.tsx` sized the page with `min-h-screen`, so the row holding
@@ -246,12 +246,28 @@ Keyboard nav is untouched and still works.
   inside themselves. It is `h-screen` now, the rail is full height on a
   desktop, and the list is capped at 55vh in the stacked layout where there is
   no row height to share. The upload controls stay on screen either way.
-- Needs a **database selection**. Still ambiguous — most likely the
-  `collections` groups the backend already has (`GET /api/collections`), which
-  the panel currently exposes only as a filter dropdown. **Waiting on an
-  answer.**
-- **One bullet in the original request was cut off mid-sentence** ("the game
-  library …"). **Waiting on an answer.**
+- ~~Needs a **database selection**.~~ **Dropped** — asked, and the group
+  dropdown as it stands is what was wanted.
+- ~~The bullet cut off mid-sentence.~~ It was **download only the new games
+  from chess.com**, which is now the *Get new* button under Upload PGN.
+
+The backend already had the whole of it (`chesscom.import_months`), and the
+point of the button is that it doesn't re-download: a month that is over and
+already read is not requested at all, everything else is requested
+conditionally so an unchanged archive answers 304 with no body, and a game
+already held is matched on chess.com's permanent link (`games.external_id`).
+Pressing it on an up-to-date library is one archive lookup and one import call
+that adds nothing.
+
+The sync loops because the server caps *downloads* per request and hands back
+the months it didn't reach — five years of archive is a handful of requests
+rather than one that outlives its own timeout. The username defaults to your
+display name (it is the name games are matched against already) and is stored
+under `cc:username`, the same key the classic UI uses, so the two agree about
+who you are.
+
+Month-by-month picking, and re-fetching games deleted from the library, stay
+in the classic UI — the rail links across to it.
 
 ### B13. Engine lines must not collapse between moves — **done**
 
@@ -381,7 +397,7 @@ says so in place rather than drawing an empty grid.
 4. ~~**A3–A6** — the settings dialog, once there is a theme pane to put in it.~~
    **Done**, with A6a's palettes and A1's account pane in it.
 5. ~~**B6–B8, B11, B12, B13, B14** — analysis-screen polish, all independent.~~
-   **Done**, except the two B12 bullets that need an answer first.
+   **Done.**
 6. **A7 + B9–B10** — per-screen preferences and sound sets together, since
    they want the same storage.
 7. **B3–B5** — variations, dragging and animation last. It is the largest item
@@ -389,8 +405,8 @@ says so in place rather than drawing an empty grid.
 
 ## Needs a decision before starting
 
-- **B12**: what "database selection" means — collections, or something else.
-  *(Everything else in B12 has landed; this is the only part left.)*
-- **B12**: the truncated bullet in the original request.
+- ~~**B12**: what "database selection" means~~ — answered: no change wanted.
+- ~~**B12**: the truncated bullet~~ — answered: the chess.com "get new games"
+  button, now built.
 - **A7**: schema shape for per-screen preferences (extra columns vs. a table).
 - **B15**: what to show when one game can't support a calibrated estimate.

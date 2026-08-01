@@ -123,6 +123,57 @@ export const uploadGames = (files: File[], pasted: string) => {
   });
 };
 
+// --- chess.com ------------------------------------------------------------
+
+export interface ChesscomMonth {
+  year: number;
+  month: number;
+  /** 'YYYY-MM', which is also what `chesscomImport` takes back. */
+  label: string;
+  /** How many of that month's games are already in the library. */
+  imported: number;
+  /** Over, and already read — nothing can be added to it, so an import in
+   *  `new` mode skips it without a request. */
+  settled: boolean;
+  checked_at: string | null;
+}
+
+export const chesscomArchives = (username: string) =>
+  request<{
+    username: string;
+    months: ChesscomMonth[];
+    settled: number;
+    to_check: number;
+  }>('/api/games/chesscom/archives', json({ username }));
+
+export interface ChesscomImport {
+  username: string;
+  added: number;
+  /** Games the archive carried that the library already had, matched on
+   *  chess.com's permanent `Link` (`games.external_id`). */
+  skipped: number;
+  with_clocks: number;
+  /** Months actually downloaded, as against skipped or answered 304. */
+  downloaded: number;
+  settled: number;
+  unchanged: number;
+  /** Months the server's per-request cap didn't reach. Ask again with these:
+   *  only the server knows which months cost a request. */
+  remaining: string[];
+  months: { month: string; added: number; skipped: number; state: string }[];
+}
+
+/** `mode: 'new'` is the everyday one — finished months already read are not
+ *  requested, everything else is requested conditionally, and a game already
+ *  held is never stored twice. `'refetch'` turns the first two off, which is
+ *  how you get back games deleted from the library. */
+export const chesscomImport = (body: {
+  username: string;
+  months: string[];
+  collection_id?: number | null;
+  mode?: 'new' | 'refetch';
+}) => request<ChesscomImport>('/api/games/chesscom/import', json(body));
+
 // --- runs -----------------------------------------------------------------
 
 export const listRuns = () => request<Run[]>('/api/runs');

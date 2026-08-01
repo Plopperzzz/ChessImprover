@@ -70,7 +70,7 @@ Install Node 20 LTS or newer and repeat.
 
 | Screen | Backed by |
 | --- | --- |
-| **Game Analysis** | `/api/games`, `/api/analysis/*`, `/api/sweep/*`, `/ws/analysis/{job}`, `/ws/live-eval` |
+| **Game Analysis** | `/api/games`, `/api/games/chesscom/*`, `/api/analysis/*`, `/api/sweep/*`, `/ws/analysis/{job}`, `/ws/live-eval` |
 | **Progress** | `/api/strength`, `/api/trend`, `/api/move-quality` |
 | **Play Maia**, **Puzzles** | not rebuilt yet — these link across to `/legacy/` |
 
@@ -139,13 +139,25 @@ Move classifications are the exception, and deliberately so: they come from
 is the same red on the board, in the move list, on the eval chart and in the
 Progress pie because all four read that one table.
 
+### Getting games from chess.com
+
+*Get new* in the library rail downloads what chess.com has and the library
+doesn't. It re-downloads nothing: `chesscom.import_months` skips a month that
+is over and already read, requests everything else conditionally, and matches
+games it does receive against chess.com's permanent link before storing them.
+The sync loops because the server caps downloads per request and returns the
+months it didn't reach.
+
+Picking months by hand, and re-fetching games deleted from the library
+(`mode: 'refetch'`), are still classic-UI only.
+
 ## Not ported from the classic UI
 
 These still work, at `/legacy/`, and are not duplicated here:
 
 - Play vs Maia3, and puzzles (own-mistakes and the Lichess database)
 - Batch analysis over many games
-- The chess.com import and collection/group management
+- Month-by-month chess.com picking, and collection/group management
 - The opening database explorer
 - Bulk delete, colour re-matching, and the per-engine UCI option editor
 
