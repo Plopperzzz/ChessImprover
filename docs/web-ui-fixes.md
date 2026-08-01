@@ -20,6 +20,8 @@ The whole UI is about 2,400 lines under `web/src`:
 | `components/SettingsModal.tsx` | the five-pane settings dialog |
 | `components/ThemeToggle.tsx` | the light/system/dark segmented control |
 | `lib/theme.ts` | theme mode, palette, accent, and the chart colours |
+| `lib/useHeaderVisibility.ts` | whether the top bar is on screen, on a phone |
+| `lib/media.ts` | the stacked-layout breakpoint, for what has to *behave* differently |
 | `components/Board.tsx` | squares, pieces, highlights, quality badge |
 | `components/GameAnalysis/AnalysisScreen.tsx` | all analysis state, board/eval-bar layout |
 | `components/GameAnalysis/MoveList.tsx` | move table, nav buttons, the analysis buttons |
@@ -540,6 +542,70 @@ buttons on screen together once the header has hidden (D9). A phone shorter
 than about 700px can't fit all four — the board alone is its full width — and
 scrolls instead.
 
+### D12. Stepping through a game clears the screen for it — **done**
+
+D9 waited for a scroll. But pressing a step button already says what you are
+doing: reading the game, not the page around it. So on a phone a step takes
+the header away itself and scrolls the column until the eval plot is against
+the top — which, at D11's sizes, leaves the plot, the engine's lines, the
+board and the step buttons and nothing else. Once it is in place the offset is
+zero, so the presses after the first move nothing.
+
+Two details make it behave. The header's visibility moved out of `Header` into
+`lib/useHeaderVisibility.ts`, owned by `App`, because two things decide it now
+and only one of them is the header's own business. And an explicit `hide()`
+outranks the scroll listener for 800ms: stepping from further down the page
+scrolls *up* to reach the plot, which the listener would otherwise read as
+"bring the header back" — undoing the thing that scroll was for.
+
+It is gated to the same breakpoint as D9, and deliberately: on a desktop
+everything is on screen already, and a page that doesn't scroll would have no
+way left to bring the header back.
+
+#### D12a. …but only when the page has actually drifted — **done**
+
+As first built it realigned on *every* press, and a realign of a view already
+in place is a jump for nothing: pressing Next moved the page as well as the
+pieces, which is exactly the thing D12 was trying to stop.
+
+So a step realigns **once after each time the reader scrolls**, and every
+press after that leaves the screen alone. `hasScrolled` is set by scrolling
+the analysis column and cleared by the realign.
+
+Telling the reader's scroll from the realign's own is the whole difficulty,
+because a smooth scroll goes on firing events for a few hundred milliseconds
+after the call that started it. The realign therefore declares where it is
+going: events belong to it until the scroller lands on that target, and for at
+most a second in case it never quite arrives — a target past the end of the
+content, or a reader who grabs the page mid-animation. A claim that outlives
+its window without being collected hands the event back rather than swallowing
+it, so the reader's next scroll always counts. Where there is nothing to
+animate the claim lasts 120ms, only long enough to cover the position being
+clamped by the header leaving.
+
+### D13. With the engine on, the plot becomes a bar — **done**
+
+D11 and D12 both bought height and it still wasn't enough: with the engine's
+lines open, a plot of the whole game plus three ranked lines is more than a
+phone has above the board, and the step buttons went off the bottom again.
+
+The two want the same space and only one of them is about the position in
+front of you. So on a phone, turning **Analyse** on turns the plot into a
+slim horizontal eval bar — one row: the bar, and the number it draws, in place
+of the card's title, ply counter and plot. Switching the engine off brings the
+plot straight back, and a desktop keeps both, as it always had the room to.
+
+The bar reads the same `barCp` the vertical bar beside the board does, passed
+in rather than recomputed, so the two can't disagree; it grows from whichever
+edge white is playing towards, like the vertical one. The engine-lines block
+is now a component shared by both shapes of the card.
+
+Measured on the real thing, with the engine answering: the card is 176px with
+the bar and three lines, against 172px for the plot alone — the lines are
+effectively free now. On a 390×844 phone the eval, the lines, the board and
+the step buttons span 0–678; on a 360×700 phone, 0–648. Both fit, and the
+second didn't before.
+
 ---
 
 ## Suggested order
@@ -562,8 +628,8 @@ scrolls instead.
 7. ~~**B3–B5** — variations, dragging and animation last. It is the largest item
    by a distance and it changes how `Board.tsx` is structured.~~ **Done**, and
    it did: `Board.tsx` is a square grid with a piece layer over it now.
-8. ~~**D1–D11** — a second pass over the same screens at sizes the first review
-   never opened them at.~~ **Done.** D3, D6, D9–D11 are one layout between
+8. ~~**D1–D13** — a second pass over the same screens at sizes the first review
+   never opened them at.~~ **Done.** D3, D6, D9–D13 are one layout between
    them and were done together; D1, D2, D4, D5, D7 and D8 are independent.
 
 ## Needs a decision before starting

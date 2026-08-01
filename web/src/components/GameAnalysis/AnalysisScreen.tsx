@@ -47,9 +47,18 @@ interface AnalysisScreenProps {
    *  the request failed, in which case the account defaults are used. */
   prefs: api.ScreenPrefs | null;
   onOpenSettings: () => void;
+  /** Take the top bar away (D12). Answers whether it applies at this width,
+   *  which is also the answer to "is this the stacked layout?". */
+  onHideHeader: () => boolean;
 }
 
-export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: AnalysisScreenProps) {
+export function AnalysisScreen({
+  user,
+  settings,
+  prefs,
+  onOpenSettings,
+  onHideHeader,
+}: AnalysisScreenProps) {
   const [games, setGames] = useState<GameSummary[]>([]);
   const [gamesLoading, setGamesLoading] = useState(true);
   const [facets, setFacets] = useState<api.Facets | null>(null);
@@ -271,14 +280,94 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
     setNodeId(tree.mainlineIds[tree.mainlineIds.length - 1] ?? ROOT_ID);
   }, [tree]);
 
+  const evalCardRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Whether the reader has moved the page since the game was last put in
+   * place. This is what decides whether a step button is allowed to move
+   * anything (D12a).
+   *
+   * Set by scrolling, cleared by the realign below — which has to not count
+   * its own scroll, and a smooth one goes on firing events for a few hundred
+   * milliseconds after the call that started it. So the realign says where it
+   * is going: events are its own until the scroller lands there, and a second
+   * is the longest that can be true for, in case it never quite arrives
+   * (a target past the end of the content, or a reader who grabs the page
+   * mid-animation).
+   */
+  const hasScrolled = useRef(false);
+  const ourScroll = useRef<{ top: number; until: number } | null>(null);
+
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const onScroll = () => {
+      const ours = ourScroll.current;
+      if (ours && Date.now() <= ours.until) {
+        // Landed: everything after this is the reader again. Short of the
+        // target it is still the animation, and neither counts as scrolling.
+        if (Math.abs(scroller.scrollTop - ours.top) <= 2) ourScroll.current = null;
+        return;
+      }
+      // A claim that outlived its window was never collected — the scroll it
+      // expected never happened. This one is the reader's.
+      ourScroll.current = null;
+      hasScrolled.current = true;
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+  }, []);
+
+  /**
+   * Stepping through a game, on a phone (D12).
+   *
+   * Pressing a step button says what you are doing: reading the game, not the
+   * page around it. So the top bar goes, and the column scrolls until the eval
+   * card is against the top — which, at the sizes D11 and D13 fixed, puts the
+   * evaluation, the engine's lines, the board and these buttons on screen
+   * together and nothing else.
+   *
+   * **Only if the page has drifted since it was last put there** (D12a).
+   * Pressing Next should move the pieces, not the page: doing this on a view
+   * that is already in place is a jump for nothing, which is what it felt
+   * like. So a step realigns exactly once after each time the reader scrolls,
+   * and every press after that leaves the screen alone.
+   *
+   * And only where the header hides at all, which is the stacked layout; on a
+   * desktop everything is already on screen and there would be no scroll left
+   * to bring the header back with.
+   */
+  const showTheGame = useCallback(() => {
+    if (!hasScrolled.current) return;
+    if (!onHideHeader()) return;
+    const scroller = scrollerRef.current;
+    const card = evalCardRef.current;
+    if (!scroller || !card) return;
+    hasScrolled.current = false;
+    // Measured against the scroller rather than the page: the header's own
+    // margin is mid-animation, and both boxes move with it together.
+    const offset = card.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    const target = Math.abs(offset) > 4 ? scroller.scrollTop + offset : scroller.scrollTop;
+    const moving = target !== scroller.scrollTop;
+    // Claimed even when the target is where we already are: taking the header
+    // away can shorten the scroll range enough to clamp the position, and that
+    // is this scroll's doing too. Only for a moment in that case, though —
+    // there is no animation to wait out, and the claim must not sit there
+    // swallowing the reader's next scroll.
+    ourScroll.current = { top: target, until: Date.now() + (moving ? 1000 : 120) };
+    if (moving) scroller.scrollTo({ top: target, behavior: 'smooth' });
+  }, [onHideHeader]);
+
   /** A step taken by pressing something, as against by the keyboard: the same
-   *  move, and then focus back on the board. */
+   *  move, then focus back on the board and the game filling the screen. */
   const step = useCallback(
     (go: () => void) => () => {
       go();
       focusBoard();
+      showTheGame();
     },
-    [focusBoard],
+    [focusBoard, showTheGame],
   );
 
   const selectNode = useCallback(
@@ -475,7 +564,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
 
   return (
     <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
-      <div className="thin-scroll min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
+      <div ref={scrollerRef} className="thin-scroll min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
         {missingEngine && (
           <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs text-fg">
             <span>
@@ -637,7 +726,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
           </div>
 
           <div className="contents xl:flex xl:min-w-0 xl:flex-1 xl:flex-col xl:gap-6">
-            <div className="order-1 min-w-0 xl:order-none">
+            <div ref={evalCardRef} className="order-1 min-w-0 xl:order-none">
               <EvalChart
                 plies={plies}
                 moves={moves}
@@ -647,6 +736,10 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
                 engineLines={live.lines}
                 linesStale={live.stale}
                 liveError={live.error}
+                // The same number the bar beside the board draws, so the two
+                // shapes of this card can't disagree with it (D13).
+                evalCp={barCp}
+                flipped={flipped}
               />
             </div>
 
