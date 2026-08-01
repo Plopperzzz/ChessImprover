@@ -174,6 +174,39 @@ export const chesscomImport = (body: {
   mode?: 'new' | 'refetch';
 }) => request<ChesscomImport>('/api/games/chesscom/import', json(body));
 
+// --- variations -----------------------------------------------------------
+
+/** A line you played that the game didn't. One row is a whole line, in SAN,
+ *  from where it leaves its parent to wherever it ends. `parent_id` null means
+ *  it branches off the mainline after `start_ply` half-moves; otherwise off
+ *  another line after `start_ply` moves of that line. */
+export interface Variation {
+  id: number;
+  game_id: number;
+  parent_id: number | null;
+  start_ply: number;
+  moves: string[];
+  label: string | null;
+  created_at: string;
+}
+
+export const listVariations = (gameId: number) =>
+  request<Variation[]>(`/api/games/${gameId}/variations`);
+
+export const createVariation = (
+  gameId: number,
+  body: { parent_id?: number | null; start_ply: number; moves: string[]; label?: string },
+) => request<Variation>(`/api/games/${gameId}/variations`, json(body));
+
+/** Replaces the line — which is how a variation grows, rather than each move
+ *  becoming a row of its own. */
+export const updateVariation = (id: number, body: { moves?: string[]; label?: string }) =>
+  request<Variation>(`/api/variations/${id}`, { ...json(body), method: 'PUT' });
+
+/** Takes the lines nested inside it too. */
+export const deleteVariation = (id: number) =>
+  request<{ ok: boolean; deleted: number }>(`/api/variations/${id}`, { method: 'DELETE' });
+
 // --- runs -----------------------------------------------------------------
 
 export const listRuns = () => request<Run[]>('/api/runs');

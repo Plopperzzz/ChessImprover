@@ -37,6 +37,7 @@ from .runs import router as runs_router
 from .strength import router as strength_router
 from .sweep_job import router as sweep_router
 from .trend import router as trend_router
+from .variations import router as variations_router
 
 # Managing engine subprocesses via piped stdin/stdout (section 3) only works
 # on Windows under the Proactor event loop -- it's the default today, but
@@ -87,6 +88,7 @@ app.include_router(trend_router)
 app.include_router(openings_router)
 app.include_router(strength_router)
 app.include_router(move_quality_router)
+app.include_router(variations_router)
 app.include_router(puzzles_router)
 
 

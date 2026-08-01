@@ -70,7 +70,7 @@ Install Node 20 LTS or newer and repeat.
 
 | Screen | Backed by |
 | --- | --- |
-| **Game Analysis** | `/api/games`, `/api/games/chesscom/*`, `/api/analysis/*`, `/api/sweep/*`, `/ws/analysis/{job}`, `/ws/live-eval` |
+| **Game Analysis** | `/api/games`, `/api/games/chesscom/*`, `/api/games/{id}/variations`, `/api/analysis/*`, `/api/sweep/*`, `/ws/analysis/{job}`, `/ws/live-eval` |
 | **Progress** | `/api/strength`, `/api/trend`, `/api/move-quality` |
 | **Play Maia**, **Puzzles** | not rebuilt yet — these link across to `/legacy/` |
 
@@ -95,6 +95,24 @@ scores. `GET /api/move-quality` is the one addition this UI needed: a
 which feeds both the brilliant-move count and the pie. Great and Brilliant only
 come out of a swept game, so the response says how many games were
 quick-analysed and the screen repeats it under the count.
+
+### Variations
+
+Play a move the game didn't and it branches. `lib/moveTree.ts` holds the tree —
+the same model as the classic UI's `explorer.js`, including its two rules:
+`children[0]` continues the line you are on, and a mainline node is never
+edited or deleted.
+
+Branches are saved as you make them, one row per *line*
+(`backend/app/variations.py`). Replaying a move already in the tree navigates
+instead of branching; a move at the tip of a saved line extends that row; a
+move anywhere else starts a new one, hanging off the mainline or off the line
+you are standing in. The server replays every line before storing it, so a
+saved variation always plays out.
+
+The board animates because pieces have identities that survive a move
+(`lib/pieces.ts`) — the grid is not rebuilt from the FEN, so a move is one
+element arriving at new coordinates and CSS can tween it.
 
 ## Boards, pieces and sounds
 

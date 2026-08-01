@@ -97,6 +97,27 @@ CREATE TABLE IF NOT EXISTS uploads (
     uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- A line you played that the game didn't (B3). One row per *line* rather than
+-- per move: a line is what a person means by "that variation", and the common
+-- case -- play four moves, keep them -- is one insert.
+--
+-- parent_id NULL means it branches off the game's mainline after `start_ply`
+-- half-moves; otherwise it branches off another line after `start_ply` moves of
+-- that line. The self-referencing cascade is what makes deleting a variation
+-- take its nested ones with it.
+CREATE TABLE IF NOT EXISTS variations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES variations(id) ON DELETE CASCADE,
+    start_ply INTEGER NOT NULL,
+    moves_json TEXT NOT NULL,       -- SAN, in order, from the anchor
+    label TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_variations_game ON variations(user_id, game_id);
+
 -- Board, pieces and sounds per screen, over the top of the defaults on `users`.
 --
 -- A table rather than nine more columns on `users` (A7): three screens times

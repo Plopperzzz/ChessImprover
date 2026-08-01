@@ -39,10 +39,16 @@ play vs Maia, puzzles, batch runs, the chess.com import and the opening
 explorer. Both are served by the same process, off the same database: the
 React build at `/`, the classic UI at `/legacy/`.
 
-The React UI is a first pass, and what's wrong with it is written down in
-[`docs/web-ui-fixes.md`](docs/web-ui-fixes.md) — theming, variations, drag and
-animation, sound, and the settings dialog are all still to do. That file is
+What was wrong with the React UI's first pass is written down in
+[`docs/web-ui-fixes.md`](docs/web-ui-fixes.md), which is now largely worked
+through: theming with light/dark and pickable palettes, the five-pane settings
+dialog, the rebuilt Progress screen, move-quality icons, sounds, per-screen
+board and piece sets, and variations with drag and animation. That file is
 defects and polish; `docs/TODO.md` remains the feature list.
+
+Variations are in both front ends now, and the React one persists them: a line
+you play off the game is saved as you make it, redrawn when you come back, and
+deletable — taking any lines nested inside it with it.
 
 ### The four tabs
 

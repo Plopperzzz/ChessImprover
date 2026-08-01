@@ -9,7 +9,17 @@ import {
   Settings2,
 } from 'lucide-react';
 import * as api from '../../lib/api';
-import { fenAt, formatEval, parsePgn, winProb, yourSide, type Ply } from '../../lib/chess';
+import { formatEval, parsePgn, winProb, yourSide, type Ply } from '../../lib/chess';
+import {
+  ROOT_ID,
+  addMove,
+  buildTree,
+  childFor,
+  emptyTree,
+  lineTo,
+  removeVariation,
+  type MoveTree,
+} from '../../lib/moveTree';
 import { playMoveSound, playSound } from '../../lib/sound';
 import { useAnalysisJob, type JobResult } from '../../lib/useAnalysisJob';
 import { useLiveEval } from '../../lib/useLiveEval';
@@ -23,6 +33,7 @@ import type {
   SweepResults,
   User,
 } from '../../types';
+import { Chess } from 'chess.js';
 import { Board } from '../Board';
 import { EloSweepPanel } from './EloSweepPanel';
 import { EvalChart } from './EvalChart';
@@ -51,8 +62,13 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
   const [game, setGame] = useState<GameDetail | null>(null);
   const [plies, setPlies] = useState<Ply[]>([]);
   const [headers, setHeaders] = useState<Record<string, string>>({});
-  const [plyIndex, setPlyIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
+
+  // B3: the game is a tree, not a list, so a move that isn't the one played
+  // has somewhere to go. `nodeId` is where the board stands in it.
+  const [tree, setTree] = useState<MoveTree>(() => emptyTree());
+  const [nodeId, setNodeId] = useState<string>(ROOT_ID);
+  const [variationError, setVariationError] = useState<string | null>(null);
 
   const [moves, setMoves] = useState<Map<number, AnalysisMove>>(new Map());
   const [sweep, setSweep] = useState<SweepResults | null>(null);
@@ -121,7 +137,12 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
         const parsed = parsePgn(detail.pgn_text);
         setPlies(parsed.plies);
         setHeaders(parsed.headers);
-        setPlyIndex(0);
+        // The saved variations come back with the game and are replayed onto
+        // the mainline; a game with none is just a tree with one branch.
+        const saved = await api.listVariations(detail.id).catch(() => []);
+        setTree(buildTree(parsed.plies, saved));
+        setNodeId(ROOT_ID);
+        setVariationError(null);
         setFlipped(yourSide(detail.your_color) === 'b');
         setMoves(new Map());
         setSweep(null);
@@ -181,9 +202,13 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
 
   // --- board state --------------------------------------------------------
 
-  const boardFen = jobFen ?? fenAt(plies, plyIndex);
-  const currentPly = plyIndex > 0 ? plies[plyIndex - 1] : null;
+  const node = tree.nodes[nodeId] ?? tree.nodes[ROOT_ID];
+  const boardFen = jobFen ?? node.fen;
+  /** Classifications belong to the game as played, so a variation move has
+   *  none — nothing analysed it. */
+  const currentPly = node.mainline && node.ply > 0 ? plies[node.ply - 1] : null;
   const currentMove = currentPly ? moves.get(currentPly.ply) : undefined;
+  const plyIndex = node.mainline ? node.ply : 0;
 
   const liveMultiPv = Math.max(1, Math.min(5, Number(settings?.maia_multipv ?? 3)));
   const live = useLiveEval(liveActive && !job.state.running, boardFen, liveMultiPv);
@@ -212,18 +237,33 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
   const engineReady = Boolean(settings?.stockfish_binary);
   const maiaReady = Boolean(settings?.maia_binary);
 
+  /** Stepping follows the line you are on: `children[0]` is the move that
+   *  continues it, so walking forward never wanders into a variation by
+   *  accident. Same rule the classic UI's tree keeps. */
+  const stepForward = useCallback(() => {
+    setNodeId((id) => tree.nodes[id]?.children[0] ?? id);
+  }, [tree]);
+
+  const stepBack = useCallback(() => {
+    setNodeId((id) => tree.nodes[id]?.parentId ?? id);
+  }, [tree]);
+
+  const toMainlineEnd = useCallback(() => {
+    setNodeId(tree.mainlineIds[tree.mainlineIds.length - 1] ?? ROOT_ID);
+  }, [tree]);
+
   const keyNav = useCallback(
     (event: KeyboardEvent) => {
       if (event.target instanceof HTMLElement) {
         const tag = event.target.tagName;
         if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       }
-      if (event.key === 'ArrowLeft') setPlyIndex((i) => Math.max(0, i - 1));
-      if (event.key === 'ArrowRight') setPlyIndex((i) => Math.min(plies.length, i + 1));
-      if (event.key === 'Home') setPlyIndex(0);
-      if (event.key === 'End') setPlyIndex(plies.length);
+      if (event.key === 'ArrowLeft') stepBack();
+      if (event.key === 'ArrowRight') stepForward();
+      if (event.key === 'Home') setNodeId(ROOT_ID);
+      if (event.key === 'End') toMainlineEnd();
     },
-    [plies.length],
+    [stepBack, stepForward, toMainlineEnd],
   );
 
   useEffect(() => {
@@ -247,20 +287,140 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
   // to -- never while a job is running, which walks the whole game a position
   // at a time and would make a hundred noises. Stepping back to the start has
   // no move to sound, which is why index 0 is silent rather than special.
-  const soundedPly = useRef<number | null>(null);
+  const soundedNode = useRef<string | null>(null);
   useEffect(() => {
-    if (job.state.running || plies.length === 0) {
-      soundedPly.current = plyIndex;
+    if (job.state.running) {
+      soundedNode.current = nodeId;
       return;
     }
-    if (soundedPly.current === plyIndex) return;
-    soundedPly.current = plyIndex;
-    const landed = plyIndex > 0 ? plies[plyIndex - 1] : null;
-    if (!landed) return;
-    const quality = moves.get(landed.ply)?.classification;
+    if (soundedNode.current === nodeId) return;
+    soundedNode.current = nodeId;
+    const landed = tree.nodes[nodeId];
+    if (!landed || landed.id === ROOT_ID) return;
+    const quality = landed.mainline ? moves.get(landed.ply)?.classification : undefined;
     if (quality === 'brilliant') playSound(soundSet, 'brilliant');
     else playMoveSound(soundSet, landed.san, you != null && landed.color === you);
-  }, [plyIndex, plies, moves, job.state.running, soundSet, you]);
+  }, [nodeId, tree, moves, job.state.running, soundSet, you]);
+
+  /** Where a ply on the mainline lives in the tree, for the eval chart. */
+  const goToPly = useCallback(
+    (ply: number) => setNodeId(ply <= 0 ? ROOT_ID : (tree.mainlineIds[ply - 1] ?? ROOT_ID)),
+    [tree],
+  );
+
+  /**
+   * A move played on the board (B3).
+   *
+   * Replaying a move that is already there — the game's own next move, or a
+   * line made earlier — navigates to it. Anything else branches, and the
+   * branch is written to the server straight away: a variation you have to
+   * remember to save is a variation you lose.
+   *
+   * Which write depends on where you are. At the tip of a saved line the move
+   * extends that line (one row, rewritten); anywhere else it starts a new one,
+   * hanging off the mainline or off the line you are standing in.
+   */
+  const playMove = useCallback(
+    async (from: string, to: string, promotion?: string) => {
+      if (!game || job.state.running) return;
+      const parent = tree.nodes[nodeId];
+      if (!parent) return;
+
+      const existing = childFor(tree, nodeId, from, to);
+      if (existing) {
+        setNodeId(existing.id);
+        return;
+      }
+
+      const board = new Chess();
+      try {
+        board.load(parent.fen);
+      } catch {
+        return;
+      }
+      let move;
+      try {
+        move = board.move({ from, to, promotion: promotion ?? 'q' });
+      } catch {
+        return;
+      }
+      if (!move) return;
+
+      const line = lineTo(tree, nodeId);
+      const atTipOfSavedLine =
+        parent.variationId != null &&
+        line.length > 0 &&
+        parent.children.length === 0 &&
+        parent.indexInLine === line.length - 1;
+
+      // On screen first, saved second: the board should answer the move now,
+      // and a failed write is reported rather than swallowed.
+      const grown = addMove(
+        tree,
+        nodeId,
+        { san: move.san, from: move.from, to: move.to, promotion: move.promotion, color: move.color },
+        board.fen(),
+        {
+          variationId: atTipOfSavedLine ? parent.variationId : null,
+          indexInLine: atTipOfSavedLine ? line.length : 0,
+        },
+      );
+      setTree(grown.tree);
+      setNodeId(grown.node.id);
+      setVariationError(null);
+
+      try {
+        if (atTipOfSavedLine && parent.variationId != null) {
+          await api.updateVariation(parent.variationId, {
+            moves: [...line.map((n) => n.san), move.san],
+          });
+        } else {
+          const saved = await api.createVariation(game.id, {
+            parent_id: parent.variationId,
+            // Off the mainline the branch point is the ply; inside a line it
+            // is how far along that line you are.
+            start_ply: parent.variationId == null ? parent.ply : parent.indexInLine + 1,
+            moves: [move.san],
+          });
+          // Re-read rather than patching ids by hand: the tree the server
+          // describes is the one that will come back next time.
+          const fresh = await api.listVariations(game.id);
+          const rebuilt = buildTree(plies, fresh);
+          const landed = Object.values(rebuilt.nodes).find(
+            (n) => n.variationId === saved.id && n.indexInLine === 0,
+          );
+          setTree(rebuilt);
+          if (landed) setNodeId(landed.id);
+        }
+      } catch (e) {
+        setVariationError(
+          `The move is on the board but wasn't saved: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+    },
+    [game, job.state.running, tree, nodeId, plies],
+  );
+
+  const dropVariation = useCallback(
+    async (variationId: number) => {
+      const after = removeVariation(tree, variationId, nodeId);
+      setTree(after.tree);
+      setNodeId(after.nextId);
+      try {
+        await api.deleteVariation(variationId);
+      } catch (e) {
+        setVariationError(e instanceof Error ? e.message : String(e));
+        if (game) {
+          // Put back whatever the server actually still has.
+          const fresh = await api.listVariations(game.id).catch(() => []);
+          setTree(buildTree(plies, fresh));
+        }
+      }
+    },
+    [tree, nodeId, game, plies],
+  );
 
   const plate = (name: string, elo: string | undefined, edge: 'top' | 'bottom') => (
     <div className="flex items-center gap-2 px-1 py-2">
@@ -360,17 +520,19 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
                   pieceSet={pieceSet}
                   showLegalMoves={Boolean(user.show_legal_moves)}
                   lastMove={
-                    jobFen || !currentPly
-                      ? null
-                      : { from: currentPly.from, to: currentPly.to }
+                    jobFen || node.id === ROOT_ID ? null : { from: node.from, to: node.to }
                   }
                   marker={
-                    jobFen || !currentPly
+                    jobFen || node.id === ROOT_ID
                       ? null
-                      : { square: currentPly.to, quality: currentMove?.classification }
+                      : { square: node.to, quality: currentMove?.classification }
                   }
                   hintMove={liveActive ? (live.lines[0]?.pv[0] ?? null) : null}
-                  interactive={false}
+                  // B3-B5: the board plays moves now. Not while a job is
+                  // driving it, which would be arguing with the engine over
+                  // whose position is on screen.
+                  interactive={!job.state.running}
+                  onMove={playMove}
                 />
               </div>
             </div>
@@ -382,31 +544,29 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
                 Home/End) do the same thing and still work. */}
             <div className="flex items-center justify-center gap-1.5">
               {[
-                { icon: <ChevronFirst className="h-4 w-4" />, to: 0, label: 'Start' },
-                {
-                  icon: <ChevronLeft className="h-4 w-4" />,
-                  to: Math.max(0, plyIndex - 1),
-                  label: 'Previous',
-                },
-                {
-                  icon: <ChevronRight className="h-4 w-4" />,
-                  to: Math.min(plies.length, plyIndex + 1),
-                  label: 'Next',
-                },
-                { icon: <ChevronLast className="h-4 w-4" />, to: plies.length, label: 'End' },
+                { icon: <ChevronFirst className="h-4 w-4" />, go: () => setNodeId(ROOT_ID), label: 'Start' },
+                { icon: <ChevronLeft className="h-4 w-4" />, go: stepBack, label: 'Previous' },
+                { icon: <ChevronRight className="h-4 w-4" />, go: stepForward, label: 'Next' },
+                { icon: <ChevronLast className="h-4 w-4" />, go: toMainlineEnd, label: 'End' },
               ].map((btn) => (
                 <button
                   key={btn.label}
                   title={btn.label}
                   aria-label={btn.label}
                   disabled={plies.length === 0}
-                  onClick={() => setPlyIndex(btn.to)}
+                  onClick={btn.go}
                   className="flex h-9 w-11 items-center justify-center rounded-lg border border-line bg-surface text-fg-2 transition-colors hover:bg-surface-2 hover:text-fg disabled:opacity-40"
                 >
                   {btn.icon}
                 </button>
               ))}
             </div>
+
+            {variationError && (
+              <p className="rounded-lg bg-danger-surface px-3 py-2 text-center text-[11px] text-danger-fg">
+                {variationError}
+              </p>
+            )}
 
             {jobFen && (
               <p className="text-center font-mono text-[11px] text-fg-subtle">
@@ -420,7 +580,7 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
               plies={plies}
               moves={moves}
               currentPlyIndex={plyIndex}
-              onSelectPly={setPlyIndex}
+              onSelectPly={goToPly}
               liveActive={liveActive && !job.state.running}
               engineLines={live.lines}
               linesStale={live.stale}
@@ -430,8 +590,10 @@ export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: Analys
             <MoveList
               plies={plies}
               moves={moves}
-              currentPlyIndex={plyIndex}
-              onSelectPly={setPlyIndex}
+              tree={tree}
+              currentNodeId={nodeId}
+              onSelectNode={setNodeId}
+              onDeleteVariation={dropVariation}
               white={whiteName}
               black={blackName}
               job={job.state}

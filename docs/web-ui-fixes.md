@@ -31,7 +31,10 @@ The whole UI is about 2,400 lines under `web/src`:
 | `lib/api.ts` | every `/api` call, typed |
 | `lib/useAnalysisJob.ts` | job start/cancel/attach over `/ws/analysis/{id}` |
 | `lib/useLiveEval.ts` | `/ws/live-eval` session |
-| `lib/quality.ts` | the classification → colour/symbol table |
+| `lib/moveTree.ts` | the game as a tree: mainline, branches, saved lines |
+| `lib/pieces.ts` | piece identity across positions, which is what animates |
+| `lib/sound.ts` | the sounds a board makes |
+| `lib/quality.ts` | the classification → icon/colour table |
 | `lib/chess.ts` | PGN parsing, FEN walking, eval formatting |
 
 Assets that already exist on disk and are not yet used:
@@ -190,27 +193,52 @@ needs its own, containing:
   hard edge.
 - sound set (B11)
 
-### B3–B5. Pieces can't be moved, no variations, no dragging
+### B3–B5. Pieces can't be moved, no variations, no dragging — **done**
 
-These are one piece of work, not three.
+One piece of work, as the item says, and it came apart in the order the item
+lists.
 
-`AnalysisScreen` passes `interactive={false}` to the board — deliberately,
-because there was nowhere to put a move that leaves the mainline. So:
+**Variations.** `lib/moveTree.ts` is modelled on the classic UI's
+`frontend/js/explorer.js` and keeps its two load-bearing rules: `children[0]`
+is the move that continues the line, so stepping forward never wanders into a
+branch by accident; and `mainline` is fixed when a node is made and never
+changes, which is what makes "delete this variation" a safe button — the game
+as played can be added to but not edited.
 
-- **Variations** are the blocker. Playing a move that isn't the game's next
-  move should branch; the branch should show in the move table, be
-  deletable, and be persistable to the database and still deletable after.
-  The classic UI has a full move tree already (see the README's variation
-  notes and `frontend/js/app.js`) — read how it models the tree before
-  designing a second one. Persisting them needs a new table and endpoints;
-  nothing stores variations today.
-- **Dragging**: pointer-events drag, piece snapping to the cursor centre on
-  press, `cursor: grab` over pieces and `grabbing` while held. Currently
-  click-to-select-then-click-to-move only.
-- **Animation**: pieces teleport. Moves need to tween between squares, which
-  means the board must key pieces by identity across renders rather than
-  rebuilding the grid from the FEN each time — worth knowing before starting,
-  because `Board.tsx` currently does exactly the latter.
+The new part is that lines have identities on the server. A row in `variations`
+is a *whole line* rather than a move — one row per line, because a line is what
+a person means by "that variation", and because the common case (play four
+moves, keep them) is then one insert. `parent_id` is what makes nesting work,
+and the self-referencing cascade is what makes deleting a line take its nested
+ones with it, which the classic UI does by hand in `deleteVariation`.
+
+Playing a move that is already in the tree navigates to it rather than
+branching — otherwise stepping through the game by hand slowly fills the table
+with duplicates of itself. Anything else branches and is written immediately: a
+variation you have to remember to save is a variation you lose. At the tip of a
+saved line the move extends that row; anywhere else it starts a new one.
+
+Every line is replayed server-side before it is stored, and a line that doesn't
+play out is refused with the move that failed. A stored variation that cannot
+be reached is worse than none: months later it is indistinguishable from a bug
+in the board.
+
+**Dragging.** Pointer events, the piece following the cursor's centre,
+`cursor: grab` over a piece you can move and `grabbing` while held. A press
+that doesn't travel is still a click, so click-to-move works through the same
+handlers. Promotion is asked rather than assumed — chess.js reports four moves
+to the same square, and defaulting to a queen quietly loses games where a
+knight was the point.
+
+**Animation.** The board no longer rebuilds its grid from the FEN. The squares
+are a grid; the pieces are a layer of positioned elements above it, each with
+an identity carried between positions by `lib/pieces.ts` — matching by square,
+by the move that was played, and by the rook a castling king drags along with
+it. A promotion keeps the piece's identity and changes its type, so the pawn
+*becomes* a queen instead of one vanishing as another appears. Because the
+element survives, moving it is a change of coordinates, and the tween is CSS's
+problem. Jumping to an arbitrary ply deliberately passes no move, so unrelated
+positions snap rather than sliding pieces along paths they never took.
 
 ### B6–B8. Move-quality icons — **done**
 
@@ -420,8 +448,9 @@ says so in place rather than drawing an empty grid.
 6. ~~**A7 + B9–B10** — per-screen preferences and sound sets together, since
    they want the same storage.~~ **Done**, and they did want the same storage:
    `sound_set` is a column beside `board_set`/`piece_set` in both places.
-7. **B3–B5** — variations, dragging and animation last. It is the largest item
-   by a distance and it changes how `Board.tsx` is structured.
+7. ~~**B3–B5** — variations, dragging and animation last. It is the largest item
+   by a distance and it changes how `Board.tsx` is structured.~~ **Done**, and
+   it did: `Board.tsx` is a square grid with a piece layer over it now.
 
 ## Needs a decision before starting
 
