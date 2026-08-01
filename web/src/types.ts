@@ -53,6 +53,11 @@ export interface GameSummary {
   has_clocks: number;
   /** 'full' | 'quick' | 'sweep' when a saved analysis exists, else null. */
   analyzed: string | null;
+  /** The Elo the sweep fitted for *your* side of this game, null when no sweep
+   *  has been run (or the game isn't assigned to either colour). Optional
+   *  because the upload response summarises games before any of them can have
+   *  one. */
+  estimated_elo?: number | null;
   collection_ids: number[];
 }
 

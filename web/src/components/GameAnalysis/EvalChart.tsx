@@ -61,11 +61,16 @@ export function EvalChart({
   // Sized by whether the engine panel is *open*, not by whether it currently
   // has lines in it: keying off the line count made the plot grow and shrink
   // between every move while Stockfish started its next search.
-  const chartHeight = liveActive ? 'h-36' : 'h-48 sm:h-56';
+  //
+  // The phone sizes are much shorter, because there the whole card sits above
+  // the board: the plot, the engine's lines, the board and the buttons that
+  // step through the game all have to fit on screen together, and the plot is
+  // the one of the four that still reads at 80px.
+  const chartHeight = liveActive ? 'h-20 sm:h-32 lg:h-36' : 'h-28 sm:h-44 lg:h-56';
 
   return (
-    <div className="flex flex-col rounded-2xl border border-line bg-surface/90 p-4 text-fg shadow-xl">
-      <div className="flex items-center justify-between border-b border-line pb-3">
+    <div className="flex flex-col rounded-2xl border border-line bg-surface/90 p-3 text-fg shadow-xl sm:p-4">
+      <div className="flex items-center justify-between border-b border-line pb-2 sm:pb-3">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-accent" />
           <h4 className="text-xs font-semibold tracking-wider text-fg-2 uppercase">
@@ -77,7 +82,7 @@ export function EvalChart({
         </span>
       </div>
 
-      <div className={`mt-3 w-full transition-all ${chartHeight}`}>
+      <div className={`mt-2 w-full transition-all sm:mt-3 ${chartHeight}`}>
         {analysed ? (
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
@@ -160,8 +165,8 @@ export function EvalChart({
       </div>
 
       {liveActive && (
-        <div className="mt-3 border-t border-line pt-3">
-          <div className="mb-2 flex items-center gap-2">
+        <div className="mt-2 border-t border-line pt-2 sm:mt-3 sm:pt-3">
+          <div className="mb-1.5 flex items-center gap-2 sm:mb-2">
             <Cpu className="h-3.5 w-3.5 text-accent-2" />
             <span className="text-[11px] font-semibold tracking-wider text-fg-muted uppercase">
               Live engine

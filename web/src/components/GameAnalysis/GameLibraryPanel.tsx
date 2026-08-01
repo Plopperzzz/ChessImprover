@@ -8,6 +8,7 @@ import {
   Loader2,
   RefreshCw,
   Upload,
+  X,
 } from 'lucide-react';
 import * as api from '../../lib/api';
 import type { Collection, GameSummary, Run, User } from '../../types';
@@ -26,7 +27,8 @@ interface GameLibraryPanelProps {
   onChangeRun: (runId: number | null) => void;
   onRunsChanged: () => void;
   onLibraryChanged: () => void;
-  /** Estimated Elo per game id, from whatever sweep has been run for it. */
+  /** Estimated Elo per game id for sweeps that finished *this session* — the
+   *  rest of the library carries its own `estimated_elo` from the server. */
   estimates: Record<number, number>;
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -186,23 +188,41 @@ export function GameLibraryPanel({
     }
   };
 
+  // Collapsed reads differently on the two layouts. Beside the board it is a
+  // rail down the edge, which is where it came from; on a phone the panel is a
+  // sheet over the whole screen, and what's left of it when closed is a button
+  // floating over the board rather than a 44px column stealing the width.
   if (collapsed) {
     return (
-      <button
-        onClick={onToggleCollapsed}
-        className="flex w-11 shrink-0 flex-col items-center gap-3 border-l border-line bg-surface/60 py-4 text-fg-muted hover:text-fg"
-        title="Show game library"
-      >
-        <Database className="h-4 w-4" />
-        <span className="font-mono text-[10px] [writing-mode:vertical-rl]">
-          LIBRARY · {games.length}
-        </span>
-      </button>
+      <>
+        <button
+          onClick={onToggleCollapsed}
+          className="hidden w-11 shrink-0 flex-col items-center gap-3 border-l border-line bg-surface/60 py-4 text-fg-muted hover:text-fg lg:flex"
+          title="Show game library"
+        >
+          <Database className="h-4 w-4" />
+          <span className="font-mono text-[10px] [writing-mode:vertical-rl]">
+            LIBRARY · {games.length}
+          </span>
+        </button>
+        <button
+          onClick={onToggleCollapsed}
+          className="fixed right-4 bottom-4 z-30 flex items-center gap-2 rounded-full border border-line bg-surface px-4 py-3 text-xs font-semibold text-fg-2 shadow-2xl lg:hidden"
+          title="Show game library"
+        >
+          <Database className="h-4 w-4 text-accent" />
+          <span className="font-mono">LIBRARY · {games.length}</span>
+        </button>
+      </>
     );
   }
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-l border-line bg-surface/60 lg:h-full lg:w-80 xl:w-96">
+    // Open, the panel is the whole screen on a phone — a fixed sheet, not a
+    // block appended under the board that you have to scroll past to get back
+    // to the game. From `lg` up it is the column beside the board it always
+    // was, and nothing about that layout changes.
+    <aside className="fixed inset-0 z-40 flex w-full flex-col bg-canvas lg:static lg:h-full lg:w-80 lg:shrink-0 lg:border-l lg:border-line lg:bg-surface/60 xl:w-96">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
           <Database className="h-4 w-4 text-accent" />
@@ -214,8 +234,10 @@ export function GameLibraryPanel({
           onClick={onToggleCollapsed}
           className="rounded p-1 text-fg-muted hover:bg-surface-2 hover:text-fg"
           title="Collapse"
+          aria-label="Close the game library"
         >
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRight className="hidden h-4 w-4 lg:block" />
+          <X className="h-5 w-5 lg:hidden" />
         </button>
       </div>
 
@@ -305,11 +327,11 @@ export function GameLibraryPanel({
         )}
       </div>
 
-      {/* B12: fixed height, scrolling inside. The cap is what holds the
-          stacked (narrow) layout together, where there is no row height to
-          divide and a 300-game library would otherwise push the upload
-          controls off the bottom of the page. */}
-      <div className="thin-scroll max-h-[55vh] min-h-0 flex-1 overflow-y-auto lg:max-h-none">
+      {/* B12: the list is what gives, so the filters above it and the upload
+          controls below it are always on screen — on the phone sheet as much
+          as in the column, since both are a fixed height with the list
+          scrolling inside. */}
+      <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-xs text-fg-subtle">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading games…
@@ -323,7 +345,10 @@ export function GameLibraryPanel({
             {games.map((game) => {
               const active = game.id === activeGameId;
               const you = game.your_color;
-              const estimate = estimates[game.id];
+              // The list carries the saved estimate for every row; `estimates`
+              // only holds sweeps that finished since this list was fetched,
+              // so it wins where it has one.
+              const estimate = estimates[game.id] ?? game.estimated_elo ?? null;
               return (
                 <li key={game.id}>
                   <button
@@ -353,11 +378,24 @@ export function GameLibraryPanel({
                         </span>
                       )}
                     </div>
-                    {estimate != null && (
-                      <div className="mt-1 inline-flex rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent ring-1 ring-accent/20">
-                        est. {estimate}
-                      </div>
-                    )}
+                    {/* Always drawn, so a row's height doesn't depend on
+                        whether it has been swept and the estimates line up
+                        down the list. A game with no sweep says so with
+                        dashes rather than by leaving a gap. */}
+                    <div
+                      className={`mt-1 inline-flex rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ring-1 ${
+                        estimate != null
+                          ? 'bg-accent/10 text-accent ring-accent/20'
+                          : 'bg-canvas/60 text-fg-faint ring-line'
+                      }`}
+                      title={
+                        estimate != null
+                          ? 'Estimated Elo from the Maia sweep'
+                          : 'No Elo sweep has been run on this game yet'
+                      }
+                    >
+                      est. {estimate ?? '———'}
+                    </div>
                   </button>
                 </li>
               );

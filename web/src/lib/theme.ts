@@ -164,6 +164,34 @@ function readChartTheme(): ChartTheme {
   return out;
 }
 
+/**
+ * A lighter version of a colour, mixed towards white.
+ *
+ * The house rule for a plot that draws both is that the **points** carry the
+ * measured colour and the **line** joining them is a lighter tint of it — one
+ * hue per series, so the line reads as the same quantity rather than as a
+ * second one. Recharts wants a literal colour, so this does the mix rather
+ * than `color-mix()`.
+ *
+ * Anything that isn't a `#rgb`/`#rrggbb` (a colour token spelled some other
+ * way) is handed back unchanged rather than turned into black.
+ */
+export function lighten(colour: string, amount = 0.4): string {
+  const hex = colour.trim().replace(/^#/, '');
+  const full =
+    hex.length === 3
+      ? hex
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : hex;
+  if (!/^[0-9a-f]{6}$/i.test(full)) return colour;
+  const mix = (channel: number) =>
+    Math.round(channel + (255 - channel) * Math.min(1, Math.max(0, amount)));
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
+  return `#${[mix(r), mix(g), mix(b)].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
 /** Re-read on every theme change; `resolved` is the trigger, not the source. */
 export function useChartTheme(): ChartTheme {
   const [theme, setTheme] = useState<ChartTheme>(readChartTheme);
