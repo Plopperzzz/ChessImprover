@@ -4,7 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 <title>Engine Room</title>
-<link rel="stylesheet" href="/css/style.css" />
+<!-- Relative, not absolute: this page is served both at / (when the React
+     build is absent) and at /legacy/ (when it is there). An absolute
+     /css/style.css asks the React build for it and gets a 404, which left
+     the classic UI unstyled and scriptless the moment web/dist existed. -->
+    <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
 
@@ -738,9 +742,9 @@
 
 <div id="promo-root"></div>
 
-<script src="/js/vendor/chess.js"></script>
-<script src="/js/board.js"></script>
-<script src="/js/explorer.js"></script>
-<script src="/js/app.js"></script>
+<script src="js/vendor/chess.js"></script>
+<script src="js/board.js"></script>
+<script src="js/explorer.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>

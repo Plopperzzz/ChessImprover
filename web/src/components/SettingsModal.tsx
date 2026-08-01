@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import * as api from '../lib/api';
+import { setSoundEnabled, soundEnabled } from '../lib/sound';
 import { ACCENTS, PALETTES, type ThemeState } from '../lib/theme';
 import type { Account, EngineSettings, User } from '../types';
 import { ThemeToggle } from './ThemeToggle';
@@ -25,7 +26,39 @@ interface SettingsModalProps {
    *  app has to drop the user it is holding. */
   onLoggedOut: () => void;
   theme: ThemeState;
+  /** Per-screen board/piece/sound choices (A7). */
+  prefs: api.ScreenPrefs | null;
+  onPrefsSaved: (prefs: api.ScreenPrefs) => void;
 }
+
+/** The screens that draw a board, in the order the header lists them. Must
+ *  match `engine_settings.SCREENS`, which rejects anything else. */
+const SCREEN_LABELS: { id: api.ScreenPrefName; label: string }[] = [
+  { id: 'analysis', label: 'Game Analysis' },
+  { id: 'puzzles', label: 'Puzzles' },
+  { id: 'play', label: 'Play vs Maia' },
+];
+
+const PREF_KINDS = ['board_set', 'piece_set', 'sound_set'] as const;
+type PrefKind = (typeof PREF_KINDS)[number];
+
+/** A set that was chosen and has since left the disk still has to appear in
+ *  its select, or the control renders blank and the only way to see what is
+ *  wrong is to read the database. Marked, and still selected, so changing it
+ *  is a choice rather than an accident. */
+function withMissing(names: string[], chosen: string): string[] {
+  return chosen && !names.includes(chosen) ? [...names, chosen] : names;
+}
+
+const optionLabel = (name: string, names: string[]) =>
+  names.includes(name) ? name : `${name} (missing)`;
+
+/** Every screen following the defaults — what the draft holds until the real
+ *  preferences arrive, and what a reset puts back. */
+const emptyScreens = () =>
+  Object.fromEntries(
+    SCREEN_LABELS.map(({ id }) => [id, { board_set: '', piece_set: '', sound_set: '' }]),
+  ) as Record<api.ScreenPrefName, Record<PrefKind, string>>;
 
 type PaneId = 'theme' | 'analysis' | 'maia' | 'board' | 'account';
 
@@ -92,14 +125,25 @@ export function SettingsModal({
   onProfileSaved,
   onLoggedOut,
   theme,
+  prefs,
+  onPrefsSaved,
 }: SettingsModalProps) {
   const [pane, setPane] = useState<PaneId>('theme');
   const [draft, setDraft] = useState<EngineSettings | null>(settings);
   const [profile, setProfile] = useState({
     piece_set: user.piece_set,
     board_set: user.board_set,
+    sound_set: user.sound_set,
     show_legal_moves: user.show_legal_moves,
   });
+  /** The per-screen overrides, edited as a draft and sent on Save like
+   *  everything else here. '' is "follow the default", which is also what the
+   *  endpoint takes to clear one. */
+  const [screens, setScreens] = useState<
+    Record<api.ScreenPrefName, Record<PrefKind, string>>
+  >(() => emptyScreens());
+  const [audio, setAudio] = useState<api.AudioSet[]>([]);
+  const [soundOn, setSoundOn] = useState(soundEnabled);
   const [families, setFamilies] = useState<api.EngineFamily[]>([]);
   const [assetSets, setAssetSets] = useState<api.AssetSet[]>([]);
   const [saving, setSaving] = useState(false);
@@ -119,6 +163,7 @@ export function SettingsModal({
     setProfile({
       piece_set: user.piece_set,
       board_set: user.board_set,
+      sound_set: user.sound_set,
       show_legal_moves: user.show_legal_moves,
     });
     setDisplayName(user.display_name);
@@ -135,8 +180,22 @@ export function SettingsModal({
       .then((r) => setFamilies(r.families))
       .catch(() => setFamilies([]));
     api.assetSets().then(setAssetSets).catch(() => setAssetSets([]));
+    api.audioSets().then(setAudio).catch(() => setAudio([]));
     api.listAccounts().then(setAccounts).catch(() => setAccounts(null));
   }, [open]);
+
+  // Overrides come in as null-means-default; the selects want ''.
+  useEffect(() => {
+    if (!prefs) return;
+    setScreens(
+      Object.fromEntries(
+        SCREEN_LABELS.map(({ id }) => [
+          id,
+          Object.fromEntries(PREF_KINDS.map((kind) => [kind, prefs.screens[id][kind] ?? ''])),
+        ]),
+      ) as Record<api.ScreenPrefName, Record<PrefKind, string>>,
+    );
+  }, [prefs]);
 
   useEffect(() => {
     if (!open) return;
@@ -154,15 +213,31 @@ export function SettingsModal({
 
   const stockfishFamilies = families.filter((f) => f.kind === 'stockfish');
   const maiaFamilies = families.filter((f) => f.kind === 'maia');
+  const pieceOptions = assetSets.filter((s) => s.has_pieces);
+  const boardOptions = assetSets.filter((s) => s.has_board);
 
   const profileChanges = () => {
     const patch: Record<string, unknown> = {};
     if (profile.piece_set !== user.piece_set) patch.piece_set = profile.piece_set;
     if (profile.board_set !== user.board_set) patch.board_set = profile.board_set;
+    if (profile.sound_set !== user.sound_set) patch.sound_set = profile.sound_set;
     if (profile.show_legal_moves !== user.show_legal_moves)
       patch.show_legal_moves = Boolean(profile.show_legal_moves);
     return patch;
   };
+
+  /** One patch per screen that actually changed. A screen nobody has touched
+   *  is not written, so it keeps following the defaults rather than being
+   *  pinned to whatever they happened to be today. */
+  const screenChanges = () =>
+    SCREEN_LABELS.flatMap(({ id }) => {
+      const before = prefs?.screens[id];
+      const patch: Record<string, string> = {};
+      for (const kind of PREF_KINDS) {
+        if ((before?.[kind] ?? '') !== screens[id][kind]) patch[kind] = screens[id][kind];
+      }
+      return Object.keys(patch).length > 0 ? [[id, patch] as const] : [];
+    });
 
   const save = async () => {
     setSaving(true);
@@ -170,6 +245,11 @@ export function SettingsModal({
     try {
       const patch = profileChanges();
       if (Object.keys(patch).length > 0) onProfileSaved(await api.putProfile(patch));
+      let latest: api.ScreenPrefs | null = null;
+      for (const [screen, screenPatch] of screenChanges()) {
+        latest = await api.putScreenPrefs(screen, screenPatch);
+      }
+      if (latest) onPrefsSaved(latest);
       // One PUT for every pane's engine settings, carrying every field that
       // was read back -- see `api.saveSettings`.
       if (draft) onSaved(await api.saveSettings(draft));
@@ -509,57 +589,155 @@ export function SettingsModal({
             )}
 
             {pane === 'board' && (
-              <div className="space-y-4">
-                <PaneHeading
-                  title="Board & pieces"
-                  blurb="Used everywhere a board is drawn. Per-screen overrides, and sound sets, are still to come (A7)."
-                />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Piece set">
-                    <select
-                      className={inputClass}
-                      value={profile.piece_set}
-                      onChange={(e) => setProfile((p) => ({ ...p, piece_set: e.target.value }))}
-                    >
-                      {assetSets
-                        .filter((s) => s.has_pieces)
-                        .map((s) => (
+              <div className="space-y-6">
+                <div>
+                  <PaneHeading
+                    title="Defaults"
+                    blurb="What every screen draws with unless it has been given something of its own below."
+                  />
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <Field label="Piece set">
+                      <select
+                        className={inputClass}
+                        value={profile.piece_set}
+                        onChange={(e) => setProfile((p) => ({ ...p, piece_set: e.target.value }))}
+                      >
+                        {pieceOptions.map((s) => (
                           <option key={s.name} value={s.name}>
                             {s.name}
                           </option>
                         ))}
-                    </select>
-                  </Field>
-                  <Field label="Board">
-                    <select
-                      className={inputClass}
-                      value={profile.board_set}
-                      onChange={(e) => setProfile((p) => ({ ...p, board_set: e.target.value }))}
-                    >
-                      {assetSets
-                        .filter((s) => s.has_board)
-                        .map((s) => (
+                      </select>
+                    </Field>
+                    <Field label="Board">
+                      <select
+                        className={inputClass}
+                        value={profile.board_set}
+                        onChange={(e) => setProfile((p) => ({ ...p, board_set: e.target.value }))}
+                      >
+                        {boardOptions.map((s) => (
                           <option key={s.name} value={s.name}>
                             {s.name}
                           </option>
                         ))}
-                    </select>
-                  </Field>
-                  <Field label="Show legal moves">
-                    <select
-                      className={inputClass}
-                      value={profile.show_legal_moves ? '1' : '0'}
-                      onChange={(e) =>
-                        setProfile((p) => ({
-                          ...p,
-                          show_legal_moves: e.target.value === '1' ? 1 : 0,
-                        }))
-                      }
+                      </select>
+                    </Field>
+                    <Field label="Sound set">
+                      <select
+                        className={inputClass}
+                        value={profile.sound_set}
+                        onChange={(e) => setProfile((p) => ({ ...p, sound_set: e.target.value }))}
+                      >
+                        {withMissing(
+                          audio.map((s) => s.name),
+                          profile.sound_set,
+                        ).map((name) => (
+                          <option key={name} value={name}>
+                            {optionLabel(name, audio.map((s) => s.name))}
+                            {audio.find((s) => s.name === name)?.complete === false
+                              ? ' (board sounds only)'
+                              : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                </div>
+
+                <div>
+                  <PaneHeading
+                    title="Per screen"
+                    blurb="A different board, pieces or sounds where you want them. Anything left on Default follows the row above, and keeps following it when that changes."
+                  />
+                  <div className="thin-scroll -mx-1 overflow-x-auto px-1">
+                    <table className="w-full min-w-[28rem] border-separate border-spacing-y-1.5 text-xs">
+                      <thead>
+                        <tr className="text-[10px] tracking-wide text-fg-subtle uppercase">
+                          <th className="text-left font-medium">Screen</th>
+                          <th className="text-left font-medium">Pieces</th>
+                          <th className="text-left font-medium">Board</th>
+                          <th className="text-left font-medium">Sounds</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {SCREEN_LABELS.map(({ id, label }) => (
+                          <tr key={id}>
+                            <td className="pr-2 align-middle text-fg-2">{label}</td>
+                            {(
+                              [
+                                ['piece_set', pieceOptions.map((s) => s.name)],
+                                ['board_set', boardOptions.map((s) => s.name)],
+                                ['sound_set', audio.map((s) => s.name)],
+                              ] as const
+                            ).map(([kind, names]) => (
+                              <td key={kind} className="pr-2 align-middle">
+                                <select
+                                  aria-label={`${label} ${kind.replace('_set', '')}`}
+                                  className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-xs text-fg outline-none focus:border-accent-strong"
+                                  value={screens[id][kind]}
+                                  onChange={(e) =>
+                                    setScreens((s) => ({
+                                      ...s,
+                                      [id]: { ...s[id], [kind]: e.target.value },
+                                    }))
+                                  }
+                                >
+                                  <option value="">Default</option>
+                                  {withMissing(names, screens[id][kind]).map((name) => (
+                                    <option key={name} value={name}>
+                                      {optionLabel(name, names)}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="mt-2 text-[11px] text-fg-subtle">
+                    Puzzles and Play vs Maia are still the classic UI here; these apply there
+                    too, since both front ends read the same preferences.
+                  </p>
+                </div>
+
+                <div>
+                  <PaneHeading title="Board behaviour" />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Show legal moves">
+                      <select
+                        className={inputClass}
+                        value={profile.show_legal_moves ? '1' : '0'}
+                        onChange={(e) =>
+                          setProfile((p) => ({
+                            ...p,
+                            show_legal_moves: e.target.value === '1' ? 1 : 0,
+                          }))
+                        }
+                      >
+                        <option value="1">yes</option>
+                        <option value="0">no</option>
+                      </select>
+                    </Field>
+                    <Field
+                      label="Play sounds"
+                      hint="Kept in this browser, and shared with the classic UI."
                     >
-                      <option value="1">yes</option>
-                      <option value="0">no</option>
-                    </select>
-                  </Field>
+                      <select
+                        className={inputClass}
+                        value={soundOn ? '1' : '0'}
+                        onChange={(e) => {
+                          const on = e.target.value === '1';
+                          setSoundEnabled(on);
+                          setSoundOn(on);
+                        }}
+                      >
+                        <option value="1">yes</option>
+                        <option value="0">no</option>
+                      </select>
+                    </Field>
+                  </div>
                 </div>
               </div>
             )}

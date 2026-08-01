@@ -244,6 +244,43 @@ export interface AssetSet {
 }
 export const assetSets = () => request<AssetSet[]>('/api/asset-sets');
 
+export interface AudioSet {
+  name: string;
+  /** Which of the named sounds this set actually ships. */
+  sounds: string[];
+  /** False when it carries the board sounds but not the puzzle/clock ones,
+   *  which fall back to the default set's copies. */
+  complete: boolean;
+}
+export const audioSets = () => request<AudioSet[]>('/api/audio-sets');
+
+/** Which screen draws with what (A7). `defaults` are the account's, `screens`
+ *  are the per-screen overrides where `null` means "follow the default", and
+ *  `effective` is the two resolved — computed server-side so both front ends
+ *  can't disagree about what a screen should look like. */
+export interface ScreenPrefs {
+  defaults: { board_set: string; piece_set: string; sound_set: string };
+  screens: Record<
+    ScreenPrefName,
+    { board_set: string | null; piece_set: string | null; sound_set: string | null }
+  >;
+  effective: Record<
+    ScreenPrefName,
+    { board_set: string; piece_set: string; sound_set: string }
+  >;
+}
+
+export type ScreenPrefName = 'analysis' | 'puzzles' | 'play';
+
+export const screenPrefs = () => request<ScreenPrefs>('/api/settings/screens');
+
+/** An empty string clears an override, putting that kind back on the default;
+ *  an omitted field leaves it alone. */
+export const putScreenPrefs = (
+  screen: ScreenPrefName,
+  patch: { board_set?: string; piece_set?: string; sound_set?: string },
+) => request<ScreenPrefs>(`/api/settings/screens/${screen}`, { ...json(patch), method: 'PUT' });
+
 // --- progress -------------------------------------------------------------
 
 export interface Strength {

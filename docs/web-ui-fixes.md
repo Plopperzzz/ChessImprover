@@ -44,7 +44,8 @@ Assets that already exist on disk and are not yet used:
   and listed by `GET /api/board-images`.
 - `assets/sets/{name}/{w,b}{k,q,r,b,n,p}.png` — piece sets, listed by
   `GET /api/asset-sets` with `has_board` / `has_pieces` flags.
-- `assets/audio/*.{mp3,webm}` — currently one flat directory, no sets.
+- ~~`assets/audio/*.{mp3,webm}` — currently one flat directory, no sets.~~
+  Now `assets/audio/<set>/`, listed by `GET /api/audio-sets`.
 
 ---
 
@@ -111,9 +112,8 @@ Theme, palette and accent are deliberately outside that: they are browser
 settings the server never sees, and they apply on click rather than on Save,
 because the point of picking a colour is watching it land. The footer says so.
 
-**Board & pieces** holds the global board, piece set and legal-move toggle for
-now; A7's per-screen overrides and B11's sound sets slot into that pane when
-their schema exists.
+**Board & pieces** holds the account defaults, A7's per-screen overrides and
+the sound settings.
 
 ### A6a. Theme content — **done**
 
@@ -134,18 +134,30 @@ same ramp. Three dark circles would have been three identical dots — what
 separates these ramps is temperature, which only shows when two values from one
 of them sit against each other.
 
-### A7. Global board/piece/audio defaults, overridable per screen
+### A7. Global board/piece/audio defaults, overridable per screen — **done**
 
-Right now `user.board_set` / `user.piece_set` are global and there is no
-per-screen override at all. Wanted: a global default, overridden
-independently on Game Analysis, Puzzles and Play vs Maia — a different board,
-piece set and sound set per screen.
+A `screen_prefs` table, not nine more columns on `users`. Three screens times
+three kinds of asset is nine today, and every screen or asset kind added later
+would be another migration on the table that holds accounts. `NULL` means
+"follow the default" and is the normal state — a row exists only for a screen
+someone has actually overridden, and a row that ends up overriding nothing is
+deleted rather than left behind, so *reset* leaves no trace.
 
-The backend today stores exactly one `board_set` / `piece_set` / `asset_set`
-per user (`auth.USER_FIELDS`, `PUT /api/settings/profile`), so **this needs a
-schema change** — either three more columns per screen or a small
-`screen_prefs` table. Worth designing once with sound sets (B11) included,
-since they want the same treatment.
+`GET /api/settings/screens` returns three things: the account `defaults`, the
+per-screen overrides, and the `effective` resolution of the two. Effective is
+computed server-side because both front ends draw the same boards, and a
+resolution rule that lives in one browser is one the other gets subtly wrong.
+`PUT /api/settings/screens/{screen}` takes a patch, where an omitted field
+means "leave alone" and `""` means "back to the default" — a distinction the UI
+has to be able to make, and the reason it isn't spelled as a JSON null.
+
+The Board & pieces pane is now defaults on top and a screen × kind grid under
+it. Puzzles and Play vs Maia are still classic-UI screens, and the preferences
+apply there too, since both front ends read them.
+
+`backend/sims/screen_prefs_check.py` covers the absence rules, which are the
+part that rots quietly: a screen following the default has to keep following it
+when the default changes later.
 
 ---
 
@@ -221,17 +233,24 @@ chart dots and the Progress pie now match the icon beside them rather than
 being a second opinion about what colour a blunder is. The Tailwind `badge`
 classes are gone — nothing rendered them once the icons landed.
 
-### B9–B10. Audio
+### B9–B10. Audio — **done**
 
-Nothing is wired up: the React UI plays no sound at all. The files exist but
-sit in one flat `assets/audio/`. To make sets selectable they need
-subdirectories — `assets/audio/default/`, `assets/audio/space/`, … — with the
-same file names inside each, and a listing endpoint alongside
-`/api/asset-sets`.
+The files moved into `assets/audio/default/` (moved, not copied — it is the
+same set), `GET /api/audio-sets` lists the subdirectories, and `lib/sound.ts`
+plays them. A set has to carry the four board sounds to be offered at all; the
+puzzle and clock sounds are optional and fall back to the default set's copies,
+so a set can restyle a piece landing without having to ship a puzzle jingle.
 
-Moving the existing files into `default/` will break the classic UI's audio
-paths unless it's updated in the same change; check `frontend/js/` before
-moving anything.
+The React UI now makes a sound when you step onto a move — read off the SAN, so
+a capture, a check, a castle and a promotion each sound like themselves, and a
+brilliant move gets its own. Never while an analysis job is running, which
+walks a hundred positions and would be unbearable. Mute is the `sound` key in
+`localStorage`, which is the one the classic UI already used, so muting in
+either UI mutes both.
+
+The classic UI was updated in the same change, as the item asks: it plays from
+`assets/audio/<set>/` and follows the account's `sound_set`, so a set chosen in
+either front end is heard in both.
 
 ### B11. Nav buttons belong under the board — **done**
 
@@ -398,8 +417,9 @@ says so in place rather than drawing an empty grid.
    **Done**, with A6a's palettes and A1's account pane in it.
 5. ~~**B6–B8, B11, B12, B13, B14** — analysis-screen polish, all independent.~~
    **Done.**
-6. **A7 + B9–B10** — per-screen preferences and sound sets together, since
-   they want the same storage.
+6. ~~**A7 + B9–B10** — per-screen preferences and sound sets together, since
+   they want the same storage.~~ **Done**, and they did want the same storage:
+   `sound_set` is a column beside `board_set`/`piece_set` in both places.
 7. **B3–B5** — variations, dragging and animation last. It is the largest item
    by a distance and it changes how `Board.tsx` is structured.
 
@@ -408,5 +428,6 @@ says so in place rather than drawing an empty grid.
 - ~~**B12**: what "database selection" means~~ — answered: no change wanted.
 - ~~**B12**: the truncated bullet~~ — answered: the chess.com "get new games"
   button, now built.
-- **A7**: schema shape for per-screen preferences (extra columns vs. a table).
+- ~~**A7**: schema shape for per-screen preferences~~ — decided: a
+  `screen_prefs` table, for the reasons under A7 above.
 - **B15**: what to show when one game can't support a calibrated estimate.

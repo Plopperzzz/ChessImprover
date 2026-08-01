@@ -1089,8 +1089,14 @@ server serves the classic UI at `/` instead, so the build step is optional
 and nothing breaks if you skip it -- see [`web/README.md`](web/README.md).
 
 The classic UI is always available at `http://<server>:8000/legacy/`, and is
-still the only place Play vs Maia, puzzles, batch analysis, the chess.com
-import and the opening explorer live.
+still the only place Play vs Maia, puzzles, batch analysis, month-by-month
+chess.com picking and the opening explorer live.
+
+Boards, piece sets and sound sets are shared by both: they are stored per
+account, with an optional override per screen (`screen_prefs`), so a board
+chosen in one front end is the board the other draws. Sound sets are
+subdirectories of `assets/audio/` holding the same file names — drop another
+directory in beside `default/` and it appears in the picker.
 
 Re-run the `pip install -r requirements.txt` line after a `git pull` that adds
 a dependency. Downloading games from chess.com added `httpx`, and the server

@@ -676,7 +676,12 @@ function fmtCount(n) {
    The assets in assets/audio/ are the usual chess-site set. Sounds only ever
    follow something the user did -- a move they played, a reply from Maia, a
    game ending -- never the analysis animation, which steps through a hundred
-   positions and would be unbearable. */
+   positions and would be unbearable.
+
+   They live in a subdirectory per set now (assets/audio/<set>/), with the same
+   file names inside each; what was the flat directory is 'default'. Which set
+   this UI plays follows the account's own sound_set, so choosing one in either
+   front end is heard in both. */
 
 const SOUND_FILES = {
   move: 'move-self.webm',
@@ -700,16 +705,23 @@ function soundEnabled() {
   return localStorage.getItem('sound') !== 'off';
 }
 
+/** The account's set, or the original one. Read per play rather than cached,
+    because it can change under us in the settings dialog of the other UI. */
+function soundSet() {
+  return state.user?.sound_set || 'default';
+}
+
 function playSound(name) {
   if (!soundEnabled()) return;
   const file = SOUND_FILES[name];
   if (!file) return;
   try {
-    let audio = soundCache[name];
+    const key = `${soundSet()}/${name}`;
+    let audio = soundCache[key];
     if (!audio) {
-      audio = new Audio(`/assets/audio/${file}`);
+      audio = new Audio(`/assets/audio/${soundSet()}/${file}`);
       audio.volume = 0.55;
-      soundCache[name] = audio;
+      soundCache[key] = audio;
     }
     audio.currentTime = 0;
     // Autoplay policy rejects until the page has been interacted with; every

@@ -9,7 +9,8 @@ from .auth import USER_FIELDS, require_user
 from .db import db_cursor
 from . import engine_probe, engines
 from .maia import FALLBACK_SIZES, discover_sizes, resolve_binary
-from .paths import ENGINES_DIR, list_asset_sets, list_board_images
+from .paths import (ENGINES_DIR, list_asset_sets, list_audio_sets,
+                    list_board_images)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -186,6 +187,7 @@ class ProfileUpdate(BaseModel):
     asset_set: str | None = None       # legacy: one set for both halves
     board_set: str | None = None
     piece_set: str | None = None
+    sound_set: str | None = None
     show_legal_moves: bool | None = None
     allow_premoves: bool | None = None
     eval_bar_side: str | None = None
@@ -208,6 +210,12 @@ def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
             raise HTTPException(400, f"unknown asset set '{value}' (available: {available_sets})")
         return value
 
+    def check_sound(value: str) -> str:
+        names = {s["name"] for s in list_audio_sets()}
+        if value not in names:
+            raise HTTPException(400, f"unknown sound set '{value}' (available: {sorted(names)})")
+        return value
+
     def check_board(value: str) -> str:
         """Board names come from either assets/sets/{name}/board.png or
         assets/boards/{name}.png, so validate against both sources."""
@@ -226,6 +234,8 @@ def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
         updates["board_set"] = check_board(body.board_set)
     if body.piece_set is not None:
         updates["piece_set"] = check(body.piece_set)
+    if body.sound_set is not None:
+        updates["sound_set"] = check_sound(body.sound_set)
     if body.show_legal_moves is not None:
         updates["show_legal_moves"] = int(body.show_legal_moves)
     if body.allow_premoves is not None:
@@ -242,3 +252,113 @@ def update_profile(body: ProfileUpdate, user: dict = Depends(require_user)):
             conn.execute(f"UPDATE users SET {column}=? WHERE id=?", (value, user["id"]))
         row = conn.execute(f"SELECT {USER_FIELDS} FROM users WHERE id=?", (user["id"],)).fetchone()
     return dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Per-screen board, pieces and sounds (A7)
+# ---------------------------------------------------------------------------
+
+# The screens that draw a board. Fixed here rather than free-form, so a typo
+# in a client can't quietly file preferences under a screen nothing reads.
+SCREENS = ("analysis", "puzzles", "play")
+PREF_KINDS = ("board_set", "piece_set", "sound_set")
+
+
+class ScreenPrefUpdate(BaseModel):
+    """`None` in the body means "leave this kind alone"; an explicit JSON null
+    can't be told from an omitted field by pydantic here, so clearing an
+    override is spelled with the empty string -- see `update_screen_prefs`."""
+    board_set: str | None = None
+    piece_set: str | None = None
+    sound_set: str | None = None
+
+
+def screen_prefs_for(user: dict) -> dict:
+    """Defaults, the per-screen overrides, and what those two resolve to.
+
+    `effective` is computed here rather than in each UI because both of them
+    draw the same boards: a rule that lives in one browser is a rule the other
+    one gets subtly wrong.
+    """
+    defaults = {kind: user[kind] for kind in PREF_KINDS}
+    with db_cursor() as conn:
+        rows = conn.execute(
+            "SELECT screen, board_set, piece_set, sound_set FROM screen_prefs WHERE user_id = ?",
+            (user["id"],),
+        ).fetchall()
+    overrides = {row["screen"]: {kind: row[kind] for kind in PREF_KINDS} for row in rows}
+    return {
+        "defaults": defaults,
+        "screens": {
+            screen: overrides.get(screen, {kind: None for kind in PREF_KINDS})
+            for screen in SCREENS
+        },
+        "effective": {
+            screen: {
+                kind: (overrides.get(screen, {}).get(kind) or defaults[kind])
+                for kind in PREF_KINDS
+            }
+            for screen in SCREENS
+        },
+    }
+
+
+@router.get("/screens")
+def get_screen_prefs(user: dict = Depends(require_user)):
+    """What each screen should draw with. A screen with no row of its own
+    follows the defaults, which is the normal case."""
+    return screen_prefs_for(user)
+
+
+@router.put("/screens/{screen}")
+def update_screen_prefs(screen: str, body: ScreenPrefUpdate,
+                        user: dict = Depends(require_user)):
+    """Sets one screen's overrides. An empty string clears one, putting that
+    kind back on the default -- which is a thing the UI has to be able to say,
+    and is why it isn't spelled as a missing field."""
+    if screen not in SCREENS:
+        raise HTTPException(400, f"screen must be one of {', '.join(SCREENS)}")
+
+    available_sets = list_asset_sets()
+    board_names = {img["name"] for img in list_board_images()}
+    sound_names = {s["name"] for s in list_audio_sets()}
+
+    updates: dict = {}
+    for kind, value in (("board_set", body.board_set), ("piece_set", body.piece_set),
+                        ("sound_set", body.sound_set)):
+        if value is None:
+            continue
+        if value == "":
+            updates[kind] = None
+            continue
+        if kind == "board_set" and value not in board_names and value not in available_sets:
+            raise HTTPException(400, f"unknown board set '{value}'")
+        if kind == "piece_set" and value not in available_sets:
+            raise HTTPException(400, f"unknown asset set '{value}'")
+        if kind == "sound_set" and value not in sound_names:
+            raise HTTPException(400, f"unknown sound set '{value}'")
+        updates[kind] = value
+
+    if not updates:
+        raise HTTPException(400, "nothing to update")
+
+    with db_cursor() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO screen_prefs (user_id, screen) VALUES (?, ?)",
+            (user["id"], screen),
+        )
+        for column, value in updates.items():
+            conn.execute(
+                f"UPDATE screen_prefs SET {column} = ? WHERE user_id = ? AND screen = ?",
+                (value, user["id"], screen),
+            )
+        # A row that overrides nothing is the same as no row, and keeping it
+        # would make "reset this screen" leave a trace that outlives the reset.
+        conn.execute(
+            """DELETE FROM screen_prefs
+               WHERE user_id = ? AND screen = ?
+                 AND board_set IS NULL AND piece_set IS NULL AND sound_set IS NULL""",
+            (user["id"], screen),
+        )
+        row = conn.execute(f"SELECT {USER_FIELDS} FROM users WHERE id = ?", (user["id"],)).fetchone()
+    return screen_prefs_for(dict(row))

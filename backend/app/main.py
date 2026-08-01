@@ -26,6 +26,7 @@ from .paths import (
     FRONTEND_DIR,
     WEB_DIST_DIR,
     asset_set_details,
+    list_audio_sets,
     list_board_images,
     web_built,
 )
@@ -98,6 +99,13 @@ def get_asset_sets(user: dict = Depends(require_user)):
 @app.get("/api/board-images")
 def get_board_images(user: dict = Depends(require_user)):
     return list_board_images()
+
+@app.get("/api/audio-sets")
+def get_audio_sets(user: dict = Depends(require_user)):
+    """The sound sets on disk, each a subdirectory of assets/audio/ holding the
+    same file names. `default` is the original flat directory, moved into one
+    when sets became selectable (B9)."""
+    return list_audio_sets()
 
 @app.get("/api/engines/status")
 def engines_status(user: dict = Depends(require_user)):

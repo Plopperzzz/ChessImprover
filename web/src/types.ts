@@ -21,6 +21,7 @@ export interface User {
   asset_set: string;
   board_set: string;
   piece_set: string;
+  sound_set: string;
   show_legal_moves: number;
   allow_premoves: number;
   eval_bar_side: string;

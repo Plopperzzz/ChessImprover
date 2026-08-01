@@ -21,6 +21,7 @@ export default function App() {
     () => (localStorage.getItem(SCREEN_KEY) as ScreenType) || 'analysis',
   );
   const [settings, setSettings] = useState<EngineSettings | null>(null);
+  const [prefs, setPrefs] = useState<api.ScreenPrefs | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // The session cookie outlives the page, so a reload asks who it belongs to
@@ -36,9 +37,13 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setSettings(null);
+      setPrefs(null);
       return;
     }
     api.getSettings().then(setSettings).catch(() => setSettings(null));
+    // Which board, pieces and sounds each screen draws with (A7). Fetched
+    // here rather than per screen so switching tabs doesn't re-ask.
+    api.screenPrefs().then(setPrefs).catch(() => setPrefs(null));
   }, [user]);
 
   useEffect(() => localStorage.setItem(SCREEN_KEY, screen), [screen]);
@@ -79,6 +84,7 @@ export default function App() {
         <AnalysisScreen
           user={user}
           settings={settings}
+          prefs={prefs}
           onOpenSettings={() => setSettingsOpen(true)}
         />
       )}
@@ -117,6 +123,8 @@ export default function App() {
         onProfileSaved={setUser}
         onLoggedOut={() => setUser(null)}
         theme={theme}
+        prefs={prefs}
+        onPrefsSaved={setPrefs}
       />
     </div>
   );

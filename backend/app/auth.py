@@ -13,7 +13,7 @@ SESSION_COOKIE = "ci_session"
 # Everything the browser needs about the logged-in user, in one place so the
 # three queries that return a user can't drift apart as fields are added.
 USER_FIELDS = ("id, username, display_name, asset_set, board_set, piece_set, "
-               "show_legal_moves, allow_premoves, eval_bar_side")
+               "sound_set, show_legal_moves, allow_premoves, eval_bar_side")
 
 
 class UserOut(BaseModel):
@@ -23,6 +23,7 @@ class UserOut(BaseModel):
     asset_set: str
     board_set: str
     piece_set: str
+    sound_set: str
     show_legal_moves: int
     allow_premoves: int
     eval_bar_side: str

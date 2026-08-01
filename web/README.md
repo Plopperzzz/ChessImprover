@@ -96,6 +96,26 @@ which feeds both the brilliant-move count and the pie. Great and Brilliant only
 come out of a swept game, so the response says how many games were
 quick-analysed and the screen repeats it under the count.
 
+## Boards, pieces and sounds
+
+`GET /api/settings/screens` answers "what does this screen draw with": the
+account defaults, the per-screen overrides, and the two resolved into
+`effective`. The resolution happens on the server because the classic UI reads
+the same preferences — a rule kept in one browser is one the other gets subtly
+wrong. `PUT /api/settings/screens/{screen}` patches one screen, where an
+omitted field means "leave alone" and `""` means "back to the default".
+
+Sounds live in `assets/audio/<set>/`, one subdirectory per set with the same
+file names inside each; `default` is the original flat directory. `lib/sound.ts`
+plays them, reading the event name rather than the file so a set can restyle
+without every caller learning about it. A set only has to carry the four board
+sounds; anything else it omits falls back to the default set's copy.
+
+The React UI sounds a move when you step onto it, chosen from the SAN, and
+never while an analysis job is walking the game. Mute is the `sound` key in
+`localStorage` — the key the classic UI already used, so muting in one mutes
+both.
+
 ## Colours and themes
 
 Every colour comes from a `--er-*` custom property defined in `src/index.css`,

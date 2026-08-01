@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../lib/api';
 import { fenAt, formatEval, parsePgn, winProb, yourSide, type Ply } from '../../lib/chess';
+import { playMoveSound, playSound } from '../../lib/sound';
 import { useAnalysisJob, type JobResult } from '../../lib/useAnalysisJob';
 import { useLiveEval } from '../../lib/useLiveEval';
 import type {
@@ -31,10 +32,13 @@ import { MoveList } from './MoveList';
 interface AnalysisScreenProps {
   user: User;
   settings: EngineSettings | null;
+  /** Per-screen board/piece/sound choices (A7); null until they load, or if
+   *  the request failed, in which case the account defaults are used. */
+  prefs: api.ScreenPrefs | null;
   onOpenSettings: () => void;
 }
 
-export function AnalysisScreen({ user, settings, onOpenSettings }: AnalysisScreenProps) {
+export function AnalysisScreen({ user, settings, prefs, onOpenSettings }: AnalysisScreenProps) {
   const [games, setGames] = useState<GameSummary[]>([]);
   const [gamesLoading, setGamesLoading] = useState(true);
   const [facets, setFacets] = useState<api.Facets | null>(null);
@@ -227,9 +231,36 @@ export function AnalysisScreen({ user, settings, onOpenSettings }: AnalysisScree
     return () => window.removeEventListener('keydown', keyNav);
   }, [keyNav]);
 
+
   const you = yourSide(game?.your_color);
   // Which colour sits on which edge of the board, given the flip.
   const topSide: 'w' | 'b' = flipped ? 'w' : 'b';
+
+  // A7: this screen's own board, pieces and sounds, falling back to the
+  // account defaults while the preferences are still in flight.
+  const screen = prefs?.effective.analysis;
+  const boardSet = screen?.board_set ?? user.board_set;
+  const pieceSet = screen?.piece_set ?? user.piece_set;
+  const soundSet = screen?.sound_set ?? user.sound_set;
+
+  // B9/B10: the move you land on, out loud. Only ever for a move *you* moved
+  // to -- never while a job is running, which walks the whole game a position
+  // at a time and would make a hundred noises. Stepping back to the start has
+  // no move to sound, which is why index 0 is silent rather than special.
+  const soundedPly = useRef<number | null>(null);
+  useEffect(() => {
+    if (job.state.running || plies.length === 0) {
+      soundedPly.current = plyIndex;
+      return;
+    }
+    if (soundedPly.current === plyIndex) return;
+    soundedPly.current = plyIndex;
+    const landed = plyIndex > 0 ? plies[plyIndex - 1] : null;
+    if (!landed) return;
+    const quality = moves.get(landed.ply)?.classification;
+    if (quality === 'brilliant') playSound(soundSet, 'brilliant');
+    else playMoveSound(soundSet, landed.san, you != null && landed.color === you);
+  }, [plyIndex, plies, moves, job.state.running, soundSet, you]);
 
   const plate = (name: string, elo: string | undefined, edge: 'top' | 'bottom') => (
     <div className="flex items-center gap-2 px-1 py-2">
@@ -325,8 +356,8 @@ export function AnalysisScreen({ user, settings, onOpenSettings }: AnalysisScree
                 <Board
                   fen={boardFen}
                   flipped={flipped}
-                  boardSet={user.board_set}
-                  pieceSet={user.piece_set}
+                  boardSet={boardSet}
+                  pieceSet={pieceSet}
                   showLegalMoves={Boolean(user.show_legal_moves)}
                   lastMove={
                     jobFen || !currentPly
