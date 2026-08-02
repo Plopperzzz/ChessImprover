@@ -9,6 +9,13 @@ Fixes and polish for the React UI in `web/` are *not* here — they live in
 [`web-ui-fixes.md`](web-ui-fixes.md), so a defect list can't drown out the
 feature list.
 
+One item is big enough to have its own file:
+[`weakness-report-todo.md`](weakness-report-todo.md) — classifying *why* a bad
+move happened (rushed / didn't see it / didn't calculate it / picked the wrong
+candidate) and what kind of thing was missed, aggregated across the library.
+It reconciles an external spec against what is already built, and it subsumes
+§2 and much of §4 below.
+
 ---
 
 ## 0. Opening repertoire report
@@ -76,7 +83,14 @@ isn't.
 
 ---
 
-## 2. Time spent vs quality
+## 2. Time spent vs quality — *folded into the weakness report*
+
+Kept here for the note below, but the work now lives as step 2 of
+[`weakness-report-todo.md`](weakness-report-todo.md), where the same clock data
+answers a sharper question: not "do you blunder when you move fast" but
+"was time the limiting factor on *this* miss, given the position was one a
+player of your strength usually finds".
+
 
 **Why:** most players have a sharp cliff below about five seconds a move, and
 seeing your own is more convincing than being told.
@@ -114,9 +128,16 @@ stores per-position scores — three separate Elo fits rather than one. "Your
 endgame is 200 points behind your opening" is directly actionable in a way
 that a single number never is.
 
-The phase boundary has to be defined and stated, not improvised: material
-count is the usual rule (endgame below ~13 points of non-pawn material per
-side), and whatever is picked should be written down where the fit is.
+The phase boundary has to be defined and stated, not improvised — and it
+already is: `puzzle_themes._phase_themes` draws Lichess's line (endgame at six
+or fewer non-pawn, non-king pieces; opening below move 10). Counting pieces
+rather than summing material is deliberate and the reason is in that file. Use
+it here rather than picking a second rule, the same way
+[`weakness-report-todo.md`](weakness-report-todo.md) does.
+
+The per-phase *miss* breakdown is part of that report; what stays here is the
+part it doesn't cover — three separate Elo fits from the per-position sweep
+scores.
 
 ---
 

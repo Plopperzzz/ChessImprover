@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
 import { FILES, RANKS, pieceUrl } from '../lib/chess';
-import { reconcile, type PlacedPiece } from '../lib/pieces';
+import { reconcile, transition, type PlacedPiece } from '../lib/pieces';
 import { styleFor } from '../lib/quality';
 
 export interface BoardMarker {
@@ -93,10 +93,14 @@ export function Board({
   // input, and computing it afterwards would paint one frame of the old
   // position on top of the new one.
   if (previousFen.current !== fen) {
-    // A move is only carried when the board is walking one position to the
-    // next; jumping to an arbitrary ply matches by square alone, so pieces
-    // snap instead of sliding along paths they never took.
-    const step = lastMove && previousFen.current ? lastMove : null;
+    // Worked out from the two positions rather than taken from `lastMove`,
+    // which is the move that produced the position on the board. That is the
+    // right journey stepping forward and the wrong one stepping back — going
+    // back one ply, `lastMove` describes a move played earlier still, whose
+    // origin square is empty in both positions, so nothing was carried and
+    // every piece snapped. `transition` answers in either direction, and
+    // returns null for a jump of more than one move, which still snaps.
+    const step = previousFen.current ? transition(previousFen.current, fen) : null;
     pieces.current = reconcile(pieces.current, fen, step);
     previousFen.current = fen;
   }
@@ -258,7 +262,10 @@ export function Board({
   return (
     <div
       ref={boardRef}
-      className={`relative aspect-square w-full overflow-hidden rounded-xl border-2 border-line bg-surface shadow-2xl select-none ${
+      // `board-frame` is not styling, it is a handle: `index.css` squares off
+      // the corners and drops the side borders when a phone puts the board
+      // against the edges of the screen.
+      className={`board-frame relative aspect-square w-full overflow-hidden rounded-xl border-2 border-line bg-surface shadow-2xl select-none ${
         drag?.moved ? 'cursor-grabbing' : ''
       }`}
       style={{

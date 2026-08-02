@@ -27,7 +27,11 @@ const iconUrl = (name: MoveQuality) => `/assets/icons/classification/${name}.svg
 export const QUALITY: Record<MoveQuality, QualityStyle> = {
   brilliant: { label: 'Brilliant', icon: iconUrl('brilliant'), symbol: '!!', color: '#26c2a3' },
   great: { label: 'Great', icon: iconUrl('great'), symbol: '!', color: '#749bbf' },
-  best: { label: 'Best', icon: iconUrl('best'), symbol: '★', color: '#81b64c' },
+  // Best used to be #81b64c, the same green as Excellent and a shade off Good's
+  // -- three greens that were one colour in a pie chart. It is now brighter and
+  // far more saturated than either, and `best.svg`'s own fill was changed with
+  // it so the icon beside the slice is still the slice's colour.
+  best: { label: 'Best', icon: iconUrl('best'), symbol: '★', color: '#5bd44a' },
   excellent: { label: 'Excellent', icon: iconUrl('excellent'), symbol: '✓', color: '#81b64c' },
   good: { label: 'Good', icon: iconUrl('good'), symbol: '', color: '#95b776' },
   book: { label: 'Book', icon: iconUrl('book'), symbol: '📖', color: '#d5a47d' },

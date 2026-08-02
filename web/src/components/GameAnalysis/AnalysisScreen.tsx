@@ -590,19 +590,10 @@ export function AnalysisScreen({
             can be ordered individually, instead of the whole column having to
             move as one block. */}
         <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-6 xl:flex-row xl:items-start">
-          <div
-            className="order-2 flex w-full min-w-0 flex-col xl:order-none xl:flex-1"
-            style={{
-              // The board is square, so its width is also its height. On an
-              // ultrawide monitor half the page is far taller than the screen,
-              // and the board has to be bounded by the *short* side of the
-              // viewport instead: 15rem is what the plates above and below it
-              // and the step buttons under those take. `min()` keeps this from
-              // ever widening the column on a phone, where 100svh is the long
-              // side and the width is what binds.
-              maxWidth: 'min(100%, calc(100svh - 15rem))',
-            }}
-          >
+          {/* `board-column` is the height cap on a wide screen and the release
+              of it on a phone, where the board goes edge to edge instead
+              (`index.css`). */}
+          <div className="board-column order-2 flex w-full min-w-0 flex-col xl:order-none xl:flex-1">
             <div className="flex items-center justify-between gap-2 pb-1">
               {plate(topName, topElo, 'top')}
               <div className="flex items-center gap-1.5">
@@ -640,7 +631,7 @@ export function AnalysisScreen({
               </div>
             </div>
 
-            <div className="flex items-stretch gap-2">
+            <div className="board-bleed flex items-stretch gap-2">
               {/* No bar on a phone: it is 20px of a screen the board wants all
                   of, and the number it draws is the same number the engine
                   lines above the board already print (D6). */}
