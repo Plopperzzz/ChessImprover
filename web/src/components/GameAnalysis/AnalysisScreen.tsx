@@ -795,6 +795,8 @@ export function AnalysisScreen({
                 yourColor={yourSide(game?.your_color)}
                 whiteName={whiteName}
                 blackName={blackName}
+                gameId={game?.id ?? null}
+                onSelectPly={goToPly}
               />
             </div>
           </div>

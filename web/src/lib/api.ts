@@ -140,6 +140,44 @@ export const gameFacets = (database?: GameDatabase | null) =>
 export const getGame = (id: number) => request<GameDetail>(`/api/games/${id}`);
 export const listCollections = () => request<Collection[]>('/api/collections');
 
+/** One Mistake/Blunder/Miss, and what Maia's policy gives it at the Elo your
+ *  own header rating in this game converts to on Maia's scale. */
+export interface MistakeCheckMove {
+  ply: number;
+  san: string;
+  classification: string;
+  wp_drop: number;
+  /** 0-1. Interpolated between the swept grid points nearest `target_elo`. */
+  probability: number;
+  log_probability: number;
+  /** False when no build reported a policy for this sweep, so this reads the
+   *  rank-to-probability surrogate instead (`policy_likelihood`). */
+  exact_policy: boolean;
+  maia_rank_at_nearest_grid_elo: number | null;
+  nearest_grid_elo: number;
+  /** `target_elo` fell outside the swept range -- this is Maia's opinion at
+   *  the edge of what was actually tried, not a read at your rating itself. */
+  clamped: boolean;
+}
+
+export type MistakeCheck =
+  | { available: false; reason: string; header_elo?: number | null }
+  | {
+      available: true;
+      header_elo: number;
+      /** Maia-scale minus real-scale, from `/api/strength`'s own calibration. */
+      offset: number;
+      target_elo: number;
+      database: GameDatabase;
+      moves: MistakeCheckMove[];
+    };
+
+/** Would a player at your own calibrated strength in *this* game have played
+ *  each of your Mistakes/Blunders/Misses? Reads data the Full analysis
+ *  already stored -- no engine work, safe to call any time a sweep exists. */
+export const mistakeCheck = (gameId: number) =>
+  request<MistakeCheck>(`/api/games/${gameId}/mistake-check`);
+
 export const uploadGames = (files: File[], pasted: string) => {
   const form = new FormData();
   files.forEach((f) => form.append('files', f));

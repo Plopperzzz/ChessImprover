@@ -1,4 +1,5 @@
-import { AlertTriangle, Info, TrendingUp } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, Gauge, Info, Loader2, TrendingUp } from 'lucide-react';
 import {
   CartesianGrid,
   ComposedChart,
@@ -10,8 +11,10 @@ import {
   YAxis,
   ZAxis,
 } from 'recharts';
+import * as api from '../../lib/api';
 import type { EloEstimate, SweepResults } from '../../types';
 import { lighten, useChartTheme } from '../../lib/theme';
+import { styleFor } from '../../lib/quality';
 
 interface EloSweepPanelProps {
   results: SweepResults | null;
@@ -21,6 +24,10 @@ interface EloSweepPanelProps {
   yourColor: 'w' | 'b' | null;
   whiteName: string;
   blackName: string;
+  /** Null while no game is loaded -- the check has nothing to run against. */
+  gameId: number | null;
+  /** Jumps the board to a ply, the same way clicking the eval chart does. */
+  onSelectPly: (ply: number) => void;
 }
 
 const CONFIDENCE: Record<string, string> = {
@@ -193,12 +200,141 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
   );
 }
 
+/** "Would a player at your own strength have played this?" -- for every
+ *  Mistake/Blunder/Miss, the probability Maia's policy gives the move you
+ *  actually played, at the Elo your header rating in *this* game converts to
+ *  on Maia's scale (the same calibration `/api/strength` computes, reversed).
+ *
+ *  A button rather than automatic: the calibration query pools the account's
+ *  whole library (scoped to this game's database) to measure the offset, and
+ *  that is worth asking for rather than paying on every game load. Once run
+ *  it costs no engine time either way -- everything it reads was already
+ *  stored by the Full analysis that swept this game. */
+function MistakeCheckSection({
+  gameId,
+  onSelectPly,
+}: {
+  gameId: number | null;
+  onSelectPly: (ply: number) => void;
+}) {
+  const [state, setState] = useState<
+    | { phase: 'idle' }
+    | { phase: 'loading' }
+    | { phase: 'error'; message: string }
+    | { phase: 'done'; result: api.MistakeCheck }
+  >({ phase: 'idle' });
+
+  const run = () => {
+    if (!gameId) return;
+    setState({ phase: 'loading' });
+    api
+      .mistakeCheck(gameId)
+      .then((result) => setState({ phase: 'done', result }))
+      .catch((e) => setState({ phase: 'error', message: e instanceof Error ? e.message : String(e) }));
+  };
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-[11px] tracking-wider text-fg-subtle uppercase">
+          <Gauge className="h-3.5 w-3.5" />
+          Would you have found it?
+        </p>
+        {state.phase !== 'loading' && (
+          <button
+            onClick={run}
+            disabled={!gameId}
+            className="rounded-lg border border-line bg-canvas px-2.5 py-1 text-[11px] font-medium text-fg-2 hover:bg-surface-2 disabled:opacity-40"
+          >
+            {state.phase === 'done' ? 'Re-check' : 'Check my mistakes'}
+          </button>
+        )}
+      </div>
+
+      {state.phase === 'loading' && (
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-fg-subtle">
+          <Loader2 className="h-3 w-3 animate-spin" /> Reading the sweep…
+        </p>
+      )}
+      {state.phase === 'error' && (
+        <p className="mt-2 text-[11px] text-danger-fg">{state.message}</p>
+      )}
+      {state.phase === 'done' && !state.result.available && (
+        <p className="mt-2 text-[11px] leading-relaxed text-fg-subtle">{state.result.reason}</p>
+      )}
+      {state.phase === 'done' && state.result.available && (
+        <>
+          <p className="mt-2 text-[11px] leading-relaxed text-fg-subtle">
+            Your recorded rating in this game, {state.result.header_elo}, converts to{' '}
+            <span className="font-mono font-semibold text-fg-2">{state.result.target_elo}</span> on
+            Maia's scale ({state.result.offset >= 0 ? '+' : ''}
+            {state.result.offset} from the calibration on {state.result.database} games).
+          </p>
+          {state.result.moves.length === 0 ? (
+            <p className="mt-2 text-[11px] text-fg-subtle">
+              No Mistakes, Blunders or Misses on your side of this game — nothing to check.
+            </p>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {state.result.moves.map((move) => {
+                const style = styleFor(move.classification);
+                const pct = move.probability * 100;
+                return (
+                  <li key={move.ply}>
+                    <button
+                      onClick={() => onSelectPly(move.ply)}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-surface-2"
+                    >
+                      {style && (
+                        <img src={style.icon} alt={style.label} className="h-4 w-4 shrink-0" />
+                      )}
+                      <span className="font-mono text-fg-2">{move.san}</span>
+                      <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px]">
+                        <span
+                          className={
+                            pct < 5
+                              ? 'font-semibold text-danger-fg'
+                              : pct < 20
+                                ? 'text-accent'
+                                : 'text-fg-muted'
+                          }
+                        >
+                          {pct < 0.1 ? '<0.1' : pct.toFixed(pct < 10 ? 1 : 0)}%
+                        </span>
+                        {move.clamped && (
+                          <span
+                            className="text-fg-faint"
+                            title={`Outside the swept range -- reading Maia's opinion at ${move.nearest_grid_elo} instead`}
+                          >
+                            ⚠
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <p className="mt-2 text-[10px] text-fg-faint">
+            {state.result.moves.some((m) => m.exact_policy)
+              ? "Maia's own reported policy, where the engine gave one."
+              : "Estimated from Maia's ranking of the move, not its raw policy."}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function EloSweepPanel({
   results,
   modelNote,
   yourColor,
   whiteName,
   blackName,
+  gameId,
+  onSelectPly,
 }: EloSweepPanelProps) {
   const white = results?.w;
   const black = results?.b;
@@ -240,6 +376,8 @@ export function EloSweepPanel({
               <SweepCurve estimate={yours} />
             </div>
           )}
+
+          {yourColor && <MistakeCheckSection key={gameId} gameId={gameId} onSelectPly={onSelectPly} />}
 
           {modelNote && (
             <p className="mt-3 flex gap-1.5 border-t border-line pt-3 text-[11px] leading-snug text-fg-subtle">

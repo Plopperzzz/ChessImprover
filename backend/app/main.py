@@ -19,6 +19,7 @@ from .engine_settings import router as settings_router
 from .games import router as games_router
 from .jobqueue import pool
 from .live_eval_ws import router as ws_router
+from .mistake_check import router as mistake_check_router
 from .move_quality import router as move_quality_router
 from .openings import router as openings_router
 from .paths import (
@@ -88,6 +89,7 @@ app.include_router(trend_router)
 app.include_router(openings_router)
 app.include_router(strength_router)
 app.include_router(move_quality_router)
+app.include_router(mistake_check_router)
 app.include_router(variations_router)
 app.include_router(puzzles_router)
 
