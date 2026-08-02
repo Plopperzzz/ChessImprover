@@ -178,6 +178,29 @@ export type MistakeCheck =
 export const mistakeCheck = (gameId: number) =>
   request<MistakeCheck>(`/api/games/${gameId}/mistake-check`);
 
+/** `/api/strength`'s own calibration (the gap between Maia's scale and
+ *  whatever site your header ratings are on), scoped to one game's own
+ *  database and time control rather than the whole account. The same offset
+ *  converts *any* Maia-scale estimate from that slice onto the header-rating
+ *  scale -- your own, or a single opponent's, which is why the Elo sweep
+ *  panel applies it to both sides' cards rather than only "you". */
+export type GameCalibration =
+  | { available: false; reason: string; database: GameDatabase; speed: string | null }
+  | {
+      available: true;
+      /** Maia-scale minus real-scale: calibrated = maia_estimate - offset. */
+      offset: number;
+      database: GameDatabase;
+      speed: string | null;
+      /** Best guess at which site the header rating is from, for labelling
+       *  the calibrated number -- "Chess.com" for a chess.com download,
+       *  sniffed from the PGN's Site/Link headers otherwise. */
+      platform_label: string;
+    };
+
+export const gameCalibration = (gameId: number) =>
+  request<GameCalibration>(`/api/games/${gameId}/calibration`);
+
 export const uploadGames = (files: File[], pasted: string) => {
   const form = new FormData();
   files.forEach((f) => form.append('files', f));

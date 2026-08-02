@@ -16,6 +16,7 @@ from .auth import router as auth_router
 from .db import init_db
 from .engine_manager import job_engine_status, manager
 from .engine_settings import router as settings_router
+from .game_calibration import router as game_calibration_router
 from .games import router as games_router
 from .jobqueue import pool
 from .live_eval_ws import router as ws_router
@@ -90,6 +91,7 @@ app.include_router(openings_router)
 app.include_router(strength_router)
 app.include_router(move_quality_router)
 app.include_router(mistake_check_router)
+app.include_router(game_calibration_router)
 app.include_router(variations_router)
 app.include_router(puzzles_router)
 

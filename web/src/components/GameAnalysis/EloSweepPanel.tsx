@@ -28,6 +28,10 @@ interface EloSweepPanelProps {
   gameId: number | null;
   /** Jumps the board to a ply, the same way clicking the eval chart does. */
   onSelectPly: (ply: number) => void;
+  /** `/api/strength`'s own calibration, scoped to this game. Null while it's
+   *  still loading or the game has none -- both cards fall back to the raw
+   *  Maia-scale estimate alone, same as before this existed. */
+  calibration: api.GameCalibration | null;
 }
 
 const CONFIDENCE: Record<string, string> = {
@@ -40,12 +44,29 @@ function SideEstimate({
   estimate,
   name,
   isYou,
+  calibration,
 }: {
   estimate: EloEstimate;
   name: string;
   isYou: boolean;
+  calibration: api.GameCalibration | null;
 }) {
   const bound = estimate.bound;
+  // The offset converts *any* Maia-scale estimate onto the header-rating
+  // scale -- it was measured from the pooled opponent field, but applying it
+  // here is a fresh conversion of a different number, not a re-use of the
+  // one that measured it (see `game_calibration` on the backend). Same
+  // offset for both cards, which is the point: the scale gap doesn't care
+  // whose estimate it's converting.
+  const offset = calibration?.available ? calibration.offset : null;
+  const calibrated =
+    offset != null && estimate.estimate != null ? Math.round(estimate.estimate - offset) : null;
+  const calibratedCiLow =
+    offset != null && estimate.ci_low != null ? Math.round(estimate.ci_low - offset) : null;
+  const calibratedCiHigh =
+    offset != null && estimate.ci_high != null ? Math.round(estimate.ci_high - offset) : null;
+  const platformLabel = calibration?.available ? calibration.platform_label : null;
+
   // B14: the caveats are a wall of text next to a three-digit number, and they
   // are read once. `group-hover` rather than state, so the card also reveals
   // them on keyboard focus without a second code path.
@@ -70,23 +91,45 @@ function SideEstimate({
         </span>
       </div>
 
+      {/* Calibrated is the number your own recorded rating is comparable to,
+          so it leads; the raw Maia-scale figure underneath is the one
+          `/api/strength`'s scale_note already calls "the Lichess scale" --
+          both are the same fit, just before and after the same subtraction. */}
       <div className="mt-1.5 flex items-baseline gap-2">
         <span className="font-mono text-3xl font-black text-accent">
-          {estimate.estimate ?? '—'}
+          {calibrated ?? estimate.estimate ?? '—'}
         </span>
+        {platformLabel && (
+          <span className="text-[10px] font-semibold text-fg-muted">{platformLabel}</span>
+        )}
         {bound && (
           <span className="text-[11px] text-fg-muted">
             {bound === 'lower' ? 'at least' : 'at most'}
           </span>
         )}
       </div>
-
       <div className="mt-1 font-mono text-[11px] text-fg-muted">
-        {estimate.ci_low != null && estimate.ci_high != null
-          ? `95% CI ${estimate.ci_low} – ${estimate.ci_high}`
+        {(calibrated != null ? calibratedCiLow : estimate.ci_low) != null &&
+        (calibrated != null ? calibratedCiHigh : estimate.ci_high) != null
+          ? `95% CI ${calibrated != null ? calibratedCiLow : estimate.ci_low} – ${
+              calibrated != null ? calibratedCiHigh : estimate.ci_high
+            }`
           : 'no interval'}
       </div>
-      <div className="mt-0.5 font-mono text-[11px] text-fg-subtle">
+
+      {calibrated != null && (
+        <div className="mt-2 flex items-baseline gap-1.5 text-[1.4rem] opacity-70">
+          <span className="font-mono font-black text-accent">{estimate.estimate}</span>
+          <span className="text-[9px] font-semibold text-fg-subtle">Lichess</span>
+          {estimate.ci_low != null && estimate.ci_high != null && (
+            <span className="ml-1 font-mono text-[10px] text-fg-faint">
+              {estimate.ci_low} – {estimate.ci_high}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="mt-1 font-mono text-[11px] text-fg-subtle">
         {estimate.n_discriminative} of {estimate.n_positions} positions carried signal
       </div>
 
@@ -347,6 +390,7 @@ export function EloSweepPanel({
   blackName,
   gameId,
   onSelectPly,
+  calibration,
 }: EloSweepPanelProps) {
   const white = results?.w;
   const black = results?.b;
@@ -373,10 +417,20 @@ export function EloSweepPanel({
         <>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {white && (
-              <SideEstimate estimate={white} name={whiteName} isYou={yourColor === 'w'} />
+              <SideEstimate
+                estimate={white}
+                name={whiteName}
+                isYou={yourColor === 'w'}
+                calibration={calibration}
+              />
             )}
             {black && (
-              <SideEstimate estimate={black} name={blackName} isYou={yourColor === 'b'} />
+              <SideEstimate
+                estimate={black}
+                name={blackName}
+                isYou={yourColor === 'b'}
+                calibration={calibration}
+              />
             )}
           </div>
 

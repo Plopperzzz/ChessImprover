@@ -87,6 +87,11 @@ export function AnalysisScreen({
   const [modelNote, setModelNote] = useState<string | null>(null);
   const [savedMode, setSavedMode] = useState<string | null>(null);
   const [estimates, setEstimates] = useState<Record<number, number>>({});
+  // The Elo sweep panel's own calibration (A8): fetched alongside the game
+  // itself, not gated behind a button, since it costs a fraction of what
+  // Progress already pays on every load once scoped to one game's database
+  // and time control.
+  const [calibration, setCalibration] = useState<api.GameCalibration | null>(null);
 
   const [liveActive, setLiveActive] = useState(false);
   const gameRef = useRef<GameDetail | null>(null);
@@ -170,6 +175,8 @@ export function AnalysisScreen({
         setModelNote(null);
         setSavedMode(null);
         applySaved(detail.id);
+        setCalibration(null);
+        api.gameCalibration(detail.id).then(setCalibration).catch(() => setCalibration(null));
       } catch {
         setGame(null);
         setPlies([]);
@@ -797,6 +804,7 @@ export function AnalysisScreen({
                 blackName={blackName}
                 gameId={game?.id ?? null}
                 onSelectPly={goToPly}
+                calibration={calibration}
               />
             </div>
           </div>

@@ -30,10 +30,9 @@ import json
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
-from . import elo_sweep, policy_likelihood, strength
+from . import elo_sweep, game_calibration, policy_likelihood, strength
 from .auth import require_user
 from .db import db_cursor
-from .games import LibraryFilter, game_database
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 
@@ -132,20 +131,18 @@ def mistake_check(game_id: int, user: dict = Depends(require_user)):
             )
         }
 
-    # Calibrated against opponents from the same database this game is in --
-    # a chess.com game against the offset measured from chess.com opponents,
-    # not diluted by played-vs-Maia games that carry no header Elo to
-    # calibrate with in the first place.
-    database = game_database(game["source_name"])
-    calibration = strength.build(user["id"], library=LibraryFilter(database=database))[
-        "calibration"
-    ]
+    # Calibrated against opponents from the same database and time control
+    # this game is in -- see game_calibration for why both, and why applying
+    # the same offset to a single opponent's estimate isn't circular even
+    # though the pooled field estimate is what measured it.
+    calibration = game_calibration.for_game(user["id"], game)
     if not calibration.get("available"):
         return {"available": False,
                "reason": f"can't calibrate your rating onto Maia's scale: {calibration.get('reason')}",
                "header_elo": header_elo}
 
     offset = calibration["offset"]
+    database = calibration["database"]
     target_elo = header_elo + offset
 
     moves = []
