@@ -119,20 +119,26 @@ function SideEstimate({
   );
 }
 
-/** Observed match rate (or, under the default 'likelihood' objective, mean log
- *  probability per move -- see `curve_kind`) per grid point with the fitted
- *  curve over it. The peak is the estimate, which is the only way to see
- *  whether the number came off a real hump or off a flat line.
+/** Observed match rate (or, under the default 'likelihood' objective, a
+ *  probability -- see `curve_kind`) per grid point with the fitted curve over
+ *  it. The peak is the estimate, which is the only way to see whether the
+ *  number came off a real hump or off a flat line.
  *
- *  The two curve kinds are different quantities on different scales -- a rate
- *  is 0-1 and reads naturally as a percentage, log probability is negative
- *  nats with no fixed ceiling -- so formatting both the same way is how a
- *  mean log probability of -2.5 ends up drawn as "-250%". `curve_kind` says
- *  which one a response carries; absent means the older 'top1' rate. */
+ *  What's stored under 'mean_logp' is mean log probability per move --
+ *  negative nats, no fixed ceiling -- which is why plotting it unchanged
+ *  turned a perfectly ordinary -2.5 into "-250%" when this used to format
+ *  everything as a percentage. `exp()` of a mean of logs is a geometric mean
+ *  of probabilities, which is the one meaningful way back to a probability
+ *  from what's actually stored (the per-move values themselves aren't, only
+ *  their mean in log space) -- "the typical probability Maia's policy gave
+ *  your moves, at this rating", the same quantity the "would you have found
+ *  it?" check below reports for a single move. `curve_kind` absent means the
+ *  older 'top1' rate, already a 0-1 probability with nothing to transform. */
 function SweepCurve({ estimate }: { estimate: EloEstimate }) {
   const chart = useChartTheme();
   if (!estimate.grid?.length || !estimate.match_rates?.length) return null;
   const isLogp = estimate.curve_kind === 'mean_logp';
+  const toProbability = (v: number) => (isLogp ? Math.exp(v) : v);
 
   // One dataset for both series: the dense fit and the sparse observations
   // share an x axis, and recharts only lines up a Line and a Scatter when they
@@ -146,15 +152,14 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
     }
     return row;
   };
-  const scale = isLogp ? 1 : 100;
   (estimate.curve_x ?? []).forEach((x, i) => {
-    at(x).fit = (estimate.curve_y?.[i] ?? 0) * scale;
+    at(x).fit = toProbability(estimate.curve_y?.[i] ?? 0) * 100;
   });
   estimate.grid.forEach((elo, i) => {
-    at(elo).rate = (estimate.match_rates?.[i] ?? 0) * scale;
+    at(elo).rate = toProbability(estimate.match_rates?.[i] ?? 0) * 100;
   });
   const data = [...rows.values()].sort((a, b) => a.elo - b.elo);
-  const format = (v: number) => (isLogp ? v.toFixed(2) : `${v.toFixed(0)}%`);
+  const format = (v: number) => `${v < 1 ? v.toFixed(1) : v.toFixed(0)}%`;
 
   return (
     <div className="h-40 w-full">
@@ -185,10 +190,7 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
               fontSize: 12,
             }}
             labelFormatter={(v) => `Maia ${Math.round(Number(v))}`}
-            formatter={(v, name) => [
-              isLogp ? `${Number(v).toFixed(2)} nats/move` : `${Number(v).toFixed(1)}%`,
-              name === 'fit' ? 'fitted' : 'observed',
-            ]}
+            formatter={(v, name) => [format(Number(v)), name === 'fit' ? 'fitted' : 'observed']}
           />
           {/* Fitted curve in a lighter tint of the accent the observations
               below are drawn in: the same split the trend charts use —
@@ -381,8 +383,12 @@ export function EloSweepPanel({
           {yours && (
             <div className="mt-3 border-t border-line pt-3">
               <p className="mb-1 text-[11px] tracking-wider text-fg-subtle uppercase">
-                {yours.curve_label ?? 'Match rate'} by Maia Elo (
-                {yourColor === 'b' ? 'black' : 'white'})
+                {/* SweepCurve now always plots a probability -- 'mean_logp' is
+                    exponentiated to one -- so the heading says that rather
+                    than the backend's own curve_label, which still names the
+                    log-space quantity that's actually stored. */}
+                {yours.curve_kind === 'mean_logp' ? 'Typical move probability' : 'Match rate'} by
+                Maia Elo ({yourColor === 'b' ? 'black' : 'white'})
               </p>
               <SweepCurve estimate={yours} />
             </div>
