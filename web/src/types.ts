@@ -59,6 +59,8 @@ export interface GameSummary {
    *  one. */
   estimated_elo?: number | null;
   collection_ids: number[];
+  /** 'library' | 'chesscom' | 'played', read off `source_name` server-side. */
+  database: 'library' | 'chesscom' | 'played';
 }
 
 export interface GameDetail extends GameSummary {
@@ -111,9 +113,19 @@ export interface EloEstimate {
   method?: string;
   bound?: 'lower' | 'upper' | null;
   grid?: number[];
+  /** Under the default 'likelihood' objective these are mean log probability
+   *  per move (negative nats, no natural ceiling), not a 0-1 rate -- read
+   *  `curve_kind`/`curve_label` before formatting either as a percentage.
+   *  Absent (older stored results, or the 'top1' objective) means the older
+   *  match-rate meaning: 0-1, safe to read as a percentage. */
   match_rates?: number[];
   curve_x?: number[];
   curve_y?: number[];
+  curve_kind?: 'match_rate' | 'mean_logp';
+  curve_label?: string;
+  mean_logp?: number | null;
+  well_predicted_logp?: number;
+  unpredictable_logp?: number;
   ceiling?: {
     observed: number;
     expected: number;

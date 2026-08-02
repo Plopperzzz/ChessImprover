@@ -51,6 +51,15 @@ const WINDOWS: Record<string, { value: string; label: string }[]> = {
 const GRANULARITY_KEY = 'engine-room:trend-granularity';
 const WINDOW_KEY = 'engine-room:trend-window';
 const SPEED_KEY = 'engine-room:trend-speed';
+const DATABASE_KEY = 'engine-room:trend-database';
+
+/** Matches the game library's own tabs, so "Chess.com" means the same slice
+ *  of games in both places. */
+const DATABASE_LABEL: Record<api.GameDatabase, string> = {
+  library: 'My library',
+  chesscom: 'Chess.com',
+  played: 'Played vs Maia',
+};
 
 /** The time controls `/api/trend` will accept, spelled the way the library
  *  panel spells them (`pgn_parse.FILTER_SPEEDS`). Which of them are *offered*
@@ -81,6 +90,13 @@ function storedWindow(granularity: string): string {
 function storedSpeed(): string {
   const saved = localStorage.getItem(SPEED_KEY);
   return saved && saved in SPEED_LABEL ? saved : '';
+}
+
+/** '' is every database pooled together — the union this screen has always
+ *  shown. */
+function storedDatabase(): string {
+  const saved = localStorage.getItem(DATABASE_KEY);
+  return saved && saved in DATABASE_LABEL ? saved : '';
 }
 
 function Stat({
@@ -306,6 +322,7 @@ export function ProgressScreen() {
   const [granularity, setGranularity] = useState(storedGranularity);
   const [window_, setWindow] = useState(() => storedWindow(storedGranularity()));
   const [speed, setSpeed] = useState(storedSpeed);
+  const [database, setDatabase] = useState(storedDatabase);
   const [facets, setFacets] = useState<api.Facets | null>(null);
   const [strength, setStrength] = useState<api.Strength | null>(null);
   const [trend, setTrend] = useState<api.Trend | null>(null);
@@ -318,11 +335,18 @@ export function ProgressScreen() {
   useEffect(() => localStorage.setItem(GRANULARITY_KEY, granularity), [granularity]);
   useEffect(() => localStorage.setItem(WINDOW_KEY, window_), [window_]);
   useEffect(() => localStorage.setItem(SPEED_KEY, speed), [speed]);
+  useEffect(() => localStorage.setItem(DATABASE_KEY, database), [database]);
 
-  // Which time controls this library actually has games in, for the filter.
+  // Which time controls this library actually has games in, for the filter --
+  // scoped to whichever database is picked, the same way the game library
+  // scopes its own speed picker, so switching to "Played vs Maia" doesn't
+  // still offer a bullet button that only your chess.com games ever used.
   useEffect(() => {
-    api.gameFacets().then(setFacets).catch(() => setFacets(null));
-  }, []);
+    api
+      .gameFacets((database || null) as api.GameDatabase | null)
+      .then(setFacets)
+      .catch(() => setFacets(null));
+  }, [database]);
 
   /** Changing the bucket size snaps the window to one this bucket has an
    *  option for: '26 weeks' has no meaning on a yearly axis. */
@@ -335,18 +359,23 @@ export function ProgressScreen() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    // The time control filters the whole screen, not just the chart. It used
-    // to narrow the trend alone, which left the cards above it — your actual
-    // rating among them — reporting a number pooled over every speed while the
-    // chart beside them was rapid-only. Bullet and rapid are different games
-    // and you have a different rating in each; asking for one and being shown
-    // the average of both is the question not being answered. All three
-    // endpoints take the same `speed` (`games.library_filter`), so one value
-    // slices the estimate, the trend and the move counts together.
+    // The time control and database filter the whole screen, not just the
+    // chart. It used to narrow the trend alone, which left the cards above it
+    // — your actual rating among them — reporting a number pooled over every
+    // speed while the chart beside them was rapid-only. Bullet and rapid are
+    // different games and you have a different rating in each; asking for one
+    // and being shown the average of both is the question not being
+    // answered. Database is the same idea one level up: a played-vs-Maia game
+    // has no header rating and a chess.com import might be a different you
+    // than the games you uploaded by hand under an alt, so pooling all three
+    // by default and letting the picker narrow it is the same trade the speed
+    // filter already makes. All three endpoints take the same `speed`/
+    // `database` (`games.library_filter`), so one pair of values slices the
+    // estimate, the trend and the move counts together.
     Promise.all([
-      api.strength({ speed: speed || null }),
-      api.trend({ granularity, window: window_, speed: speed || null }),
-      api.moveQuality({ speed: speed || null }),
+      api.strength({ speed: speed || null, database: database || null }),
+      api.trend({ granularity, window: window_, speed: speed || null, database: database || null }),
+      api.moveQuality({ speed: speed || null, database: database || null }),
     ])
       .then(([s, t, q]) => {
         if (cancelled) return;
@@ -359,7 +388,7 @@ export function ProgressScreen() {
     return () => {
       cancelled = true;
     };
-  }, [granularity, window_, speed]);
+  }, [granularity, window_, speed, database]);
 
   const speedOptions = [
     { value: '', label: 'All' },
@@ -367,6 +396,16 @@ export function ProgressScreen() {
       value: s.speed,
       label: SPEED_LABEL[s.speed] ?? s.speed,
     })),
+  ];
+
+  // Only offered once there's a reason to choose -- a library that is only
+  // ever one database (the common case before chess.com or Play vs Maia have
+  // contributed anything) has nothing for this picker to narrow.
+  const databaseOptions = [
+    { value: '', label: 'All' },
+    ...(facets?.databases ?? [])
+      .filter((d) => d.games > 0)
+      .map((d) => ({ value: d.database, label: DATABASE_LABEL[d.database] })),
   ];
 
   const you = strength?.you;
@@ -394,12 +433,19 @@ export function ProgressScreen() {
             <h2 className="text-xl font-bold text-fg">Progress</h2>
             <p className="text-xs text-fg-muted">
               Pooled over every {speed ? `${(SPEED_LABEL[speed] ?? speed).toLowerCase()} ` : ''}
-              game with a Maia Elo sweep — no engine is re-run.
+              game{database ? ` in ${DATABASE_LABEL[database as api.GameDatabase].toLowerCase()}` : ''}{' '}
+              with a Maia Elo sweep — no engine is re-run.
             </p>
-            {/* D7 / the rating card: the same time controls the game library
-                filters by, and it sits here rather than in the chart below
-                because everything on this screen is drawn from the slice it
-                picks — the estimate and the rating beside it included. */}
+            {/* D7 / the rating card: the same time controls and databases the
+                game library filters by, and they sit here rather than in the
+                chart below because everything on this screen is drawn from
+                the slice they pick — the estimate and the rating beside it
+                included. */}
+            {databaseOptions.length > 1 && (
+              <div className="mt-2">
+                <Picker options={databaseOptions} value={database} onChange={setDatabase} />
+              </div>
+            )}
             {speedOptions.length > 1 && (
               <div className="mt-2">
                 <Picker options={speedOptions} value={speed} onChange={setSpeed} />

@@ -75,6 +75,11 @@ export function Board({
   const [selected, setSelected] = useState<string | null>(null);
   const [targets, setTargets] = useState<string[]>([]);
   const [brokenArt, setBrokenArt] = useState(false);
+  /** Whether the chosen board's own art actually loaded. Squares only paint
+   *  their own fallback colour when it hasn't (or has none): painting it
+   *  unconditionally, as this used to, sat a near-opaque tint over every
+   *  board image, so picking a different board changed nothing on screen. */
+  const [artLoaded, setArtLoaded] = useState(false);
   const [promoting, setPromoting] = useState<{ from: string; to: string } | null>(null);
   /** The piece under the pointer, and where the pointer is, while dragging. */
   const [drag, setDrag] = useState<{
@@ -84,7 +89,13 @@ export function Board({
     moved: boolean;
   } | null>(null);
 
-  const boardRef = useRef<HTMLDivElement>(null);
+  /** The 8x8 grid itself, for anything measuring where a square actually is.
+   *  `board-frame`'s own box is bigger than that by its border, and on a
+   *  phone that border is asymmetric (dropped on the sides, kept top and
+   *  bottom -- see the JSX below), so measuring the frame instead of the
+   *  grid drags every pointer-to-square calculation off by a few pixels in
+   *  exactly the cases a border is there to be seen at all. */
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const game = useMemo(() => {
     try {
@@ -122,6 +133,7 @@ export function Board({
   }, [fen]);
 
   useEffect(() => setBrokenArt(false), [pieceSet]);
+  useEffect(() => setArtLoaded(false), [boardSet]);
 
   const files = flipped ? [...FILES].reverse() : FILES;
   const ranks = flipped ? [...RANKS].reverse() : RANKS;
@@ -134,7 +146,7 @@ export function Board({
   };
 
   const squareAt = (clientX: number, clientY: number): string | null => {
-    const box = boardRef.current?.getBoundingClientRect();
+    const box = gridRef.current?.getBoundingClientRect();
     if (!box) return null;
     const file = Math.floor(((clientX - box.left) / box.width) * 8);
     const rank = Math.floor(((clientY - box.top) / box.height) * 8);
@@ -271,7 +283,6 @@ export function Board({
 
   return (
     <div
-      ref={boardRef}
       // `board-frame` is not styling, it is a handle: `index.css` squares off
       // the corners and drops the side borders when a phone puts the board
       // against the edges of the screen.
@@ -280,13 +291,41 @@ export function Board({
       }`}
       style={{
         backgroundImage: `url(/assets/boards/${boardSet}.png), url(/assets/sets/${boardSet}/board.png)`,
-        backgroundSize: 'cover',
+        // Not `cover`. `board-frame` is exactly square in its *border* box
+        // (`aspect-square`), but the phone layout below drops the left/right
+        // border and keeps the top/bottom one (see the comment above), which
+        // makes the *padding* box -- what a background paints into, and what
+        // the grid of squares fills with `w-full h-full` -- a few pixels
+        // taller than it is wide. `cover` preserves the image's own aspect
+        // ratio and crops to fill, so on that non-square box it drifts from
+        // the grid a little more with every row; `100% 100%` stretches to
+        // the box exactly the same way the grid does, so the two can never
+        // disagree regardless of what shape the box ends up being.
+        backgroundSize: '100% 100%',
       }}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={() => setDrag(null)}
     >
-      <div className="grid h-full w-full grid-cols-8 grid-rows-8">
+      {/* Invisible probes, not the board's own background-image: CSS gives no
+          load/error event for a `background-image`, so there is no other way
+          to know whether either candidate URL actually painted anything.
+          Either one succeeding is enough to stop drawing the fallback tint. */}
+      <img
+        src={`/assets/boards/${boardSet}.png`}
+        alt=""
+        aria-hidden="true"
+        className="hidden"
+        onLoad={() => setArtLoaded(true)}
+      />
+      <img
+        src={`/assets/sets/${boardSet}/board.png`}
+        alt=""
+        aria-hidden="true"
+        className="hidden"
+        onLoad={() => setArtLoaded(true)}
+      />
+      <div ref={gridRef} className="grid h-full w-full grid-cols-8 grid-rows-8">
         {ranks.map((rank, rankIdx) =>
           files.map((file, fileIdx) => {
             const square = `${file}${rank}`;
@@ -305,12 +344,20 @@ export function Board({
                   interactive ? (grabbable ? 'cursor-grab' : 'cursor-pointer') : ''
                 }`}
                 style={{
-                  // A board image, when the set has one, shows through; the tint
-                  // is what keeps the squares readable if it doesn't. Squares,
-                  // coordinates and the fallback glyphs below are the one part
-                  // of the UI that doesn't follow the theme: they read against
-                  // the board's own colours, not the page's.
-                  backgroundColor: light ? 'rgba(240,217,181,0.92)' : 'rgba(140,100,64,0.92)',
+                  // The board's own image is behind this square (painted on
+                  // `board-frame`) and shows through once it has loaded; this
+                  // flat colour is only the fallback for a board with none, so
+                  // it stops painting the moment real art is confirmed on
+                  // screen -- otherwise it sat on top of every board at
+                  // 92% opacity and no choice of board ever looked different.
+                  // Squares, coordinates and the fallback glyphs below are the
+                  // one part of the UI that doesn't follow the theme: they
+                  // read against the board's own colours, not the page's.
+                  backgroundColor: artLoaded
+                    ? undefined
+                    : light
+                      ? 'rgba(240,217,181,0.92)'
+                      : 'rgba(140,100,64,0.92)',
                   // Dragging, on a touch screen.
                   //
                   // A finger on a square the browser is allowed to pan with is
@@ -406,7 +453,7 @@ export function Board({
         {pieces.current.map((piece) => {
           const { left, top } = coords(piece.square);
           const dragging = drag?.moved && drag.square === piece.square;
-          const box = boardRef.current?.getBoundingClientRect();
+          const box = gridRef.current?.getBoundingClientRect();
           const offset =
             dragging && box
               ? {

@@ -1,4 +1,5 @@
-import { AlertTriangle, Info, TrendingUp } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, Gauge, Info, Loader2, TrendingUp } from 'lucide-react';
 import {
   CartesianGrid,
   ComposedChart,
@@ -10,8 +11,10 @@ import {
   YAxis,
   ZAxis,
 } from 'recharts';
+import * as api from '../../lib/api';
 import type { EloEstimate, SweepResults } from '../../types';
 import { lighten, useChartTheme } from '../../lib/theme';
+import { styleFor } from '../../lib/quality';
 
 interface EloSweepPanelProps {
   results: SweepResults | null;
@@ -21,6 +24,14 @@ interface EloSweepPanelProps {
   yourColor: 'w' | 'b' | null;
   whiteName: string;
   blackName: string;
+  /** Null while no game is loaded -- the check has nothing to run against. */
+  gameId: number | null;
+  /** Jumps the board to a ply, the same way clicking the eval chart does. */
+  onSelectPly: (ply: number) => void;
+  /** `/api/strength`'s own calibration, scoped to this game. Null while it's
+   *  still loading or the game has none -- both cards fall back to the raw
+   *  Maia-scale estimate alone, same as before this existed. */
+  calibration: api.GameCalibration | null;
 }
 
 const CONFIDENCE: Record<string, string> = {
@@ -33,12 +44,29 @@ function SideEstimate({
   estimate,
   name,
   isYou,
+  calibration,
 }: {
   estimate: EloEstimate;
   name: string;
   isYou: boolean;
+  calibration: api.GameCalibration | null;
 }) {
   const bound = estimate.bound;
+  // The offset converts *any* Maia-scale estimate onto the header-rating
+  // scale -- it was measured from the pooled opponent field, but applying it
+  // here is a fresh conversion of a different number, not a re-use of the
+  // one that measured it (see `game_calibration` on the backend). Same
+  // offset for both cards, which is the point: the scale gap doesn't care
+  // whose estimate it's converting.
+  const offset = calibration?.available ? calibration.offset : null;
+  const calibrated =
+    offset != null && estimate.estimate != null ? Math.round(estimate.estimate - offset) : null;
+  const calibratedCiLow =
+    offset != null && estimate.ci_low != null ? Math.round(estimate.ci_low - offset) : null;
+  const calibratedCiHigh =
+    offset != null && estimate.ci_high != null ? Math.round(estimate.ci_high - offset) : null;
+  const platformLabel = calibration?.available ? calibration.platform_label : null;
+
   // B14: the caveats are a wall of text next to a three-digit number, and they
   // are read once. `group-hover` rather than state, so the card also reveals
   // them on keyboard focus without a second code path.
@@ -63,23 +91,45 @@ function SideEstimate({
         </span>
       </div>
 
+      {/* Calibrated is the number your own recorded rating is comparable to,
+          so it leads; the raw Maia-scale figure underneath is the one
+          `/api/strength`'s scale_note already calls "the Lichess scale" --
+          both are the same fit, just before and after the same subtraction. */}
       <div className="mt-1.5 flex items-baseline gap-2">
         <span className="font-mono text-3xl font-black text-accent">
-          {estimate.estimate ?? '—'}
+          {calibrated ?? estimate.estimate ?? '—'}
         </span>
+        {platformLabel && (
+          <span className="text-[10px] font-semibold text-fg-muted">{platformLabel}</span>
+        )}
         {bound && (
           <span className="text-[11px] text-fg-muted">
             {bound === 'lower' ? 'at least' : 'at most'}
           </span>
         )}
       </div>
-
       <div className="mt-1 font-mono text-[11px] text-fg-muted">
-        {estimate.ci_low != null && estimate.ci_high != null
-          ? `95% CI ${estimate.ci_low} – ${estimate.ci_high}`
+        {(calibrated != null ? calibratedCiLow : estimate.ci_low) != null &&
+        (calibrated != null ? calibratedCiHigh : estimate.ci_high) != null
+          ? `95% CI ${calibrated != null ? calibratedCiLow : estimate.ci_low} – ${
+              calibrated != null ? calibratedCiHigh : estimate.ci_high
+            }`
           : 'no interval'}
       </div>
-      <div className="mt-0.5 font-mono text-[11px] text-fg-subtle">
+
+      {calibrated != null && (
+        <div className="mt-2 flex items-baseline gap-1.5 text-[1.4rem] opacity-70">
+          <span className="font-mono font-black text-accent">{estimate.estimate}</span>
+          <span className="text-[9px] font-semibold text-fg-subtle">Lichess</span>
+          {estimate.ci_low != null && estimate.ci_high != null && (
+            <span className="ml-1 font-mono text-[10px] text-fg-faint">
+              {estimate.ci_low} – {estimate.ci_high}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="mt-1 font-mono text-[11px] text-fg-subtle">
         {estimate.n_discriminative} of {estimate.n_positions} positions carried signal
       </div>
 
@@ -112,12 +162,26 @@ function SideEstimate({
   );
 }
 
-/** Observed match rate per grid point with the fitted bump over it. The peak of
- *  that curve is the estimate, which is the only way to see whether the number
- *  came off a real hump or off a flat line. */
+/** Observed match rate (or, under the default 'likelihood' objective, a
+ *  probability -- see `curve_kind`) per grid point with the fitted curve over
+ *  it. The peak is the estimate, which is the only way to see whether the
+ *  number came off a real hump or off a flat line.
+ *
+ *  What's stored under 'mean_logp' is mean log probability per move --
+ *  negative nats, no fixed ceiling -- which is why plotting it unchanged
+ *  turned a perfectly ordinary -2.5 into "-250%" when this used to format
+ *  everything as a percentage. `exp()` of a mean of logs is a geometric mean
+ *  of probabilities, which is the one meaningful way back to a probability
+ *  from what's actually stored (the per-move values themselves aren't, only
+ *  their mean in log space) -- "the typical probability Maia's policy gave
+ *  your moves, at this rating", the same quantity the "would you have found
+ *  it?" check below reports for a single move. `curve_kind` absent means the
+ *  older 'top1' rate, already a 0-1 probability with nothing to transform. */
 function SweepCurve({ estimate }: { estimate: EloEstimate }) {
   const chart = useChartTheme();
   if (!estimate.grid?.length || !estimate.match_rates?.length) return null;
+  const isLogp = estimate.curve_kind === 'mean_logp';
+  const toProbability = (v: number) => (isLogp ? Math.exp(v) : v);
 
   // One dataset for both series: the dense fit and the sparse observations
   // share an x axis, and recharts only lines up a Line and a Scatter when they
@@ -132,12 +196,13 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
     return row;
   };
   (estimate.curve_x ?? []).forEach((x, i) => {
-    at(x).fit = (estimate.curve_y?.[i] ?? 0) * 100;
+    at(x).fit = toProbability(estimate.curve_y?.[i] ?? 0) * 100;
   });
   estimate.grid.forEach((elo, i) => {
-    at(elo).rate = (estimate.match_rates?.[i] ?? 0) * 100;
+    at(elo).rate = toProbability(estimate.match_rates?.[i] ?? 0) * 100;
   });
   const data = [...rows.values()].sort((a, b) => a.elo - b.elo);
+  const format = (v: number) => `${v < 1 ? v.toFixed(1) : v.toFixed(0)}%`;
 
   return (
     <div className="h-40 w-full">
@@ -154,7 +219,7 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
           />
           <YAxis
             tick={{ fill: chart.axis, fontSize: 10 }}
-            tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+            tickFormatter={format}
             axisLine={false}
             tickLine={false}
           />
@@ -168,10 +233,7 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
               fontSize: 12,
             }}
             labelFormatter={(v) => `Maia ${Math.round(Number(v))}`}
-            formatter={(v, name) => [
-              `${Number(v).toFixed(1)}%`,
-              name === 'fit' ? 'fitted' : 'observed',
-            ]}
+            formatter={(v, name) => [format(Number(v)), name === 'fit' ? 'fitted' : 'observed']}
           />
           {/* Fitted curve in a lighter tint of the accent the observations
               below are drawn in: the same split the trend charts use —
@@ -193,12 +255,142 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
   );
 }
 
+/** "Would a player at your own strength have played this?" -- for every
+ *  Mistake/Blunder/Miss, the probability Maia's policy gives the move you
+ *  actually played, at the Elo your header rating in *this* game converts to
+ *  on Maia's scale (the same calibration `/api/strength` computes, reversed).
+ *
+ *  A button rather than automatic: the calibration query pools the account's
+ *  whole library (scoped to this game's database) to measure the offset, and
+ *  that is worth asking for rather than paying on every game load. Once run
+ *  it costs no engine time either way -- everything it reads was already
+ *  stored by the Full analysis that swept this game. */
+function MistakeCheckSection({
+  gameId,
+  onSelectPly,
+}: {
+  gameId: number | null;
+  onSelectPly: (ply: number) => void;
+}) {
+  const [state, setState] = useState<
+    | { phase: 'idle' }
+    | { phase: 'loading' }
+    | { phase: 'error'; message: string }
+    | { phase: 'done'; result: api.MistakeCheck }
+  >({ phase: 'idle' });
+
+  const run = () => {
+    if (!gameId) return;
+    setState({ phase: 'loading' });
+    api
+      .mistakeCheck(gameId)
+      .then((result) => setState({ phase: 'done', result }))
+      .catch((e) => setState({ phase: 'error', message: e instanceof Error ? e.message : String(e) }));
+  };
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-[11px] tracking-wider text-fg-subtle uppercase">
+          <Gauge className="h-3.5 w-3.5" />
+          Would you have found it?
+        </p>
+        {state.phase !== 'loading' && (
+          <button
+            onClick={run}
+            disabled={!gameId}
+            className="rounded-lg border border-line bg-canvas px-2.5 py-1 text-[11px] font-medium text-fg-2 hover:bg-surface-2 disabled:opacity-40"
+          >
+            {state.phase === 'done' ? 'Re-check' : 'Check my mistakes'}
+          </button>
+        )}
+      </div>
+
+      {state.phase === 'loading' && (
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-fg-subtle">
+          <Loader2 className="h-3 w-3 animate-spin" /> Reading the sweep…
+        </p>
+      )}
+      {state.phase === 'error' && (
+        <p className="mt-2 text-[11px] text-danger-fg">{state.message}</p>
+      )}
+      {state.phase === 'done' && !state.result.available && (
+        <p className="mt-2 text-[11px] leading-relaxed text-fg-subtle">{state.result.reason}</p>
+      )}
+      {state.phase === 'done' && state.result.available && (
+        <>
+          <p className="mt-2 text-[11px] leading-relaxed text-fg-subtle">
+            Your recorded rating in this game, {state.result.header_elo}, converts to{' '}
+            <span className="font-mono font-semibold text-fg-2">{state.result.target_elo}</span> on
+            Maia's scale ({state.result.offset >= 0 ? '+' : ''}
+            {state.result.offset} from the calibration on {state.result.database} games).
+          </p>
+          {state.result.moves.length === 0 ? (
+            <p className="mt-2 text-[11px] text-fg-subtle">
+              No Mistakes, Blunders or Misses on your side of this game — nothing to check.
+            </p>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {state.result.moves.map((move) => {
+                const style = styleFor(move.classification);
+                const pct = move.probability * 100;
+                return (
+                  <li key={move.ply}>
+                    <button
+                      onClick={() => onSelectPly(move.ply)}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-surface-2"
+                    >
+                      {style && (
+                        <img src={style.icon} alt={style.label} className="h-4 w-4 shrink-0" />
+                      )}
+                      <span className="font-mono text-fg-2">{move.san}</span>
+                      <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px]">
+                        <span
+                          className={
+                            pct < 5
+                              ? 'font-semibold text-danger-fg'
+                              : pct < 20
+                                ? 'text-accent'
+                                : 'text-fg-muted'
+                          }
+                        >
+                          {pct < 0.1 ? '<0.1' : pct.toFixed(pct < 10 ? 1 : 0)}%
+                        </span>
+                        {move.clamped && (
+                          <span
+                            className="text-fg-faint"
+                            title={`Outside the swept range -- reading Maia's opinion at ${move.nearest_grid_elo} instead`}
+                          >
+                            ⚠
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <p className="mt-2 text-[10px] text-fg-faint">
+            {state.result.moves.some((m) => m.exact_policy)
+              ? "Maia's own reported policy, where the engine gave one."
+              : "Estimated from Maia's ranking of the move, not its raw policy."}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function EloSweepPanel({
   results,
   modelNote,
   yourColor,
   whiteName,
   blackName,
+  gameId,
+  onSelectPly,
+  calibration,
 }: EloSweepPanelProps) {
   const white = results?.w;
   const black = results?.b;
@@ -225,21 +417,38 @@ export function EloSweepPanel({
         <>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {white && (
-              <SideEstimate estimate={white} name={whiteName} isYou={yourColor === 'w'} />
+              <SideEstimate
+                estimate={white}
+                name={whiteName}
+                isYou={yourColor === 'w'}
+                calibration={calibration}
+              />
             )}
             {black && (
-              <SideEstimate estimate={black} name={blackName} isYou={yourColor === 'b'} />
+              <SideEstimate
+                estimate={black}
+                name={blackName}
+                isYou={yourColor === 'b'}
+                calibration={calibration}
+              />
             )}
           </div>
 
           {yours && (
             <div className="mt-3 border-t border-line pt-3">
               <p className="mb-1 text-[11px] tracking-wider text-fg-subtle uppercase">
-                Match rate by Maia Elo ({yourColor === 'b' ? 'black' : 'white'})
+                {/* SweepCurve now always plots a probability -- 'mean_logp' is
+                    exponentiated to one -- so the heading says that rather
+                    than the backend's own curve_label, which still names the
+                    log-space quantity that's actually stored. */}
+                {yours.curve_kind === 'mean_logp' ? 'Typical move probability' : 'Match rate'} by
+                Maia Elo ({yourColor === 'b' ? 'black' : 'white'})
               </p>
               <SweepCurve estimate={yours} />
             </div>
           )}
+
+          {yourColor && <MistakeCheckSection key={gameId} gameId={gameId} onSelectPly={onSelectPly} />}
 
           {modelNote && (
             <p className="mt-3 flex gap-1.5 border-t border-line pt-3 text-[11px] leading-snug text-fg-subtle">

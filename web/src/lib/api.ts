@@ -91,10 +91,17 @@ export const deleteAccount = (id: number) =>
 
 // --- library --------------------------------------------------------------
 
+/** The three databases a game can sit in, read off `source_name` server-side
+ *  rather than stored: 'library' is anything you uploaded or pasted by hand,
+ *  'chesscom' is a chess.com download, 'played' is a game you finished
+ *  against Maia and saved. */
+export type GameDatabase = 'library' | 'chesscom' | 'played';
+
 export interface GameFilter {
   speed?: string | null;
   time_control?: string | null;
   collection_id?: number | null;
+  database?: GameDatabase | null;
 }
 
 export function listGames(filter: GameFilter = {}) {
@@ -102,6 +109,7 @@ export function listGames(filter: GameFilter = {}) {
   if (filter.speed) params.set('speed', filter.speed);
   if (filter.time_control) params.set('time_control', filter.time_control);
   if (filter.collection_id != null) params.set('collection_id', String(filter.collection_id));
+  if (filter.database) params.set('database', filter.database);
   const qs = params.toString();
   return request<GameSummary[]>(`/api/games${qs ? `?${qs}` : ''}`);
 }
@@ -112,14 +120,86 @@ export interface SpeedFacet {
   controls: { time_control: string; games: number }[];
 }
 
+export interface DatabaseFacet {
+  database: GameDatabase;
+  label: string;
+  games: number;
+}
+
 export interface Facets {
   speeds: SpeedFacet[];
   total: number;
+  databases: DatabaseFacet[];
 }
 
-export const gameFacets = () => request<Facets>('/api/games/facets');
+/** `database`, when given, scopes the *speed* breakdown to that database --
+ *  the database breakdown itself is always the whole library, since it's the
+ *  list of tabs to choose from. */
+export const gameFacets = (database?: GameDatabase | null) =>
+  request<Facets>(`/api/games/facets${database ? `?database=${database}` : ''}`);
 export const getGame = (id: number) => request<GameDetail>(`/api/games/${id}`);
 export const listCollections = () => request<Collection[]>('/api/collections');
+
+/** One Mistake/Blunder/Miss, and what Maia's policy gives it at the Elo your
+ *  own header rating in this game converts to on Maia's scale. */
+export interface MistakeCheckMove {
+  ply: number;
+  san: string;
+  classification: string;
+  wp_drop: number;
+  /** 0-1. Interpolated between the swept grid points nearest `target_elo`. */
+  probability: number;
+  log_probability: number;
+  /** False when no build reported a policy for this sweep, so this reads the
+   *  rank-to-probability surrogate instead (`policy_likelihood`). */
+  exact_policy: boolean;
+  maia_rank_at_nearest_grid_elo: number | null;
+  nearest_grid_elo: number;
+  /** `target_elo` fell outside the swept range -- this is Maia's opinion at
+   *  the edge of what was actually tried, not a read at your rating itself. */
+  clamped: boolean;
+}
+
+export type MistakeCheck =
+  | { available: false; reason: string; header_elo?: number | null }
+  | {
+      available: true;
+      header_elo: number;
+      /** Maia-scale minus real-scale, from `/api/strength`'s own calibration. */
+      offset: number;
+      target_elo: number;
+      database: GameDatabase;
+      moves: MistakeCheckMove[];
+    };
+
+/** Would a player at your own calibrated strength in *this* game have played
+ *  each of your Mistakes/Blunders/Misses? Reads data the Full analysis
+ *  already stored -- no engine work, safe to call any time a sweep exists. */
+export const mistakeCheck = (gameId: number) =>
+  request<MistakeCheck>(`/api/games/${gameId}/mistake-check`);
+
+/** `/api/strength`'s own calibration (the gap between Maia's scale and
+ *  whatever site your header ratings are on), scoped to one game's own
+ *  database and time control rather than the whole account. The same offset
+ *  converts *any* Maia-scale estimate from that slice onto the header-rating
+ *  scale -- your own, or a single opponent's, which is why the Elo sweep
+ *  panel applies it to both sides' cards rather than only "you". */
+export type GameCalibration =
+  | { available: false; reason: string; database: GameDatabase; speed: string | null }
+  | {
+      available: true;
+      /** Maia-scale minus real-scale: calibrated = maia_estimate - offset. */
+      offset: number;
+      database: GameDatabase;
+      speed: string | null;
+      /** Best guess at which site the header rating is from, for labelling
+       *  the calibrated number -- "Chess.com" for a chess.com download,
+       *  sniffed from the PGN's Site/Link headers otherwise. */
+      platform_label: string;
+    };
+
+export const gameCalibration = (gameId: number) =>
+  request<GameCalibration>(`/api/games/${gameId}/calibration`);
 
 export const uploadGames = (files: File[], pasted: string) => {
   const form = new FormData();
@@ -266,6 +346,7 @@ export interface BatchScope {
   speed?: string | null;
   time_control?: string | null;
   collection_id?: number | null;
+  database?: GameDatabase | null;
 }
 
 /** How many games a batch would cover, so the button can say so before
@@ -278,6 +359,7 @@ export const batchPreview = (scope: BatchScope) =>
       speed: scope.speed,
       time_control: scope.time_control,
       collection_id: scope.collection_id,
+      database: scope.database,
     })}`,
   );
 

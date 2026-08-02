@@ -4,10 +4,10 @@ import { useHeaderVisibility } from './lib/useHeaderVisibility';
 import { useTheme } from './lib/theme';
 import type { EngineSettings, ScreenType, User } from './types';
 import { AnalysisScreen } from './components/GameAnalysis/AnalysisScreen';
-import { ClassicScreen } from './components/ClassicScreen';
 import { ProgressScreen } from './components/Dashboard/ProgressScreen';
 import { Header } from './components/Header';
 import { LoginScreen } from './components/LoginScreen';
+import { PlayScreen } from './components/Play/PlayScreen';
 import { PuzzleScreen } from './components/Puzzles/PuzzleScreen';
 import { SettingsModal } from './components/SettingsModal';
 
@@ -97,15 +97,11 @@ export default function App() {
       )}
       {screen === 'dashboard' && <ProgressScreen />}
       {screen === 'play' && (
-        <ClassicScreen
-          title="Play vs Maia"
-          blurb="Playing a live game against Maia hasn't been rebuilt on this UI yet. It runs
-                 unchanged in the classic UI, over the same websocket and the same engine pool."
-          features={[
-            'Pick Maia’s Elo, your colour and a time control',
-            'Pre-moves, and looking back through the game while you play',
-            'Save the finished game straight into your library',
-          ]}
+        <PlayScreen
+          user={user}
+          settings={settings}
+          prefs={prefs}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       )}
       {screen === 'puzzles' && (
