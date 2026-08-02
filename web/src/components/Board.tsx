@@ -89,7 +89,13 @@ export function Board({
     moved: boolean;
   } | null>(null);
 
-  const boardRef = useRef<HTMLDivElement>(null);
+  /** The 8x8 grid itself, for anything measuring where a square actually is.
+   *  `board-frame`'s own box is bigger than that by its border, and on a
+   *  phone that border is asymmetric (dropped on the sides, kept top and
+   *  bottom -- see the JSX below), so measuring the frame instead of the
+   *  grid drags every pointer-to-square calculation off by a few pixels in
+   *  exactly the cases a border is there to be seen at all. */
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const game = useMemo(() => {
     try {
@@ -140,7 +146,7 @@ export function Board({
   };
 
   const squareAt = (clientX: number, clientY: number): string | null => {
-    const box = boardRef.current?.getBoundingClientRect();
+    const box = gridRef.current?.getBoundingClientRect();
     if (!box) return null;
     const file = Math.floor(((clientX - box.left) / box.width) * 8);
     const rank = Math.floor(((clientY - box.top) / box.height) * 8);
@@ -277,7 +283,6 @@ export function Board({
 
   return (
     <div
-      ref={boardRef}
       // `board-frame` is not styling, it is a handle: `index.css` squares off
       // the corners and drops the side borders when a phone puts the board
       // against the edges of the screen.
@@ -286,7 +291,17 @@ export function Board({
       }`}
       style={{
         backgroundImage: `url(/assets/boards/${boardSet}.png), url(/assets/sets/${boardSet}/board.png)`,
-        backgroundSize: 'cover',
+        // Not `cover`. `board-frame` is exactly square in its *border* box
+        // (`aspect-square`), but the phone layout below drops the left/right
+        // border and keeps the top/bottom one (see the comment above), which
+        // makes the *padding* box -- what a background paints into, and what
+        // the grid of squares fills with `w-full h-full` -- a few pixels
+        // taller than it is wide. `cover` preserves the image's own aspect
+        // ratio and crops to fill, so on that non-square box it drifts from
+        // the grid a little more with every row; `100% 100%` stretches to
+        // the box exactly the same way the grid does, so the two can never
+        // disagree regardless of what shape the box ends up being.
+        backgroundSize: '100% 100%',
       }}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -310,7 +325,7 @@ export function Board({
         className="hidden"
         onLoad={() => setArtLoaded(true)}
       />
-      <div className="grid h-full w-full grid-cols-8 grid-rows-8">
+      <div ref={gridRef} className="grid h-full w-full grid-cols-8 grid-rows-8">
         {ranks.map((rank, rankIdx) =>
           files.map((file, fileIdx) => {
             const square = `${file}${rank}`;
@@ -438,7 +453,7 @@ export function Board({
         {pieces.current.map((piece) => {
           const { left, top } = coords(piece.square);
           const dragging = drag?.moved && drag.square === piece.square;
-          const box = boardRef.current?.getBoundingClientRect();
+          const box = gridRef.current?.getBoundingClientRect();
           const offset =
             dragging && box
               ? {
