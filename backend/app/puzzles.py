@@ -457,7 +457,15 @@ def _own_stats(conn, user_id: int) -> dict:
 def _own_public(row, themes: list[str]) -> dict:
     """What the browser is allowed to know before an attempt. The move you
     played is deliberately withheld: knowing it turns "find the move" into
-    "find the other move", and the reveal is the lesson."""
+    "find the other move", and the reveal is the lesson.
+
+    The puzzle's difficulty rating and how many moves the answer takes are
+    withheld for the same reason -- a rating primes you to expect (or
+    dismiss) a hard combination before you've looked at the board, and a
+    move count tells you when to stop calculating. Both come back in the
+    attempt/reveal response once the puzzle is actually over; see
+    `_rated_extras`.
+    """
     return {
         "key": f"own:{row['id']}",
         "source": "own",
@@ -477,14 +485,6 @@ def _own_public(row, themes: list[str]) -> dict:
         "attempts": row["attempts"],
         "solved": bool(row["solved"]),
         "themes": themes,
-        "rating": row["rating"],
-        "rating_rd": row["rating_rd"],
-        "rating_source": row["rating_source"],
-        # How many of your moves the answer is. 0 while the line has never
-        # been worked out, which the browser reads as "unknown yet" rather
-        # than as "one" -- claiming one and then asking for a second move is
-        # the version of this that makes a solver think they got it wrong.
-        "moves_required": row["moves_required"] if row["solution_line"] else 0,
     }
 
 
@@ -505,6 +505,10 @@ def _lichess_public(row) -> dict | None:
     never happen with the published data, but 'never' across five million
     imported rows is worth one try/except: the caller moves on to the next
     candidate, where the alternative is a 500 on a click.
+
+    The difficulty rating and move count are withheld here for the same
+    reason `_own_public` withholds them -- both come back once the puzzle is
+    over, in the attempt response.
     """
     try:
         moves = row["moves"].split()
@@ -527,16 +531,10 @@ def _lichess_public(row) -> dict | None:
         "setup": {"fen": row["fen"], "uci": moves[0], "san": setup_san},
         "your_color": "w" if board.turn == chess.WHITE else "b",
         "themes": themes,
-        "rating": row["rating"],
-        "rating_rd": row["rating_deviation"] or int(DEFAULT_LICHESS_RD),
         "popularity": row["popularity"],
         "nb_plays": row["nb_plays"],
         "game_url": row["game_url"],
         "opening_tags": (row["opening_tags"] or "").replace("_", " ") or None,
-        # How many moves you have to find. Sent because "mate in two" is
-        # already public via the themes, and a solver needs to know whether
-        # the puzzle is over.
-        "moves_required": len(moves) // 2,
         "attempts": 0,
         "solved": False,
     }
@@ -950,14 +948,31 @@ class AttemptIn(BaseModel):
 
     moves: list[str] | None = None
     uci: str | None = None
+    # A hint spends the reason a puzzle is rated at all: you didn't find it
+    # unaided. See `puzzle_ratings.record` -- true here makes the eventual
+    # result (solved or not) leave your rating exactly where it was.
+    hint_used: bool = False
 
     def line(self) -> list[str]:
         played = self.moves if self.moves is not None else ([self.uci] if self.uci else [])
         return [m.strip() for m in played if m and m.strip()]
 
 
+def _rated_extras(conn, puzzle_id: int, moves_required: int) -> dict:
+    """The puzzle's own difficulty and length -- withheld from `_own_public`
+    and safe to hand over now that the puzzle is actually over."""
+    current = conn.execute(
+        "SELECT rating, rating_source FROM puzzles WHERE id = ?", (puzzle_id,)
+    ).fetchone()
+    return {
+        "puzzle_rating": current["rating"] if current else None,
+        "puzzle_rating_source": current["rating_source"] if current else None,
+        "moves_required": moves_required,
+    }
+
+
 def _record_own_attempt(conn, user_id: int, puzzle_id: int, row, *, correct: bool,
-                        done: bool, themes: list[str]) -> dict | None:
+                        done: bool, themes: list[str], hint_used: bool = False) -> dict | None:
     """File the attempt and, when the puzzle is over, rate it.
 
     Rated only on `done`, which is what keeps a multi-move puzzle from being
@@ -984,6 +999,7 @@ def _record_own_attempt(conn, user_id: int, puzzle_id: int, row, *, correct: boo
         conn, user_id, source="own", puzzle_key=f"own:{puzzle_id}",
         solved=correct, puzzle_rating=current["rating"],
         puzzle_rd=float(current["rating_rd"] or OWN_PUZZLE_RD), themes=themes,
+        hint_used=hint_used,
     )
 
 
@@ -1045,9 +1061,11 @@ async def attempt(puzzle_id: int, body: AttemptIn, user: dict = Depends(require_
                     with db_cursor() as conn:
                         rating = _record_own_attempt(
                             conn, user["id"], puzzle_id, row,
-                            correct=True, done=True, themes=themes)
+                            correct=True, done=True, themes=themes,
+                            hint_used=body.hint_used)
                         counts = _own_stats(conn, user["id"])
                         progress = puzzle_ratings.summary(conn, user["id"])
+                        extras = _rated_extras(conn, puzzle_id, solution["moves_required"])
                     return {
                         "correct": True, "done": True, "equal_move": True,
                         "attempt": {"uci": uci, "san": board.san(move),
@@ -1056,7 +1074,7 @@ async def attempt(puzzle_id: int, body: AttemptIn, user: dict = Depends(require_
                         "line": _line_detail(row["fen"], line),
                         "played": {"uci": row["played_uci"], "san": row["played_san"]},
                         "themes": themes, "rating": rating, "progress": progress,
-                        **counts,
+                        **extras, **counts,
                     }
                 wrong_cp, wrong_given_up = result["attempt_cp"], given_up
             else:
@@ -1065,9 +1083,11 @@ async def attempt(puzzle_id: int, body: AttemptIn, user: dict = Depends(require_
             with db_cursor() as conn:
                 rating = _record_own_attempt(
                     conn, user["id"], puzzle_id, row,
-                    correct=False, done=True, themes=themes)
+                    correct=False, done=True, themes=themes,
+                    hint_used=body.hint_used)
                 counts = _own_stats(conn, user["id"])
                 progress = puzzle_ratings.summary(conn, user["id"])
+                extras = _rated_extras(conn, puzzle_id, solution["moves_required"])
             return {
                 "correct": False, "done": True,
                 "attempt": {"uci": uci, "san": _san(fen_here, uci), "cp": wrong_cp},
@@ -1078,7 +1098,7 @@ async def attempt(puzzle_id: int, body: AttemptIn, user: dict = Depends(require_
                 "played": {"uci": row["played_uci"], "san": row["played_san"]},
                 "moves_played": index,
                 "themes": themes, "rating": rating, "progress": progress,
-                **counts,
+                **extras, **counts,
             }
 
         board.push(move)
@@ -1093,22 +1113,27 @@ async def attempt(puzzle_id: int, body: AttemptIn, user: dict = Depends(require_
             if index == len(played) - 1:
                 with db_cursor() as conn:
                     _record_own_attempt(conn, user["id"], puzzle_id, row,
-                                        correct=True, done=False, themes=themes)
+                                        correct=True, done=False, themes=themes,
+                                        hint_used=body.hint_used)
                 return {
                     "correct": True, "done": False,
                     "attempt": {"uci": uci, "san": _san(fen_here, uci)},
                     "reply": {"uci": line[reply_index], "san": reply_san},
                     "fen": board.fen(),
                     "moves_played": index + 1,
-                    "moves_required": len(expected_all),
+                    # Not `moves_required`: the puzzle isn't over, and how
+                    # many moves it takes is exactly what's withheld until
+                    # it is.
                 }
 
     # Every move matched and the line has run out: solved.
     with db_cursor() as conn:
         rating = _record_own_attempt(
-            conn, user["id"], puzzle_id, row, correct=True, done=True, themes=themes)
+            conn, user["id"], puzzle_id, row, correct=True, done=True, themes=themes,
+            hint_used=body.hint_used)
         counts = _own_stats(conn, user["id"])
         progress = puzzle_ratings.summary(conn, user["id"])
+        extras = _rated_extras(conn, puzzle_id, solution["moves_required"])
     return {
         "correct": True, "done": True,
         "attempt": {"uci": played[-1], "san": None},
@@ -1119,7 +1144,7 @@ async def attempt(puzzle_id: int, body: AttemptIn, user: dict = Depends(require_
         "played": {"uci": row["played_uci"], "san": row["played_san"]},
         "moves_played": len(played),
         "themes": themes, "rating": rating, "progress": progress,
-        **counts,
+        **extras, **counts,
     }
 
 
@@ -1134,6 +1159,82 @@ def _line_detail(fen: str, line: list[str]) -> list[dict]:
     return out
 
 
+@router.post("/{puzzle_id}/hint")
+async def hint(puzzle_id: int, body: AttemptIn, user: dict = Depends(require_user)):
+    """The square of the piece to move next -- not where it goes.
+
+    A hint that named the move would just be the reveal wearing a smaller
+    hat. Naming the square still leaves the actual finding to you: which
+    piece, once you know it's the right one, can go a good many places.
+
+    `body.moves` is the prefix you've already played correctly, exactly as
+    `attempt` takes it, so the hint always matches wherever you are in a
+    multi-move line. Asking for a hint doesn't grade anything by itself --
+    it's the eventual `attempt` (or `reveal`) call, sent with `hint_used`,
+    that keeps the result off your rating.
+    """
+    row = _load(user["id"], puzzle_id)
+    solution = await _ensure_line(user["id"], row)
+    line = solution["line"]
+    if not line:
+        raise HTTPException(503, "the engine couldn't work this position out")
+    expected_all = line[0::2]
+    played = body.line()
+    if len(played) >= len(expected_all):
+        raise HTTPException(409, "nothing left to hint")
+    return {"square": expected_all[len(played)][:2]}
+
+
+# How far back a blindfold session may reach. Past a couple of dozen plies the
+# "moves that were made" recital stops being something you can hold in your
+# head at all, which is the one thing this mode asks of you.
+MAX_BLINDFOLD_PLY = 40
+
+
+@router.get("/{puzzle_id}/blindfold")
+def blindfold_context(puzzle_id: int, ply: int = 10, user: dict = Depends(require_user)):
+    """The position a configurable number of plies before the puzzle starts,
+    and the moves of the real game that lead from there to it.
+
+    Only own-game puzzles carry a full PGN to replay -- a Lichess row is a
+    FEN and a short line, not a game. The browser keeps this position on
+    the board (frozen) while the puzzle itself is solved against the real
+    one underneath; see the puzzles tab for how the two stay apart.
+    """
+    row = _load(user["id"], puzzle_id)
+    ply = max(0, min(ply, MAX_BLINDFOLD_PLY))
+    with db_cursor() as conn:
+        game_row = conn.execute(
+            "SELECT pgn_text FROM games WHERE id = ?", (row["game_id"],)
+        ).fetchone()
+    if not game_row or not game_row["pgn_text"]:
+        raise HTTPException(404, "no game text stored for this puzzle")
+    game = chess.pgn.read_game(io.StringIO(game_row["pgn_text"]))
+    if game is None:
+        raise HTTPException(404, "couldn't replay this game")
+
+    # `row["ply"]` is the move *about to be played* at the puzzle position, so
+    # the puzzle's own FEN sits after `ply - 1` half-moves -- see `build()`.
+    target_halfmoves = row["ply"] - 1
+    board = game.board()
+    positions = [board.fen()]
+    sans: list[str] = []
+    for move in game.mainline_moves():
+        sans.append(board.san(move))
+        board.push(move)
+        positions.append(board.fen())
+        if len(positions) - 1 >= target_halfmoves:
+            break
+    if target_halfmoves >= len(positions):
+        raise HTTPException(409, "couldn't replay far enough into the game")
+
+    start_halfmoves = max(0, target_halfmoves - ply)
+    return {
+        "fen": positions[start_halfmoves],
+        "moves": sans[start_halfmoves:target_halfmoves],
+    }
+
+
 class LichessAttemptIn(BaseModel):
     """Every move the solver has played so far, this one last.
 
@@ -1144,6 +1245,8 @@ class LichessAttemptIn(BaseModel):
     """
 
     moves: list[str]
+    # See `AttemptIn.hint_used` -- same meaning, same effect on the rating.
+    hint_used: bool = False
 
 
 def _after_setup(row) -> str:
@@ -1222,7 +1325,7 @@ def attempt_lichess(puzzle_id: str, body: LichessAttemptIn,
                     conn, user["id"], source="lichess", puzzle_key=key, solved=False,
                     puzzle_rating=row["rating"],
                     puzzle_rd=float(row["rating_deviation"] or DEFAULT_LICHESS_RD),
-                    themes=themes,
+                    themes=themes, hint_used=body.hint_used,
                 )
                 return {
                     "correct": False,
@@ -1234,6 +1337,8 @@ def attempt_lichess(puzzle_id: str, body: LichessAttemptIn,
                     "themes": themes,
                     "rating": result,
                     "progress": puzzle_ratings.summary(conn, user["id"]),
+                    "puzzle_rating": row["rating"],
+                    "moves_required": len(expected_all),
                 }
             board.push(candidate)
 
@@ -1257,7 +1362,8 @@ def attempt_lichess(puzzle_id: str, body: LichessAttemptIn,
                         "reply": {"uci": reply_uci, "san": reply_san},
                         "fen": board.fen(),
                         "moves_played": index + 1,
-                        "moves_required": len(expected_all),
+                        # Not `moves_required` -- see the same note in the
+                        # own-game attempt handler.
                     }
 
         # Every move matched and there was no reply left: solved.
@@ -1265,7 +1371,7 @@ def attempt_lichess(puzzle_id: str, body: LichessAttemptIn,
             conn, user["id"], source="lichess", puzzle_key=key, solved=True,
             puzzle_rating=row["rating"],
             puzzle_rd=float(row["rating_deviation"] or DEFAULT_LICHESS_RD),
-            themes=themes,
+            themes=themes, hint_used=body.hint_used,
         )
         return {
             "correct": True,
@@ -1280,16 +1386,40 @@ def attempt_lichess(puzzle_id: str, body: LichessAttemptIn,
             "game_url": row["game_url"],
             "rating": result,
             "progress": puzzle_ratings.summary(conn, user["id"]),
+            "puzzle_rating": row["rating"],
+            "moves_required": len(expected_all),
         }
 
 
+@router.post("/lichess/{puzzle_id}/hint")
+def hint_lichess(puzzle_id: str, body: LichessAttemptIn, user: dict = Depends(require_user)):
+    """The square of the piece to move next, for a Lichess puzzle.
+
+    No engine needed -- the line is already known -- so this is a lookup
+    against the same prefix `attempt_lichess` takes.
+    """
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT moves FROM lichess_puzzles WHERE puzzle_id = ?", (puzzle_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "no such puzzle")
+    expected_all = row["moves"].split()[1::2]
+    played = [m.strip() for m in body.moves if m and m.strip()]
+    if len(played) >= len(expected_all):
+        raise HTTPException(409, "nothing left to hint")
+    return {"square": expected_all[len(played)][:2]}
+
+
 @router.post("/lichess/{puzzle_id}/reveal")
-def reveal_lichess(puzzle_id: str, user: dict = Depends(require_user)):
+def reveal_lichess(puzzle_id: str, hint_used: bool = False,
+                   user: dict = Depends(require_user)):
     """Gives up on a Lichess puzzle and shows the line.
 
-    Counts as a failure, once, and only if you hadn't already attempted it.
-    Giving up is a result; letting it be free would make the rating a measure
-    of patience.
+    Counts as a failure, once, and only if you hadn't already attempted it
+    -- unless a hint was already spent on it, in which case giving up is just
+    the rest of that same unrated result. Giving up cold is a result; letting
+    it be free would make the rating a measure of patience.
     """
     with db_cursor() as conn:
         row = conn.execute(
@@ -1313,7 +1443,7 @@ def reveal_lichess(puzzle_id: str, user: dict = Depends(require_user)):
             conn, user["id"], source="lichess", puzzle_key=f"lichess:{puzzle_id}",
             solved=False, puzzle_rating=row["rating"],
             puzzle_rd=float(row["rating_deviation"] or DEFAULT_LICHESS_RD),
-            themes=themes,
+            themes=themes, hint_used=hint_used,
         )
         return {
             "line": moves,
@@ -1321,18 +1451,21 @@ def reveal_lichess(puzzle_id: str, user: dict = Depends(require_user)):
             "game_url": row["game_url"],
             "rating": result,
             "progress": puzzle_ratings.summary(conn, user["id"]),
+            "puzzle_rating": row["rating"],
+            "moves_required": len(line) // 2,
         }
 
 
 @router.post("/{puzzle_id}/reveal")
-async def reveal(puzzle_id: int, user: dict = Depends(require_user)):
+async def reveal(puzzle_id: int, hint_used: bool = False, user: dict = Depends(require_user)):
     """Gives up on a puzzle from your games. It stays unsolved -- a revealed
     answer isn't one you found, and it should come round again.
 
     It also counts as a miss against your rating, once, exactly as giving up
-    on a Lichess puzzle does. Anything else makes 'Show me' the cheapest way
-    to avoid a result, and the two sources have to agree about that or the
-    single rating spanning them means nothing.
+    on a Lichess puzzle does -- unless a hint was already spent on it, in
+    which case there's no rating result left to spend. Anything else makes
+    'Show me' the cheapest way to avoid a result, and the two sources have to
+    agree about that or the single rating spanning them means nothing.
     """
     row = _load(user["id"], puzzle_id)
     # Working the answer out is also what tags the puzzle and gives it an
@@ -1355,6 +1488,7 @@ async def reveal(puzzle_id: int, user: dict = Depends(require_user)):
             conn, user["id"], source="own", puzzle_key=f"own:{puzzle_id}",
             solved=False, puzzle_rating=current["rating"],
             puzzle_rd=float(current["rating_rd"] or OWN_PUZZLE_RD), themes=themes,
+            hint_used=hint_used,
         )
         counts = _own_stats(conn, user["id"])
         progress = puzzle_ratings.summary(conn, user["id"])
@@ -1369,6 +1503,7 @@ async def reveal(puzzle_id: int, user: dict = Depends(require_user)):
         "themes": themes,
         "rating": rating,
         "progress": progress,
+        "puzzle_rating": current["rating"],
         **counts,
     }
 

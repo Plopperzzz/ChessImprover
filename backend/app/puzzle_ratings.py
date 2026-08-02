@@ -98,7 +98,8 @@ def _store(conn, user_id: int, theme: str, rating: Rating, solved: bool):
 
 
 def record(conn, user_id: int, *, source: str, puzzle_key: str, solved: bool,
-           puzzle_rating: int | None, puzzle_rd: float, themes: list[str]) -> dict:
+           puzzle_rating: int | None, puzzle_rd: float, themes: list[str],
+           hint_used: bool = False) -> dict:
     """Files an attempt and, if it is the first at this puzzle, rates it.
 
     `puzzle_rd` is how sure we are of the puzzle's difficulty, and it matters
@@ -107,13 +108,19 @@ def record(conn, user_id: int, *, source: str, puzzle_key: str, solved: bool,
     estimate, and Glicko-2 will correctly move the solver's rating less for
     the second. See `puzzles.own_puzzle_rating`.
 
+    `hint_used` is the other way a first attempt ends up unrated: a hint
+    means you didn't find the move unaided, so the result -- solved or not --
+    has nothing to say about your rating. Still filed as an attempt, same as
+    a puzzle with no known difficulty; it just never touches Glicko-2.
+
     Returns what happened, so the browser can say "1523 -> 1540" rather than
     just showing a new number.
     """
     first_try = not already_attempted(conn, user_id, puzzle_key)
-    # A puzzle with no known difficulty cannot be rated against. It still
-    # counts as an attempt -- it just doesn't pretend to measure anything.
-    rated = first_try and puzzle_rating is not None
+    # A puzzle with no known difficulty cannot be rated against, and neither
+    # can a puzzle you needed a hint on. Both still count as an attempt --
+    # they just don't pretend to measure anything.
+    rated = first_try and puzzle_rating is not None and not hint_used
 
     before = get(conn, user_id)
     after = before
