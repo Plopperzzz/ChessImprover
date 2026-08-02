@@ -119,12 +119,20 @@ function SideEstimate({
   );
 }
 
-/** Observed match rate per grid point with the fitted bump over it. The peak of
- *  that curve is the estimate, which is the only way to see whether the number
- *  came off a real hump or off a flat line. */
+/** Observed match rate (or, under the default 'likelihood' objective, mean log
+ *  probability per move -- see `curve_kind`) per grid point with the fitted
+ *  curve over it. The peak is the estimate, which is the only way to see
+ *  whether the number came off a real hump or off a flat line.
+ *
+ *  The two curve kinds are different quantities on different scales -- a rate
+ *  is 0-1 and reads naturally as a percentage, log probability is negative
+ *  nats with no fixed ceiling -- so formatting both the same way is how a
+ *  mean log probability of -2.5 ends up drawn as "-250%". `curve_kind` says
+ *  which one a response carries; absent means the older 'top1' rate. */
 function SweepCurve({ estimate }: { estimate: EloEstimate }) {
   const chart = useChartTheme();
   if (!estimate.grid?.length || !estimate.match_rates?.length) return null;
+  const isLogp = estimate.curve_kind === 'mean_logp';
 
   // One dataset for both series: the dense fit and the sparse observations
   // share an x axis, and recharts only lines up a Line and a Scatter when they
@@ -138,13 +146,15 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
     }
     return row;
   };
+  const scale = isLogp ? 1 : 100;
   (estimate.curve_x ?? []).forEach((x, i) => {
-    at(x).fit = (estimate.curve_y?.[i] ?? 0) * 100;
+    at(x).fit = (estimate.curve_y?.[i] ?? 0) * scale;
   });
   estimate.grid.forEach((elo, i) => {
-    at(elo).rate = (estimate.match_rates?.[i] ?? 0) * 100;
+    at(elo).rate = (estimate.match_rates?.[i] ?? 0) * scale;
   });
   const data = [...rows.values()].sort((a, b) => a.elo - b.elo);
+  const format = (v: number) => (isLogp ? v.toFixed(2) : `${v.toFixed(0)}%`);
 
   return (
     <div className="h-40 w-full">
@@ -161,7 +171,7 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
           />
           <YAxis
             tick={{ fill: chart.axis, fontSize: 10 }}
-            tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+            tickFormatter={format}
             axisLine={false}
             tickLine={false}
           />
@@ -176,7 +186,7 @@ function SweepCurve({ estimate }: { estimate: EloEstimate }) {
             }}
             labelFormatter={(v) => `Maia ${Math.round(Number(v))}`}
             formatter={(v, name) => [
-              `${Number(v).toFixed(1)}%`,
+              isLogp ? `${Number(v).toFixed(2)} nats/move` : `${Number(v).toFixed(1)}%`,
               name === 'fit' ? 'fitted' : 'observed',
             ]}
           />
@@ -371,7 +381,8 @@ export function EloSweepPanel({
           {yours && (
             <div className="mt-3 border-t border-line pt-3">
               <p className="mb-1 text-[11px] tracking-wider text-fg-subtle uppercase">
-                Match rate by Maia Elo ({yourColor === 'b' ? 'black' : 'white'})
+                {yours.curve_label ?? 'Match rate'} by Maia Elo (
+                {yourColor === 'b' ? 'black' : 'white'})
               </p>
               <SweepCurve estimate={yours} />
             </div>
