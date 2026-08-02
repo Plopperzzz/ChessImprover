@@ -44,21 +44,22 @@ router = APIRouter(prefix="/api/batch", tags=["batch"])
 
 def _select_games(user_id: int, scope: str, mode: str, speed: str | None = None,
                   time_control: str | None = None,
-                  collection_id: int | None = None) -> list[dict]:
+                  collection_id: int | None = None,
+                  database: str | None = None) -> list[dict]:
     """Which games the batch will cover.
 
     'unanalyzed' skips games that already have a result for this mode, so a
     re-run after a cancel picks up where it left off rather than redoing
     everything.
 
-    The speed/group filters are the same ones the picker uses -- deliberately,
-    so "analyse just my rapid games" or "just this group" means exactly the
-    set of games you were looking at when you pressed the button. That is the
-    point of being able to group games at all: the strength estimate on
-    Progress is a different number for bullet than for rapid, and pooling them
-    answers a question nobody asked.
+    The speed/group/database filters are the same ones the picker uses --
+    deliberately, so "analyse just my rapid games" or "just this group" means
+    exactly the set of games you were looking at when you pressed the button.
+    That is the point of being able to group games at all: the strength
+    estimate on Progress is a different number for bullet than for rapid, and
+    pooling them answers a question nobody asked.
     """
-    where, params = game_filter_sql(user_id, speed, time_control, collection_id)
+    where, params = game_filter_sql(user_id, speed, time_control, collection_id, database)
     if scope == "unanalyzed":
         where += (" AND NOT EXISTS (SELECT 1 FROM run_games rg "
                   "WHERE rg.game_id = g.id AND rg.user_id = g.user_id AND rg.mode = ?)")
@@ -206,6 +207,7 @@ class BatchIn(BaseModel):
     speed: str | None = None
     time_control: str | None = None
     collection_id: int | None = None
+    database: str | None = None
 
 
 def active_batch(user_id: int) -> AnalysisJob | None:
@@ -233,7 +235,7 @@ async def start_batch(body: BatchIn, user: dict = Depends(require_user)):
         return {"job_id": running.job_id, "total": running.total, "attached": True}
 
     games = _select_games(user["id"], body.scope, body.mode, body.speed,
-                          body.time_control, body.collection_id)
+                          body.time_control, body.collection_id, body.database)
     if not games:
         raise HTTPException(400, "no games to analyse for that selection")
     settings = get_effective_settings(user["id"])
@@ -249,12 +251,12 @@ async def start_batch(body: BatchIn, user: dict = Depends(require_user)):
 @router.get("/preview")
 def preview_batch(mode: str = "quick", scope: str = "unanalyzed",
                   speed: str | None = None, time_control: str | None = None,
-                  collection_id: int | None = None,
+                  collection_id: int | None = None, database: str | None = None,
                   user: dict = Depends(require_user)):
     """How many games a batch would cover, so the button can say so before
     committing to a long run."""
     return {"count": len(_select_games(user["id"], scope, mode, speed,
-                                       time_control, collection_id))}
+                                       time_control, collection_id, database))}
 
 
 @router.post("/{job_id}/cancel")

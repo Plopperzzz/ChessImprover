@@ -59,6 +59,8 @@ export interface GameSummary {
    *  one. */
   estimated_elo?: number | null;
   collection_ids: number[];
+  /** 'library' | 'chesscom' | 'played', read off `source_name` server-side. */
+  database: 'library' | 'chesscom' | 'played';
 }
 
 export interface GameDetail extends GameSummary {

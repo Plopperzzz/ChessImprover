@@ -74,9 +74,30 @@ def _summarize(row: dict) -> dict:
     }
 
 
+
+# Which database a game belongs to, read off `source_name` rather than a
+# stored column: every path that inserts a game already writes one of exactly
+# three shapes there -- `chess.com/{user}/{yyyy-mm}` (chesscom.import_months),
+# the literal `play-vs-maia` (play.PlaySession.save_to_library), or a filename
+# / `pasted` (games.upload_games) -- so the split is free and can't drift out
+# of sync with a second column nobody remembered to set. New databases are a
+# new prefix here, not a migration.
+GAME_DATABASES = ("library", "chesscom", "played")
+DATABASE_LABELS = {"library": "My library", "chesscom": "Chess.com", "played": "Played vs Maia"}
+
+
+def game_database(source_name: str) -> str:
+    if source_name == "play-vs-maia":
+        return "played"
+    if source_name.startswith("chess.com/"):
+        return "chesscom"
+    return "library"
+
+
 def game_filter_sql(user_id: int, speed: str | None = None,
                     time_control: str | None = None,
-                    collection_id: int | None = None) -> tuple[str, list]:
+                    collection_id: int | None = None,
+                    database: str | None = None) -> tuple[str, list]:
     """The WHERE fragment and parameters shared by everything that works on a
     filtered slice of the library -- the picker, bulk delete, batch analysis.
 
@@ -104,6 +125,12 @@ def game_filter_sql(user_id: int, speed: str | None = None,
             "WHERE gc.game_id = g.id AND gc.collection_id = ?)"
         )
         params.append(collection_id)
+    if database == "played":
+        where.append("g.source_name = 'play-vs-maia'")
+    elif database == "chesscom":
+        where.append("g.source_name LIKE 'chess.com/%'")
+    elif database == "library":
+        where.append("g.source_name != 'play-vs-maia' AND g.source_name NOT LIKE 'chess.com/%'")
     return " AND ".join(where), params
 
 
@@ -113,37 +140,42 @@ class LibraryFilter(NamedTuple):
     The fragment above is the shared *SQL*; this is the shared *choice*, for
     the callers that have to carry it through several layers before it reaches
     a query -- the Progress fits pass one down from the endpoint into the
-    pooled collect. Bundling the three fields keeps that from turning every
-    signature on the way into three more optional arguments.
+    pooled collect. Bundling the fields keeps that from turning every
+    signature on the way into four more optional arguments.
     """
     speed: str | None = None
     time_control: str | None = None
     collection_id: int | None = None
+    database: str | None = None
 
     @property
     def active(self) -> bool:
         return any(v is not None for v in self)
 
     def where(self, user_id: int) -> tuple[str, list]:
-        return game_filter_sql(user_id, self.speed, self.time_control, self.collection_id)
+        return game_filter_sql(user_id, self.speed, self.time_control, self.collection_id,
+                               self.database)
 
     def as_dict(self) -> dict:
         return self._asdict()
 
 
 def library_filter(speed: str | None = None, time_control: str | None = None,
-                   collection_id: int | None = None) -> LibraryFilter:
-    """FastAPI dependency: the same three query parameters everywhere the
+                   collection_id: int | None = None,
+                   database: str | None = None) -> LibraryFilter:
+    """FastAPI dependency: the same four query parameters everywhere the
     library can be sliced, so the Games list and the Progress fits can't end up
     spelling them differently.
 
-    A speed outside the known set is rejected rather than quietly matching no
-    games: an empty panel that should have been full is a much harder thing to
-    diagnose than a 400.
+    A speed or database outside the known set is rejected rather than quietly
+    matching no games: an empty panel that should have been full is a much
+    harder thing to diagnose than a 400.
     """
     if speed is not None and speed not in FILTER_SPEEDS:
         raise HTTPException(400, f"speed must be one of {', '.join(FILTER_SPEEDS)}")
-    return LibraryFilter(speed, time_control, collection_id)
+    if database is not None and database not in GAME_DATABASES:
+        raise HTTPException(400, f"database must be one of {', '.join(GAME_DATABASES)}")
+    return LibraryFilter(speed, time_control, collection_id, database)
 
 
 @router.get("")
@@ -191,25 +223,40 @@ def list_games(filters: LibraryFilter = Depends(library_filter),
              # None means "no sweep has been run", which the picker draws as a
              # placeholder rather than leaving the row a different height.
              "estimated_elo": estimate_for(r),
-             "collection_ids": membership.get(r["id"], [])} for r in rows]
+             "collection_ids": membership.get(r["id"], []),
+             "database": game_database(r["source_name"])} for r in rows]
 
 
 @router.get("/facets")
-def game_facets(user: dict = Depends(require_user)):
+def game_facets(database: str | None = None, user: dict = Depends(require_user)):
     """What time controls the library actually contains, and how many games
-    each has -- grouped into speeds the way chess.com's own picker is.
+    each has -- grouped into speeds the way chess.com's own picker is -- plus
+    how many games sit in each database.
 
     The filter is built from this rather than from a fixed list of controls:
     offering "20 sec + 1" to someone who has never played one is noise, and a
     control this app has never heard of still has to be filterable.
+
+    `database`, when given, scopes the *speed* breakdown to that database --
+    the point of picking "Chess.com" is not being offered a bullet filter that
+    only your played-vs-Maia games ever used. The database breakdown itself is
+    always the whole library: it's the list of tabs to choose from, not a
+    figure that changes depending which one is already selected.
     """
+    if database is not None and database not in GAME_DATABASES:
+        raise HTTPException(400, f"database must be one of {', '.join(GAME_DATABASES)}")
+    where, params = game_filter_sql(user["id"], database=database)
     with db_cursor() as conn:
         rows = conn.execute(
-            """SELECT speed, time_control, COUNT(*) AS games
-               FROM games WHERE user_id = ?
+            f"""SELECT speed, time_control, COUNT(*) AS games
+               FROM games g WHERE {where}
                GROUP BY speed, time_control""",
-            (user["id"],),
+            params,
         ).fetchall()
+        source_names = [
+            r["source_name"] for r in
+            conn.execute("SELECT source_name FROM games WHERE user_id = ?", (user["id"],))
+        ]
     speeds: dict[str, dict] = {}
     for row in rows:
         speed = row["speed"] or "unknown"
@@ -225,8 +272,19 @@ def game_facets(user: dict = Depends(require_user)):
         # Within a speed, the control you played most is the one you want
         # first -- an alphabetical list of '1200' and '600+5' helps nobody.
         bucket["controls"].sort(key=lambda c: (-c["games"], c["time_control"]))
+
+    database_counts: dict[str, int] = {}
+    for source_name in source_names:
+        key = game_database(source_name)
+        database_counts[key] = database_counts.get(key, 0) + 1
+    databases = [
+        {"database": d, "label": DATABASE_LABELS[d], "games": database_counts.get(d, 0)}
+        for d in GAME_DATABASES
+    ]
+
     return {"speeds": [speeds[s] for s in order if s in speeds],
-            "total": sum(b["games"] for b in speeds.values())}
+            "total": sum(b["games"] for b in speeds.values()),
+            "databases": databases}
 
 
 class BulkDeleteIn(BaseModel):
@@ -240,6 +298,7 @@ class BulkDeleteIn(BaseModel):
     speed: str | None = None
     time_control: str | None = None
     collection_id: int | None = None
+    database: str | None = None
 
 
 @router.post("/bulk-delete")
@@ -251,12 +310,14 @@ def bulk_delete(body: BulkDeleteIn, user: dict = Depends(require_user)):
     otherwise mean "delete my entire library", which is not something a
     dropped field should be able to say.
     """
-    has_filter = any(v is not None for v in (body.speed, body.time_control, body.collection_id))
+    has_filter = any(
+        v is not None for v in (body.speed, body.time_control, body.collection_id, body.database)
+    )
     if body.game_ids is None and not has_filter:
         raise HTTPException(400, "give either game_ids or a filter to delete by")
 
     where, params = game_filter_sql(user["id"], body.speed, body.time_control,
-                                    body.collection_id)
+                                    body.collection_id, body.database)
     if body.game_ids is not None:
         if not body.game_ids:
             return {"deleted": 0, "uploads_removed": 0}

@@ -33,14 +33,14 @@ by time control into groups you can analyse or delete in bulk. What's next is in
 There is now a second UI, in [`web/`](web/README.md) — React, and a single
 **Full analysis** button that runs the Stockfish pass and the Maia Elo sweep
 together and shows the fitted rating beneath the move list. It covers game
-analysis, the progress view and puzzles. The game library there also runs a
-full analysis over everything left in it: one button, scoped to whatever the
-library is filtered to, skipping the games that already have a full result —
-so it is also how you resume a run that was cancelled. The classic vanilla-JS
-UI in `frontend/` is unchanged and still holds everything the React one hasn't
-picked up yet — play vs Maia, the batch panel's mode and scope choices, and the
-opening explorer. Both are served by the same process, off the same database: the
-React build at `/`, the classic UI at `/legacy/`.
+analysis, the progress view, play vs Maia and puzzles. The game library there
+also runs a full analysis over everything left in it: one button, scoped to
+whatever the library is filtered to, skipping the games that already have a
+full result — so it is also how you resume a run that was cancelled. The
+classic vanilla-JS UI in `frontend/` is unchanged and still holds everything
+the React one hasn't picked up yet — the batch panel's mode and scope
+choices, and the opening explorer. Both are served by the same process, off
+the same database: the React build at `/`, the classic UI at `/legacy/`.
 
 What was wrong with the React UI's first pass is written down in
 [`docs/web-ui-fixes.md`](docs/web-ui-fixes.md), which is now largely worked

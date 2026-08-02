@@ -91,6 +91,15 @@ export function AnalysisScreen({
   const [liveActive, setLiveActive] = useState(false);
   const gameRef = useRef<GameDetail | null>(null);
   gameRef.current = game;
+  // Where `playMove`'s async save can find out, once it's back, whether the
+  // reader is still standing where the move landed -- see the race note
+  // there. Refs rather than the `tree`/`nodeId` closures because those are
+  // snapshots from when the move was played, and the whole point is telling
+  // that moment apart from whatever is true now.
+  const treeRef = useRef<MoveTree>(tree);
+  treeRef.current = tree;
+  const nodeIdRef = useRef<string>(nodeId);
+  nodeIdRef.current = nodeId;
 
   // --- library ------------------------------------------------------------
 
@@ -101,7 +110,7 @@ export function AnalysisScreen({
       .then(setGames)
       .catch(() => setGames([]))
       .finally(() => setGamesLoading(false));
-    api.gameFacets().then(setFacets).catch(() => setFacets(null));
+    api.gameFacets(filter.database).then(setFacets).catch(() => setFacets(null));
   }, [filter]);
 
   useEffect(reloadLibrary, [reloadLibrary]);
@@ -511,12 +520,34 @@ export function AnalysisScreen({
           // Re-read rather than patching ids by hand: the tree the server
           // describes is the one that will come back next time.
           const fresh = await api.listVariations(game.id);
+          // The write is a round trip, and the reader doesn't wait for it —
+          // by the time it lands they may have stepped away from the move
+          // that triggered it, played another, or opened a different game
+          // altogether. Swapping the tree out from under them regardless
+          // used to drag the board back to the branch point (or, across a
+          // game switch, onto a tree that isn't even this game's), which is
+          // exactly the kind of unrelated jump that reads as a broken
+          // animation rather than the state update it actually is.
+          if (gameRef.current?.id !== game.id) return;
           const rebuilt = buildTree(plies, fresh);
           const landed = Object.values(rebuilt.nodes).find(
             (n) => n.variationId === saved.id && n.indexInLine === 0,
           );
           setTree(rebuilt);
-          if (landed) setNodeId(landed.id);
+          if (nodeIdRef.current === grown.node.id) {
+            // Still standing on the move that was just saved: land on its
+            // freshly-built node, the same place, same as before.
+            if (landed) setNodeId(landed.id);
+          } else {
+            // Moved on already. Keep looking at the same position if the
+            // rebuild still has it -- the ids are fresh every time, so it
+            // has to be found by the position itself rather than by id.
+            const currentFen = treeRef.current.nodes[nodeIdRef.current]?.fen;
+            const same = currentFen
+              ? Object.values(rebuilt.nodes).find((n) => n.fen === currentFen)
+              : null;
+            if (same) setNodeId(same.id);
+          }
         }
       } catch (e) {
         setVariationError(

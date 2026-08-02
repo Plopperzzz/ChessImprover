@@ -75,6 +75,11 @@ export function Board({
   const [selected, setSelected] = useState<string | null>(null);
   const [targets, setTargets] = useState<string[]>([]);
   const [brokenArt, setBrokenArt] = useState(false);
+  /** Whether the chosen board's own art actually loaded. Squares only paint
+   *  their own fallback colour when it hasn't (or has none): painting it
+   *  unconditionally, as this used to, sat a near-opaque tint over every
+   *  board image, so picking a different board changed nothing on screen. */
+  const [artLoaded, setArtLoaded] = useState(false);
   const [promoting, setPromoting] = useState<{ from: string; to: string } | null>(null);
   /** The piece under the pointer, and where the pointer is, while dragging. */
   const [drag, setDrag] = useState<{
@@ -122,6 +127,7 @@ export function Board({
   }, [fen]);
 
   useEffect(() => setBrokenArt(false), [pieceSet]);
+  useEffect(() => setArtLoaded(false), [boardSet]);
 
   const files = flipped ? [...FILES].reverse() : FILES;
   const ranks = flipped ? [...RANKS].reverse() : RANKS;
@@ -286,6 +292,24 @@ export function Board({
       onPointerUp={onPointerUp}
       onPointerCancel={() => setDrag(null)}
     >
+      {/* Invisible probes, not the board's own background-image: CSS gives no
+          load/error event for a `background-image`, so there is no other way
+          to know whether either candidate URL actually painted anything.
+          Either one succeeding is enough to stop drawing the fallback tint. */}
+      <img
+        src={`/assets/boards/${boardSet}.png`}
+        alt=""
+        aria-hidden="true"
+        className="hidden"
+        onLoad={() => setArtLoaded(true)}
+      />
+      <img
+        src={`/assets/sets/${boardSet}/board.png`}
+        alt=""
+        aria-hidden="true"
+        className="hidden"
+        onLoad={() => setArtLoaded(true)}
+      />
       <div className="grid h-full w-full grid-cols-8 grid-rows-8">
         {ranks.map((rank, rankIdx) =>
           files.map((file, fileIdx) => {
@@ -305,12 +329,20 @@ export function Board({
                   interactive ? (grabbable ? 'cursor-grab' : 'cursor-pointer') : ''
                 }`}
                 style={{
-                  // A board image, when the set has one, shows through; the tint
-                  // is what keeps the squares readable if it doesn't. Squares,
-                  // coordinates and the fallback glyphs below are the one part
-                  // of the UI that doesn't follow the theme: they read against
-                  // the board's own colours, not the page's.
-                  backgroundColor: light ? 'rgba(240,217,181,0.92)' : 'rgba(140,100,64,0.92)',
+                  // The board's own image is behind this square (painted on
+                  // `board-frame`) and shows through once it has loaded; this
+                  // flat colour is only the fallback for a board with none, so
+                  // it stops painting the moment real art is confirmed on
+                  // screen -- otherwise it sat on top of every board at
+                  // 92% opacity and no choice of board ever looked different.
+                  // Squares, coordinates and the fallback glyphs below are the
+                  // one part of the UI that doesn't follow the theme: they
+                  // read against the board's own colours, not the page's.
+                  backgroundColor: artLoaded
+                    ? undefined
+                    : light
+                      ? 'rgba(240,217,181,0.92)'
+                      : 'rgba(140,100,64,0.92)',
                   // Dragging, on a touch screen.
                   //
                   // A finger on a square the browser is allowed to pan with is

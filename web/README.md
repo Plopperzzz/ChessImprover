@@ -72,7 +72,8 @@ Install Node 20 LTS or newer and repeat.
 | --- | --- |
 | **Game Analysis** | `/api/games`, `/api/games/chesscom/*`, `/api/games/{id}/variations`, `/api/analysis/*`, `/api/sweep/*`, `/ws/analysis/{job}`, `/ws/live-eval` |
 | **Progress** | `/api/strength`, `/api/trend`, `/api/move-quality` |
-| **Play Maia**, **Puzzles** | not rebuilt yet — these link across to `/legacy/` |
+| **Play Maia** | `/ws/play` |
+| **Puzzles** | `/api/puzzles/*` |
 
 ### Full analysis
 
@@ -189,15 +190,49 @@ months it didn't reach.
 Picking months by hand, and re-fetching games deleted from the library
 (`mode: 'refetch'`), are still classic-UI only.
 
+### Databases
+
+The library is one table, but not one pile: `games.database` (`app/games.py`)
+reads which of three databases a game belongs to off `source_name` rather than
+a stored column, since every insert path already writes a distinct shape
+there — `chess.com/{user}/{yyyy-mm}` for a chess.com download, the literal
+`play-vs-maia` for a game you finished on the Play tab and saved, anything
+else (a filename, `pasted`) for a game you uploaded by hand. That makes a
+fourth insert path's database free by construction rather than another
+migration.
+
+The game library's **Database** row above the time-control filter picks a
+database the same way that row picks a speed, and Progress carries its own
+copy of the same picker, because a chess.com rating average pooled in with
+untimed Maia games and hand-uploaded club-night PGNs answers a question
+nobody asked — the same reasoning D7 already applied to time controls.
+`GET /api/games/facets` reports both breakdowns in one call: `databases` is
+always the whole library (it's the list of tabs), and `speeds` is scoped to
+whichever database is picked, so switching to "Played vs Maia" doesn't keep
+offering a bullet button that only your chess.com games ever used.
+
+## Play vs Maia
+
+`components/Play/PlayScreen.tsx` talks to `/ws/play` alone — no job queue, no
+Elo-sweep or classification code, per spec §14 — and reuses the board and the
+sound table the same way every other screen does. The clock is
+server-authoritative: `state` carries the real remaining time on every move,
+and a local ticker only interpolates between those messages between server
+updates. A move is applied to the board the moment it's played (chess.js
+validates it locally first) and reconciled against the server's own `state`
+or `engine_move` for it when that arrives; an `illegal` message means the two
+had already drifted and snaps back to the server's last confirmed position.
+
+Finishing a game leaves the setup form open again beside the finished game's
+move list and Save button, so a rematch can change Elo, colour or the clock
+without losing the chance to save the one that just ended.
+
 ## Not ported from the classic UI
 
 These still work, at `/legacy/`, and are not duplicated here:
 
-- Play vs Maia3, and puzzles (own-mistakes and the Lichess database)
-- Batch analysis over many games
 - Month-by-month chess.com picking, and collection/group management
 - The opening database explorer
 - Bulk delete, colour re-matching, and the per-engine UCI option editor
 
-The React UI links to `/legacy/` from the library panel and from the two screens
-that have not been rebuilt.
+The React UI links to `/legacy/` from the library panel for these.

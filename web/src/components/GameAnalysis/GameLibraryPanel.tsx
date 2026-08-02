@@ -58,6 +58,14 @@ const SPEED_LABEL: Record<string, string> = {
   unknown: 'Unknown',
 };
 
+/** Short labels for the tabs -- `facets.databases[].label` is the same text
+ *  but this fits the pill without wrapping. */
+const DATABASE_LABEL: Record<api.GameDatabase, string> = {
+  library: 'My library',
+  chesscom: 'Chess.com',
+  played: 'Played vs Maia',
+};
+
 export function GameLibraryPanel({
   games,
   loading,
@@ -117,8 +125,9 @@ export function GameLibraryPanel({
       speed: filter.speed ?? null,
       time_control: filter.time_control ?? null,
       collection_id: filter.collection_id ?? null,
+      database: filter.database ?? null,
     }),
-    [runId, filter.speed, filter.time_control, filter.collection_id],
+    [runId, filter.speed, filter.time_control, filter.collection_id, filter.database],
   );
 
   // How many games the button would cover, so it can say so before committing
@@ -335,6 +344,38 @@ export function GameLibraryPanel({
             </button>
           </div>
         </label>
+
+        <div>
+          <span className="mb-1 block text-[10px] tracking-wider text-fg-subtle uppercase">
+            Database
+          </span>
+          <div className="flex flex-wrap gap-1">
+            <button
+              onClick={() => onChangeFilter({ ...filter, database: null })}
+              className={`rounded-full px-2.5 py-1 text-[11px] transition-colors ${
+                !filter.database
+                  ? 'bg-accent-strong text-on-accent'
+                  : 'bg-canvas text-fg-muted ring-1 ring-line hover:text-fg-2'
+              }`}
+            >
+              All {facets ? `(${facets.databases.reduce((n, d) => n + d.games, 0)})` : ''}
+            </button>
+            {facets?.databases.map((db) => (
+              <button
+                key={db.database}
+                onClick={() => onChangeFilter({ ...filter, database: db.database })}
+                disabled={db.games === 0 && filter.database !== db.database}
+                className={`rounded-full px-2.5 py-1 text-[11px] transition-colors disabled:opacity-40 ${
+                  filter.database === db.database
+                    ? 'bg-accent-strong text-on-accent'
+                    : 'bg-canvas text-fg-muted ring-1 ring-line hover:text-fg-2'
+                }`}
+              >
+                {DATABASE_LABEL[db.database]} ({db.games})
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div>
           <span className="mb-1 block text-[10px] tracking-wider text-fg-subtle uppercase">
