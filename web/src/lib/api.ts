@@ -515,21 +515,47 @@ export const nextPuzzle = (q: PuzzleQuery) =>
  *
  * The whole prefix rather than just the new move, for both sources: the
  * server holds no per-solver state and re-checks the line each time, so
- * nothing can be skipped by lying about where you are. */
-export const attemptPuzzle = (puzzle: Puzzle, moves: string[]) =>
+ * nothing can be skipped by lying about where you are.
+ *
+ * `hintUsed` travels with every attempt at this puzzle once a hint has been
+ * asked for, so whichever call finishes it -- right or wrong -- leaves the
+ * rating exactly where it was. */
+export const attemptPuzzle = (puzzle: Puzzle, moves: string[], hintUsed = false) =>
   request<PuzzleVerdict>(
     puzzle.source === 'lichess'
       ? `/api/puzzles/lichess/${puzzle.id}/attempt`
       : `/api/puzzles/${puzzle.id}/attempt`,
+    json({ moves, hint_used: hintUsed }),
+  );
+
+export const revealPuzzle = (puzzle: Puzzle, hintUsed = false) => {
+  const suffix = query({ hint_used: hintUsed ? 'true' : undefined });
+  return request<PuzzleVerdict>(
+    puzzle.source === 'lichess'
+      ? `/api/puzzles/lichess/${puzzle.id}/reveal${suffix}`
+      : `/api/puzzles/${puzzle.id}/reveal${suffix}`,
+    { method: 'POST' },
+  );
+};
+
+/** The square of the piece to move next -- not where it goes. Takes the
+ *  moves already correctly played, same shape as `attemptPuzzle`, so the
+ *  hint always matches wherever you are in a multi-move line. */
+export const puzzleHint = (puzzle: Puzzle, moves: string[]) =>
+  request<{ square: string }>(
+    puzzle.source === 'lichess'
+      ? `/api/puzzles/lichess/${puzzle.id}/hint`
+      : `/api/puzzles/${puzzle.id}/hint`,
     json({ moves }),
   );
 
-export const revealPuzzle = (puzzle: Puzzle) =>
-  request<PuzzleVerdict>(
-    puzzle.source === 'lichess'
-      ? `/api/puzzles/lichess/${puzzle.id}/reveal`
-      : `/api/puzzles/${puzzle.id}/reveal`,
-    { method: 'POST' },
+/** The position a number of plies before a puzzle from your own games, and
+ *  the moves of the real game that lead from there to it -- what a
+ *  blindfold session recites before handing the puzzle over. Own-game
+ *  puzzles only: a Lichess row carries no game to replay. */
+export const puzzleBlindfoldContext = (puzzleId: number, ply: number) =>
+  request<{ fen: string; moves: string[] }>(
+    `/api/puzzles/${puzzleId}/blindfold${query({ ply })}`,
   );
 
 export const rebuildPuzzles = () =>

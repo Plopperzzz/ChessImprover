@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 SCRATCH = tempfile.mkdtemp(prefix="puzzles-api-check-")
 os.environ["CHESSIMPROVER_DB"] = os.path.join(SCRATCH, "check.db")
 
+import chess  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import lichess_puzzles as lp  # noqa: E402
@@ -70,18 +71,29 @@ PUZZLES = [
 ]
 
 
-def seed_lichess():
+_seed_count = 0
+
+
+def seed_lichess_rows(rows: list) -> None:
+    """Imports more puzzles on top of what's already there, under a name of
+    its own so it never collides with an earlier seed file still on disk."""
+    global _seed_count
+    _seed_count += 1
+    import zstandard
+
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(HEADER)
-    for row in PUZZLES:
+    for row in rows:
         writer.writerow(row)
-    import zstandard
-
-    path = os.path.join(SCRATCH, "puzzles.csv.zst")
+    path = os.path.join(SCRATCH, f"puzzles-{_seed_count}.csv.zst")
     with open(path, "wb") as handle:
         handle.write(zstandard.ZstdCompressor().compress(buffer.getvalue().encode()))
-    lp.run_import(lp.ImportFilters(), source_path=path)
+    lp.run_import(lp.ImportFilters(), source_path=path, replace=False)
+
+
+def seed_lichess():
+    seed_lichess_rows(PUZZLES)
 
 
 def login(client: TestClient) -> None:
@@ -132,12 +144,29 @@ def main():
           puzzle["setup"] is not None and puzzle["fen"] != puzzle["setup"]["fen"])
     check("says whose move it is", puzzle["your_color"] in ("w", "b"))
     check("carries its themes", isinstance(puzzle["themes"], list) and puzzle["themes"])
-    check("carries its rating", isinstance(puzzle["rating"], int))
-    check("says how many moves to find", puzzle["moves_required"] >= 1)
+    check("withholds its rating until the puzzle is over",
+          "rating" not in puzzle, str(sorted(puzzle)))
+    check("and how many moves it takes",
+          "moves_required" not in puzzle, str(sorted(puzzle)))
     leaked = [k for k in puzzle if k == "moves"]
     check("never ships the solution", not leaked, str(leaked))
     check("nor anywhere else in the payload",
           "d7d8" not in str(body) and "e8e1" not in str(body))
+
+    print("\nA hint names the square, not the move:")
+    # 00sO1: line is b8c7 (opponent) e1e4 (yours) d8d1 (opponent) e4e1 (yours).
+    # Read-only -- this doesn't touch the attempt this puzzle gets below.
+    hinted = client.post("/api/puzzles/lichess/00sO1/hint", json={"moves": []}).json()
+    check("points at the piece for the first move",
+          set(hinted) == {"square"} and hinted["square"] == "e1", str(hinted))
+    next_hint = client.post("/api/puzzles/lichess/00sO1/hint",
+                            json={"moves": ["e1e4"]}).json()
+    check("and advances with the line once a move is confirmed",
+          next_hint.get("square") == "e4", str(next_hint))
+    exhausted_hint = client.post("/api/puzzles/lichess/00sO1/hint",
+                                 json={"moves": ["e1e4", "e4e1"]})
+    check("and refuses once there's nothing left to hint",
+          exhausted_hint.status_code == 409, str(exhausted_hint.status_code))
 
     print("\nA theme filter picks the right puzzle:")
     forked = client.get("/api/puzzles/next?source=lichess&themes=fork").json()["puzzle"]
@@ -155,6 +184,8 @@ def main():
           str(first.get("reply")))
     check("and a new position comes back", bool(first.get("fen")))
     check("the rest of the line still isn't leaked", "e4e1" not in str(first))
+    check("doesn't say how many moves it takes until it's over",
+          "moves_required" not in first, str(sorted(first)))
 
     second = client.post("/api/puzzles/lichess/00sO1/attempt",
                          json={"moves": ["e1e4", "e4e1"]}).json()
@@ -163,6 +194,10 @@ def main():
     check("the rating moved", second["rating"]["rated"] is True)
     check("upwards, for a solve", second["rating"]["delta"] > 0,
           str(second["rating"]["delta"]))
+    check("and now it says how many moves the answer was",
+          second.get("moves_required") == 2, str(second.get("moves_required")))
+    check("and what the puzzle's own rating is",
+          isinstance(second.get("puzzle_rating"), int), str(second.get("puzzle_rating")))
 
     print("\nAn illegal move is a broken request, not a failed attempt:")
     before = rating_of(client)
@@ -187,6 +222,8 @@ def main():
           str(wrong["expected"].get("san")))
     check("the rating moved down", wrong["rating"]["delta"] < 0,
           str(wrong["rating"]["delta"]))
+    check("and the puzzle's own rating is revealed, now that it's missed",
+          isinstance(wrong.get("puzzle_rating"), int), str(wrong.get("puzzle_rating")))
 
     print("\nOnly the first attempt counts:")
     before = rating_of(client)
@@ -272,6 +309,40 @@ def main():
     check("and the puzzles are on offer again",
           client.get("/api/puzzles/next?source=lichess").status_code == 200)
 
+    print("\nA hint keeps a puzzle off the rating, solved or not:")
+    # Two fresh puzzles, seeded on top of what's already imported, so this
+    # doesn't disturb the "seen" bookkeeping the sections above depend on.
+    seed_lichess_rows([
+        ["00hntA", "1k1r4/pp3pp1/2p1p3/4b3/P3n1P1/8/KPP2PP1/R1B1R3 b - - 2 31",
+         "b8c7 e1e4 d8d1 e4e1", "900", "70", "88", "150", "endgame pin", "", ""],
+        ["00hntB", "1k1r4/pp3pp1/2p1p3/4b3/P3n1P1/8/KPP2PP1/R1B1R3 b - - 2 31",
+         "b8c7 e1e4 d8d1 e4e1", "900", "70", "88", "150", "endgame pin", "", ""],
+    ])
+
+    before = rating_of(client)
+    client.post("/api/puzzles/lichess/00hntA/hint", json={"moves": []})
+    solved_with_hint = client.post(
+        "/api/puzzles/lichess/00hntA/attempt",
+        json={"moves": ["e1e4", "e4e1"], "hint_used": True},
+    ).json()
+    check("still gets marked solved", solved_with_hint["solved"] is True,
+          str(solved_with_hint))
+    check("but a hint means it isn't rated",
+          solved_with_hint["rating"]["rated"] is False, str(solved_with_hint["rating"]))
+    check("and the rating genuinely didn't move", rating_of(client) == before,
+          f"{before} -> {rating_of(client)}")
+
+    before = rating_of(client)
+    client.post("/api/puzzles/lichess/00hntB/hint", json={"moves": []})
+    given_up_with_hint = client.post(
+        "/api/puzzles/lichess/00hntB/reveal?hint_used=true"
+    ).json()
+    check("giving up after a hint is unrated too",
+          given_up_with_hint["rating"]["rated"] is False,
+          str(given_up_with_hint["rating"]))
+    check("and, again, the rating doesn't move", rating_of(client) == before,
+          f"{before} -> {rating_of(client)}")
+
     print("\nOwn-game puzzles, as far as they go without an engine:")
     check("an empty set says what to do first",
           "analyse" in client.get("/api/puzzles/next?source=own").json()["detail"],
@@ -335,13 +406,31 @@ def main():
     check("phases are tagged without an engine",
           any(t in own["themes"] for t in ("opening", "middlegame", "endgame")),
           str(own["themes"]))
-    check("but it is unrated until the answer is known", own["rating"] is None,
-          str(own["rating"]))
+    check("its rating and length are withheld too, same as a Lichess one",
+          "rating" not in own and "moves_required" not in own, str(sorted(own)))
 
     own_themes = client.get("/api/puzzles/themes?source=own").json()
     offered = {t["key"] for g in own_themes["groups"] for t in g["themes"]}
     check("the picker offers the phase it found", offered & {"opening", "middlegame"},
           str(offered))
+
+    print("\nBlindfold: replaying the puzzle's own game from further back:")
+    # No engine needed -- this is a straight PGN replay -- so it runs
+    # wherever the rest of this file's own-puzzle checks do.
+    blind = client.get(f"/api/puzzles/{own['id']}/blindfold?ply=4").json()
+    check("hands back a position from earlier in the same game",
+          blind["fen"] != own["fen"], str(blind))
+    check("with exactly the real moves that lead back to the puzzle",
+          blind["moves"] == ["Ng5", "d5", "exd5", "Nxd5"], str(blind["moves"]))
+    shallower = client.get(f"/api/puzzles/{own['id']}/blindfold?ply=1").json()
+    check("and a shorter recital for a shallower request",
+          shallower["moves"] == ["Nxd5"], str(shallower["moves"]))
+    clamped = client.get(f"/api/puzzles/{own['id']}/blindfold?ply=999").json()
+    check("clamped rather than walking off the start of the game",
+          clamped["fen"] == chess.Board().fen(), str(clamped["fen"]))
+    missing = client.get("/api/puzzles/999999/blindfold?ply=4")
+    check("a puzzle that isn't yours 404s rather than 500ing",
+          missing.status_code == 404, str(missing.status_code))
 
     print("\nBlunder checks, including the ones built before there were any:")
     # A second bad move in the same game, shaped like a blunder check: White
@@ -386,7 +475,8 @@ def main():
     print("\nImport status:")
     status = client.get("/api/puzzles/lichess/status").json()
     check("reports the database as imported", status["available"] is True)
-    check("with a count", status["puzzles"] == 3, str(status["puzzles"]))
+    # The 3 original rows plus the pair seeded for the hint checks above.
+    check("with a count", status["puzzles"] == 5, str(status["puzzles"]))
     check("and a rating span", status.get("min_rating") == 900, str(status.get("min_rating")))
 
 

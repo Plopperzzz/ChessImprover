@@ -26,6 +26,20 @@ interface BoardProps {
    *  a move for the position on the board -- see `linesStale` at the call
    *  site, which is what keeps the previous position's move off this one. */
   hintMove?: string | null;
+  /** A single square lit up -- the piece a puzzle hint says to move, without
+   *  saying where it goes. */
+  hintSquare?: string | null;
+  /**
+   * What legality, turn and promotion are worked out against, when it
+   * differs from what is drawn.
+   *
+   * Blindfold training is the one caller that sets this: the board keeps
+   * showing a frozen position (`fen`) while the puzzle underneath has moved
+   * on, and clicking a square has to obey the *real* position even though
+   * nothing on screen says which piece is actually there. Left unset, `fen`
+   * drives both, which is every other board on the site.
+   */
+  logicFen?: string;
   onMove?: (from: string, to: string, promotion?: string) => void;
   interactive?: boolean;
 }
@@ -69,6 +83,8 @@ export function Board({
   lastMove,
   marker,
   hintMove,
+  hintSquare,
+  logicFen,
   onMove,
   interactive = true,
 }: BoardProps) {
@@ -86,13 +102,17 @@ export function Board({
 
   const boardRef = useRef<HTMLDivElement>(null);
 
+  // Legality, turn and promotion are worked out here -- and only here.
+  // Everywhere else in this file that used to read `fen` for that purpose
+  // now reads `game`, so the one board with a hidden position (blindfold
+  // training) only had to change this line.
   const game = useMemo(() => {
     try {
-      return new Chess(fen);
+      return new Chess(logicFen ?? fen);
     } catch {
       return null;
     }
-  }, [fen]);
+  }, [fen, logicFen]);
 
   // --- pieces, with identity ------------------------------------------------
 
@@ -119,7 +139,7 @@ export function Board({
     setSelected(null);
     setTargets([]);
     setPromoting(null);
-  }, [fen]);
+  }, [fen, logicFen]);
 
   useEffect(() => setBrokenArt(false), [pieceSet]);
 
@@ -326,6 +346,9 @@ export function Board({
                 }}
               >
                 {isLastMove && <div className="absolute inset-0 bg-accent/30" />}
+                {hintSquare === square && (
+                  <div className="absolute inset-0 z-10 animate-pulse ring-4 ring-inset ring-accent-2" />
+                )}
                 {selected === square && (
                   <div className="absolute inset-0 ring-4 ring-inset ring-accent" />
                 )}

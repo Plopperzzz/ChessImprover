@@ -250,17 +250,15 @@ export interface Puzzle {
   setup: PuzzleSetup | null;
   your_color: 'w' | 'b';
   themes: string[];
-  rating: number | null;
-  rating_rd: number | null;
-  /** How many of your moves the answer is. 0 means the line has never been
-   *  worked out, which is not the same as one. */
-  moves_required: number;
   attempts: number;
   solved: boolean;
+  // The puzzle's own difficulty rating and how many moves the answer takes
+  // are deliberately absent here -- knowing either before you've solved it
+  // primes you for what to expect. Both arrive on `PuzzleVerdict` once the
+  // puzzle is over (solved, missed or given up).
 
   // Own-game puzzles only.
   kind?: PuzzleKind;
-  rating_source?: 'maia' | 'themes' | null;
   game_id?: number;
   ply?: number;
   classification?: string;
@@ -390,7 +388,11 @@ export interface PuzzleVerdict {
   given_up?: number | null;
   same_as_played?: boolean;
   moves_played?: number;
+  /** The puzzle's own length and difficulty -- present only once `done`,
+   *  which is the whole point: see `Puzzle`. */
   moves_required?: number;
+  puzzle_rating?: number | null;
+  puzzle_rating_source?: 'maia' | 'themes' | null;
   themes?: string[];
   game_url?: string | null;
   rating: PuzzleRatingResult | null;

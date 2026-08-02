@@ -5,6 +5,8 @@ import {
   ChevronRight,
   Eye,
   FlipVertical2,
+  Ghost,
+  Lightbulb,
   RefreshCw,
   Search,
   SkipForward,
@@ -35,10 +37,17 @@ import { PuzzleRating } from './PuzzleRating';
 const SOURCE_KEY = 'engine-room:puzzle-source';
 const KINDS_KEY = 'engine-room:puzzle-kinds';
 const themesKey = (source: PuzzleSource) => `engine-room:puzzle-themes:${source}`;
+const BLINDFOLD_KEY = 'engine-room:puzzle-blindfold';
+const BLINDFOLD_PLY_KEY = 'engine-room:puzzle-blindfold-ply';
 
 /** How long the board sits on a wrong move before going back, so you see what
  *  you played rather than having it snatched away. */
 const WRONG_MOVE_MS = 650;
+
+/** How many plies back a blindfold session opens by default -- enough game
+ *  to actually have to hold in your head, not so much that setting it up
+ *  once means never seeing a puzzle again. */
+const DEFAULT_BLINDFOLD_PLY = 10;
 
 interface PuzzleScreenProps {
   user: User;
@@ -93,6 +102,29 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
   const [answer, setAnswer] = useState<LineMove[] | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // A hint names the square to move from and nothing else -- see the `Hint`
+  // button below. Once one has been asked for, every grading call for this
+  // puzzle says so, which is what keeps the eventual result off the rating.
+  const [hintUsed, setHintUsed] = useState(false);
+  const [hintSquare, setHintSquare] = useState<string | null>(null);
+
+  // Blindfold: the board a puzzle came from, played a configurable number of
+  // plies before it. `blindfoldContext` is the frozen starting position plus
+  // the real moves that lead from there to the puzzle -- fetched for
+  // whichever puzzle is on screen, and only ever available for your own
+  // games (a Lichess row carries no game to replay).
+  const [blindfoldEnabled, setBlindfoldEnabled] = useState(
+    () => localStorage.getItem(BLINDFOLD_KEY) === '1',
+  );
+  const [blindfoldPly, setBlindfoldPly] = useState(() => {
+    const stored = Number(localStorage.getItem(BLINDFOLD_PLY_KEY));
+    return Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_BLINDFOLD_PLY;
+  });
+  const [blindfoldContext, setBlindfoldContext] = useState<{
+    fen: string;
+    moves: string[];
+  } | null>(null);
+
   const [flipped, setFlipped] = useState(false);
   const [liveActive, setLiveActive] = useState(false);
 
@@ -124,6 +156,14 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
     () => localStorage.setItem(themesKey(source), JSON.stringify(themes)),
     [source, themes],
   );
+  useEffect(
+    () => localStorage.setItem(BLINDFOLD_KEY, blindfoldEnabled ? '1' : '0'),
+    [blindfoldEnabled],
+  );
+  useEffect(
+    () => localStorage.setItem(BLINDFOLD_PLY_KEY, String(blindfoldPly)),
+    [blindfoldPly],
+  );
 
   const refreshStats = useCallback(() => {
     api
@@ -150,6 +190,9 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
     setPlayed([]);
     setLiveActive(false);
     setLastMove(null);
+    setHintUsed(false);
+    setHintSquare(null);
+    setBlindfoldContext(null);
     try {
       const data = await api.nextPuzzle({
         source,
@@ -205,6 +248,33 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, kinds, themes]);
+
+  // Fetched for whichever puzzle is on screen rather than folded into
+  // `load()`, so tweaking the ply count or flipping blindfold on mid-puzzle
+  // updates the frozen position without discarding what you've already
+  // played. Own-game puzzles only -- a Lichess row has no game to replay.
+  useEffect(() => {
+    if (!blindfoldEnabled || !puzzle || puzzle.source !== 'own' || typeof puzzle.id !== 'number') {
+      setBlindfoldContext(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .puzzleBlindfoldContext(puzzle.id, blindfoldPly)
+      .then((ctx) => {
+        if (!cancelled) setBlindfoldContext(ctx);
+      })
+      .catch(() => {
+        if (!cancelled) setBlindfoldContext(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [puzzle, blindfoldEnabled, blindfoldPly]);
+
+  // A hint answers "which piece" for the position on the board right now --
+  // once that position has moved on (your move, their reply), it's stale.
+  useEffect(() => setHintSquare(null), [fen]);
 
   // --- solving -------------------------------------------------------------
 
@@ -309,12 +379,13 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
 
       const uci = from + to + (promotion ?? (move.promotion ? 'q' : ''));
       setBusy(true);
+      setHintSquare(null);
       playMoveSound(soundSet, move.san, true);
       setFen(board.fen());
       setLastMove({ from, to });
 
       try {
-        const result = await api.attemptPuzzle(puzzle, [...played, uci]);
+        const result = await api.attemptPuzzle(puzzle, [...played, uci], hintUsed);
         if (!result.correct) {
           setVerdict(result);
           setProgress(result.progress);
@@ -362,14 +433,14 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
         setBusy(false);
       }
     },
-    [puzzle, phase, busy, fen, played, soundSet, finish, refreshStats, layOutAnswer],
+    [puzzle, phase, busy, fen, played, hintUsed, soundSet, finish, refreshStats, layOutAnswer],
   );
 
   const reveal = useCallback(async () => {
     if (!puzzle || phase !== 'solving' || busy) return;
     setBusy(true);
     try {
-      const result = await api.revealPuzzle(puzzle);
+      const result = await api.revealPuzzle(puzzle, hintUsed);
       setAnswer(result.line ?? null);
       if (result.line) layOutAnswer(puzzle.fen, result.line);
       setVerdict({ ...result, correct: false, done: true });
@@ -383,7 +454,18 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
     } finally {
       setBusy(false);
     }
-  }, [puzzle, phase, busy, refreshStats, layOutAnswer]);
+  }, [puzzle, phase, busy, hintUsed, refreshStats, layOutAnswer]);
+
+  const useHint = useCallback(async () => {
+    if (!puzzle || phase !== 'solving' || busy) return;
+    try {
+      const result = await api.puzzleHint(puzzle, played);
+      setHintUsed(true);
+      setHintSquare(result.square);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [puzzle, phase, busy, played]);
 
   const rescan = useCallback(async () => {
     setBusy(true);
@@ -511,15 +593,30 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
         return `${yourSide} to play. You threw this position away — find the move that holds it.`;
       }
       if (puzzle.source === 'own') return 'Find the move you should have played.';
-      const need = puzzle.moves_required;
-      return need > 1
-        ? `${yourSide} to play and win — ${need} moves.`
-        : `${yourSide} to play and win.`;
+      // Not how many moves it takes -- that's exactly the thing withheld
+      // until the puzzle is over. See `PuzzleVerdict.moves_required`.
+      return `${yourSide} to play and win.`;
     }
     return null;
   })();
 
   const barCp = liveActive ? (live.lines[0]?.cp ?? null) : null;
+
+  // The board freezes on a position further back than the puzzle while
+  // blindfold training is on: `fen` keeps tracking the real, solved-against
+  // position throughout (see `tryMove`), and `boardFen` is what's drawn.
+  // Board's `logicFen` then reconnects clicks and drags to the real
+  // position even though nothing on screen matches it.
+  const blindfoldReady = Boolean(blindfoldContext) && puzzle?.source === 'own';
+  const blindfoldFrozen = blindfoldReady && (phase === 'setup' || phase === 'solving');
+  const boardFen = blindfoldFrozen ? blindfoldContext!.fen : fen;
+  const boardLogicFen = blindfoldFrozen ? fen : undefined;
+
+  // The puzzle's own rating and length are withheld from `puzzle` itself
+  // (see `types.ts`) and arrive on the verdict once there is one -- which is
+  // exactly "once the puzzle is over".
+  const solvedRating = verdict?.done ? (verdict.puzzle_rating ?? null) : null;
+  const solvedRatingSource = verdict?.done ? verdict.puzzle_rating_source : null;
 
   return (
     <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -535,10 +632,10 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
                   ? (puzzle.your_color === 'w' ? puzzle.black : puzzle.white) || 'Opponent'
                   : 'Lichess'}
               </span>
-              {puzzle?.rating != null && (
+              {solvedRating != null && (
                 <span className="ml-2 font-mono text-xs text-fg-muted">
-                  rated {puzzle.rating}
-                  {puzzle.rating_source === 'maia' && (
+                  rated {solvedRating}
+                  {solvedRatingSource === 'maia' && (
                     <span title="Measured by asking Maia at every Elo on the grid">
                       {' '}
                       · maia
@@ -575,12 +672,13 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
 
           <div className="board-bleed">
             <Board
-              fen={fen}
+              fen={boardFen}
+              logicFen={boardLogicFen}
               flipped={flipped}
               boardSet={boardSet}
               pieceSet={pieceSet}
               showLegalMoves={Boolean(user.show_legal_moves)}
-              lastMove={lastMove}
+              lastMove={blindfoldFrozen ? null : lastMove}
               hintMove={
                 // Only ever the engine's move for the position in front of
                 // you, and never while there is anything to find.
@@ -588,6 +686,7 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
                   ? (live.lines[0]?.pv[0] ?? null)
                   : null
               }
+              hintSquare={solving ? hintSquare : null}
               interactive={interactive}
               onMove={phase === 'explore' ? playInExplore : tryMove}
             />
@@ -634,24 +733,62 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
               starts below the fold. */}
           <div className="contents">
             {/* Source: two sources, one trainer. */}
-            <div className="order-5 flex gap-1.5 rounded-xl border border-line bg-surface p-1.5 xl:order-none">
-              {(['own', 'lichess'] as PuzzleSource[]).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => {
-                    if (s === source) return;
-                    setSource(s);
-                    setThemes(readList(themesKey(s), []));
-                  }}
-                  className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    source === s
-                      ? 'bg-accent-strong text-on-accent'
-                      : 'text-fg-2 hover:bg-surface-2 hover:text-fg'
-                  }`}
-                >
-                  {s === 'own' ? 'From your games' : 'Lichess database'}
-                </button>
-              ))}
+            <div className="order-5 flex flex-col gap-1.5 xl:order-none">
+              <div className="flex gap-1.5 rounded-xl border border-line bg-surface p-1.5">
+                {(['own', 'lichess'] as PuzzleSource[]).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => {
+                      if (s === source) return;
+                      setSource(s);
+                      setThemes(readList(themesKey(s), []));
+                    }}
+                    className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                      source === s
+                        ? 'bg-accent-strong text-on-accent'
+                        : 'text-fg-2 hover:bg-surface-2 hover:text-fg'
+                    }`}
+                  >
+                    {s === 'own' ? 'From your games' : 'Lichess database'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Blindfold: only your own games carry a real one to replay. */}
+              {source === 'own' && (
+                <div className="flex items-center gap-2 rounded-xl border border-line bg-surface px-2 py-1.5">
+                  <button
+                    onClick={() => setBlindfoldEnabled((v) => !v)}
+                    title="Play from memory: the board freezes on an earlier position and only your head tracks the rest"
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                      blindfoldEnabled
+                        ? 'bg-accent-strong text-on-accent'
+                        : 'text-fg-2 hover:bg-surface-2 hover:text-fg'
+                    }`}
+                  >
+                    <Ghost className="h-3.5 w-3.5" />
+                    Blindfold
+                  </button>
+                  {blindfoldEnabled && (
+                    <label className="flex shrink-0 items-center gap-1.5 pr-1 text-[11px] text-fg-muted">
+                      <input
+                        type="number"
+                        min={1}
+                        max={40}
+                        value={blindfoldPly}
+                        onChange={(e) => {
+                          const next = Math.round(Number(e.target.value));
+                          if (Number.isFinite(next)) {
+                            setBlindfoldPly(Math.max(1, Math.min(40, next)));
+                          }
+                        }}
+                        className="w-11 rounded border border-line bg-surface-2 px-1 py-0.5 text-center font-mono text-fg"
+                      />
+                      plies back
+                    </label>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="order-4 xl:order-none">
@@ -660,7 +797,26 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
 
             {/* The puzzle itself: what to do, and what happened. */}
             <div className="order-1 rounded-xl border border-line bg-surface p-4 xl:order-none">
+              {blindfoldFrozen && blindfoldContext && (
+                <p className="mb-2 text-xs text-fg-2">
+                  From this position, the following moves were made:{' '}
+                  {blindfoldContext.moves.length > 0 ? (
+                    <span className="font-mono text-fg">
+                      {blindfoldContext.moves.join(' ')}
+                    </span>
+                  ) : (
+                    <span className="text-fg-subtle">none — this is where the game opened.</span>
+                  )}
+                </p>
+              )}
+
               {prompt && <p className="text-sm text-fg">{prompt}</p>}
+
+              {hintUsed && phase !== 'over' && (
+                <p className="mt-1 text-[11px] text-accent-2">
+                  Hint used — this puzzle won't move your rating either way.
+                </p>
+              )}
 
               {puzzle && solving && puzzle.source === 'own' && (
                 <p className="mt-1 text-[11px] text-fg-subtle">
@@ -687,7 +843,7 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
               )}
 
               {verdict && puzzle && (phase === 'over' || phase === 'explore') && (
-                <Feedback verdict={verdict} answer={answer} puzzle={puzzle} />
+                <Feedback verdict={verdict} answer={answer} puzzle={puzzle} hintUsed={hintUsed} />
               )}
 
               {error && <p className="mt-2 text-[11px] text-danger-fg">{error}</p>}
@@ -701,6 +857,17 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
                   <SkipForward className="h-3.5 w-3.5" />
                   Next puzzle
                 </button>
+                {solving && (
+                  <button
+                    onClick={() => void useHint()}
+                    disabled={busy}
+                    title="Highlight the piece to move -- costs you nothing but the puzzle then can't move your rating"
+                    className="flex items-center gap-1.5 rounded-lg border border-line bg-surface-2 px-3 py-1.5 text-xs font-medium text-fg-2 hover:text-fg disabled:opacity-50"
+                  >
+                    <Lightbulb className="h-3.5 w-3.5" />
+                    Hint
+                  </button>
+                )}
                 {solving && (
                   <button
                     onClick={() => void reveal()}
@@ -810,10 +977,12 @@ function Feedback({
   verdict,
   answer,
   puzzle,
+  hintUsed,
 }: {
   verdict: PuzzleVerdict;
   answer: LineMove[] | null;
   puzzle: Puzzle | null;
+  hintUsed?: boolean;
 }) {
   const themes = verdict.themes ?? [];
   return (
@@ -829,6 +998,18 @@ function Feedback({
         </p>
       ) : (
         <p className="text-sm font-semibold text-fg-2">Here's the answer.</p>
+      )}
+
+      {verdict.moves_required != null && verdict.moves_required > 1 && (
+        <p className="text-[11px] text-fg-subtle">
+          This was a {verdict.moves_required}-move puzzle.
+        </p>
+      )}
+
+      {hintUsed && (
+        <p className="text-[11px] text-accent-2">
+          Hint used — this attempt didn't move your rating.
+        </p>
       )}
 
       {verdict.same_as_played && (
