@@ -33,9 +33,12 @@ by time control into groups you can analyse or delete in bulk. What's next is in
 There is now a second UI, in [`web/`](web/README.md) — React, and a single
 **Full analysis** button that runs the Stockfish pass and the Maia Elo sweep
 together and shows the fitted rating beneath the move list. It covers game
-analysis, the progress view and puzzles. The classic vanilla-JS UI in
-`frontend/` is unchanged and still holds everything the React one hasn't
-picked up yet — play vs Maia, batch runs, the chess.com import and the
+analysis, the progress view and puzzles. The game library there also runs a
+full analysis over everything left in it: one button, scoped to whatever the
+library is filtered to, skipping the games that already have a full result —
+so it is also how you resume a run that was cancelled. The classic vanilla-JS
+UI in `frontend/` is unchanged and still holds everything the React one hasn't
+picked up yet — play vs Maia, the batch panel's mode and scope choices, and the
 opening explorer. Both are served by the same process, off the same database: the
 React build at `/`, the classic UI at `/legacy/`.
 
@@ -502,6 +505,14 @@ can be practised alone. The kind is decided when the puzzle is built, off
 evaluations the analysis pass already stored, so it costs no engine time and
 can be a filter; and because it is separate from the motifs, "blunder checks,
 but only the forks" needs no mode of its own.
+
+Rescan repairs the puzzles it can't rebuild. A puzzle built before those
+evaluations were stored on it has nothing to be classified by, so it counted as
+a tactic — and no amount of pressing Rescan changed that, because Rescan skips
+positions it already holds and so never wrote the row again. It now fills those
+evaluations back in from `analysis_moves` and re-files the kinds, which is what
+turns a library reporting zero blunder checks into one reporting the ones it
+always had.
 
 **The answer is a line, not a move.** Plenty of the ideas in your own games are
 two or three moves deep — the sacrifice is move one and the point of it is move
@@ -1134,14 +1145,25 @@ server serves the classic UI at `/` instead, so the build step is optional
 and nothing breaks if you skip it -- see [`web/README.md`](web/README.md).
 
 The classic UI is always available at `http://<server>:8000/legacy/`, and is
-still the only place Play vs Maia, puzzles, batch analysis, month-by-month
-chess.com picking and the opening explorer live.
+still the only place Play vs Maia, the batch panel's mode and scope choices,
+month-by-month chess.com picking and the opening explorer live. (The React
+library runs the one batch worth a button — full analysis over the games it is
+showing that haven't had one.)
 
 Boards, piece sets and sound sets are shared by both: they are stored per
 account, with an optional override per screen (`screen_prefs`), so a board
 chosen in one front end is the board the other draws. Sound sets are
 subdirectories of `assets/audio/` holding the same file names — drop another
 directory in beside `default/` and it appears in the picker.
+
+A board can come from either of two places, and both pickers now offer both.
+`assets/sets/{name}/board.png` is the board belonging to a piece set;
+`assets/boards/{name}.png` is a board on its own, which is what most of them
+are — there are two dozen of those against three sets. Reading only
+`/api/asset-sets`, as the React settings dialog did, offers three boards and
+leaves the rest of the directory unreachable, so it asks `/api/board-images`
+as well and merges the two. Pieces have one source (a set needs all twelve
+images to be offered as one), so that dropdown is the sets and nothing else.
 
 Re-run the `pip install -r requirements.txt` line after a `git pull` that adds
 a dependency. Downloading games from chess.com added `httpx`, and the server

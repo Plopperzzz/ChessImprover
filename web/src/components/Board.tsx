@@ -37,6 +37,16 @@ const GLIDE_MS = 140;
 const PROMOTION_PIECES = ['q', 'r', 'b', 'n'] as const;
 
 /**
+ * How far a piece is inset from the edge of its square, as a percentage.
+ *
+ * The piece is `object-contain` inside the square, so this padding is what
+ * decides how big it is drawn: 3% a side left the art at 94% of the square,
+ * and pieces are 3% larger than that now -- 96.8% of the square, so half of
+ * the 3.2% that's left goes on each side.
+ */
+const PIECE_INSET = 1.6;
+
+/**
  * The board.
  *
  * Squares are a plain CSS grid; the pieces are a separate layer of absolutely
@@ -438,7 +448,8 @@ export function Board({
                   alt=""
                   draggable={false}
                   onError={() => setBrokenArt(true)}
-                  className="h-full w-full object-contain p-[3%]"
+                  className="h-full w-full object-contain"
+                  style={{ padding: `${PIECE_INSET}%` }}
                 />
               )}
             </div>
