@@ -146,6 +146,11 @@ export function SettingsModal({
   const [soundOn, setSoundOn] = useState(soundEnabled);
   const [families, setFamilies] = useState<api.EngineFamily[]>([]);
   const [assetSets, setAssetSets] = useState<api.AssetSet[]>([]);
+  /** Boards that are only a board -- `assets/boards/*.png`. A separate call
+   *  because they are a separate thing on disk: `/api/asset-sets` lists
+   *  directories holding pieces (and sometimes a board), and reading only that
+   *  is why this dropdown offered three boards while two dozen sat unused. */
+  const [boardImages, setBoardImages] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -180,6 +185,10 @@ export function SettingsModal({
       .then((r) => setFamilies(r.families))
       .catch(() => setFamilies([]));
     api.assetSets().then(setAssetSets).catch(() => setAssetSets([]));
+    api
+      .boardImages()
+      .then((images) => setBoardImages(images.map((image) => image.name)))
+      .catch(() => setBoardImages([]));
     api.audioSets().then(setAudio).catch(() => setAudio([]));
     api.listAccounts().then(setAccounts).catch(() => setAccounts(null));
   }, [open]);
@@ -213,8 +222,13 @@ export function SettingsModal({
 
   const stockfishFamilies = families.filter((f) => f.kind === 'stockfish');
   const maiaFamilies = families.filter((f) => f.kind === 'maia');
-  const pieceOptions = assetSets.filter((s) => s.has_pieces);
-  const boardOptions = assetSets.filter((s) => s.has_board);
+  const pieceOptions = assetSets.filter((s) => s.has_pieces).map((s) => s.name);
+  // Both sources, in one list. A name in both -- a set called `neo` alongside a
+  // `neo.png` -- is one board as far as the server is concerned (it accepts
+  // either spelling and `Board` draws whichever exists), so it appears once.
+  const boardOptions = [
+    ...new Set([...assetSets.filter((s) => s.has_board).map((s) => s.name), ...boardImages]),
+  ].sort();
 
   const profileChanges = () => {
     const patch: Record<string, unknown> = {};
@@ -602,9 +616,9 @@ export function SettingsModal({
                         value={profile.piece_set}
                         onChange={(e) => setProfile((p) => ({ ...p, piece_set: e.target.value }))}
                       >
-                        {pieceOptions.map((s) => (
-                          <option key={s.name} value={s.name}>
-                            {s.name}
+                        {withMissing(pieceOptions, profile.piece_set).map((name) => (
+                          <option key={name} value={name}>
+                            {optionLabel(name, pieceOptions)}
                           </option>
                         ))}
                       </select>
@@ -615,9 +629,9 @@ export function SettingsModal({
                         value={profile.board_set}
                         onChange={(e) => setProfile((p) => ({ ...p, board_set: e.target.value }))}
                       >
-                        {boardOptions.map((s) => (
-                          <option key={s.name} value={s.name}>
-                            {s.name}
+                        {withMissing(boardOptions, profile.board_set).map((name) => (
+                          <option key={name} value={name}>
+                            {optionLabel(name, boardOptions)}
                           </option>
                         ))}
                       </select>
@@ -665,8 +679,8 @@ export function SettingsModal({
                             <td className="pr-2 align-middle text-fg-2">{label}</td>
                             {(
                               [
-                                ['piece_set', pieceOptions.map((s) => s.name)],
-                                ['board_set', boardOptions.map((s) => s.name)],
+                                ['piece_set', pieceOptions],
+                                ['board_set', boardOptions],
                                 ['sound_set', audio.map((s) => s.name)],
                               ] as const
                             ).map(([kind, names]) => (

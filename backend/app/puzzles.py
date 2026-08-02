@@ -248,7 +248,12 @@ def build(user_id: int) -> dict:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [(user_id, *m) for m in made],
         )
-        _backfill_kinds(conn, user_id)
+        # Evals first, kinds second: a puzzle with no cp_after cannot be
+        # classified, and every puzzle built before the column existed has
+        # none. Without this pass they stay tactics forever, because the
+        # insert above skips them as already built.
+        evals_filled = _backfill_evals(conn, user_id)
+        kinds_fixed = _backfill_kinds(conn, user_id)
         after = conn.execute(
             "SELECT COUNT(*) AS n FROM puzzles WHERE user_id = ?", (user_id,)
         ).fetchone()["n"]
@@ -259,7 +264,45 @@ def build(user_id: int) -> dict:
         "considered": considered,
         "skipped_already_lost": skipped_already_lost,
         "phase_tagged": tagged,
+        "evals_filled": evals_filled,
+        "kinds_fixed": kinds_fixed,
     }
+
+
+def _backfill_evals(conn, user_id: int) -> int:
+    """Copy the evaluations onto puzzles that were built without them.
+
+    `cp_after` arrived with the tactic/blunder-check split, and a puzzle built
+    before it has NULL there. That is not a cosmetic gap: `classify_kind` reads
+    both evaluations, so a puzzle missing one is a tactic by default and
+    `_backfill_kinds` skips it -- and pressing Rescan will never fix it either,
+    because `build` only inserts positions it hasn't got, so the row is never
+    written again. The result is a library that reports zero blunder checks no
+    matter how many games you analyse, which is what this pass exists to undo.
+
+    The numbers are already in `analysis_moves`, which is where the puzzle came
+    from in the first place; a game analysed more than once has a row per run,
+    and they agree about the position, so the first one found will do.
+    """
+    rows = conn.execute(
+        """SELECT p.id, m.cp_before, m.cp_after
+             FROM puzzles p
+             JOIN run_games rg ON rg.game_id = p.game_id AND rg.user_id = p.user_id
+             JOIN analysis_moves m ON m.run_game_id = rg.id AND m.ply = p.ply
+            WHERE p.user_id = ?
+              AND (p.cp_before IS NULL OR p.cp_after IS NULL)
+              AND m.cp_before IS NOT NULL AND m.cp_after IS NOT NULL""",
+        (user_id,),
+    ).fetchall()
+    # One row per puzzle: the join can hand back several when a game sits in
+    # more than one run.
+    filled = {row["id"]: (row["cp_before"], row["cp_after"]) for row in rows}
+    if filled:
+        conn.executemany(
+            "UPDATE puzzles SET cp_before = ?, cp_after = ? WHERE id = ?",
+            [(before, after, puzzle_id) for puzzle_id, (before, after) in filled.items()],
+        )
+    return len(filled)
 
 
 def _backfill_kinds(conn, user_id: int) -> int:

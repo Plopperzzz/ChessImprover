@@ -254,6 +254,42 @@ export interface JobSummary {
 
 export const activeJobs = () => request<JobSummary[]>('/api/analysis/active');
 
+// --- batch ----------------------------------------------------------------
+
+export interface BatchScope {
+  mode: 'quick' | 'full';
+  /** 'unanalyzed' covers only the games with no result for that mode yet,
+   *  which is what "the remaining games" means -- and what makes restarting
+   *  after a cancel pick up where it stopped instead of redoing the lot. */
+  scope: 'unanalyzed' | 'all';
+  run_id?: number | null;
+  speed?: string | null;
+  time_control?: string | null;
+  collection_id?: number | null;
+}
+
+/** How many games a batch would cover, so the button can say so before
+ *  committing to a run measured in hours. */
+export const batchPreview = (scope: BatchScope) =>
+  request<{ count: number }>(
+    `/api/batch/preview${query({
+      mode: scope.mode,
+      scope: scope.scope,
+      speed: scope.speed,
+      time_control: scope.time_control,
+      collection_id: scope.collection_id,
+    })}`,
+  );
+
+/** `attached` is true when the server handed back a run that was already
+ *  going rather than starting one -- a batch outlives the page that started
+ *  it, so pressing Start over a run you'd lost sight of reattaches. */
+export const startBatch = (scope: BatchScope) =>
+  request<{ job_id: string; total: number; attached: boolean }>('/api/batch', json(scope));
+
+export const cancelBatch = (jobId: string) =>
+  request<{ ok: boolean }>(`/api/batch/${jobId}/cancel`, { method: 'POST' });
+
 // --- settings & assets ----------------------------------------------------
 
 export const getSettings = () => request<EngineSettings>('/api/settings');
@@ -284,6 +320,14 @@ export interface AssetSet {
   has_board: boolean;
 }
 export const assetSets = () => request<AssetSet[]>('/api/asset-sets');
+
+/** The standalone board images in `assets/boards/`, which are boards and
+ *  nothing else -- a flat .png per board rather than a directory with pieces
+ *  in it. They outnumber the full sets by an order of magnitude, and a picker
+ *  that only reads `/api/asset-sets` offers three boards out of two dozen. */
+export const boardImages = () => request<{ name: string; has_board: boolean }[]>(
+  '/api/board-images',
+);
 
 export interface AudioSet {
   name: string;
@@ -489,10 +533,17 @@ export const revealPuzzle = (puzzle: Puzzle) =>
   );
 
 export const rebuildPuzzles = () =>
-  request<PuzzleStats & { added: number; considered: number; skipped_already_lost: number }>(
-    '/api/puzzles/rebuild',
-    { method: 'POST' },
-  );
+  request<
+    PuzzleStats & {
+      added: number;
+      considered: number;
+      skipped_already_lost: number;
+      /** Puzzles built before the evaluations were stored on them, repaired by
+       *  this rescan -- which is what lets them be filed as blunder checks. */
+      evals_filled: number;
+      kinds_fixed: number;
+    }
+  >('/api/puzzles/rebuild', { method: 'POST' });
 
 export const resetPuzzles = () => request<PuzzleStats>('/api/puzzles/reset', { method: 'POST' });
 export const resetPuzzleRating = () =>

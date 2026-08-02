@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronRight,
@@ -7,10 +7,13 @@ import {
   FolderPlus,
   Loader2,
   RefreshCw,
+  Sparkles,
+  Square,
   Upload,
   X,
 } from 'lucide-react';
 import * as api from '../../lib/api';
+import { useBatchJob } from '../../lib/useBatchJob';
 import type { Collection, GameSummary, Run, User } from '../../types';
 
 interface GameLibraryPanelProps {
@@ -90,6 +93,69 @@ export function GameLibraryPanel({
     const timer = setTimeout(() => setUploadNote(null), 6000);
     return () => clearTimeout(timer);
   }, [uploadNote]);
+
+  // --- full analysis over the rest of the library ---------------------------
+
+  /**
+   * The batch, over exactly the games the panel is currently showing.
+   *
+   * The filters above the list go to the server with it, so "full analysis on
+   * the remaining games" means the remaining games *of this selection* --
+   * pressing it while filtered to rapid does not quietly start a run over
+   * every bullet game as well. `scope: 'unanalyzed'` is the "remaining" part:
+   * a game that already has a full result is skipped, so this is also how you
+   * resume a run that was cancelled or interrupted.
+   */
+  const batch = useBatchJob(onLibraryChanged);
+  const [remaining, setRemaining] = useState<number | null>(null);
+
+  const batchScope = useCallback(
+    (): api.BatchScope => ({
+      mode: 'full',
+      scope: 'unanalyzed',
+      run_id: runId,
+      speed: filter.speed ?? null,
+      time_control: filter.time_control ?? null,
+      collection_id: filter.collection_id ?? null,
+    }),
+    [runId, filter.speed, filter.time_control, filter.collection_id],
+  );
+
+  // How many games the button would cover, so it can say so before committing
+  // to a run that is measured in hours. Re-asked whenever the selection
+  // changes or a game finishes -- `games` moves when the library reloads.
+  useEffect(() => {
+    let live = true;
+    api
+      .batchPreview(batchScope())
+      .then((r) => live && setRemaining(r.count))
+      .catch(() => live && setRemaining(null));
+    return () => {
+      live = false;
+    };
+  }, [batchScope, games]);
+
+  // A run outlives the page that started it -- a locked phone or a discarded
+  // tab doesn't touch it -- so on mount, ask whether one is still going rather
+  // than offering to start a second one on the same games.
+  useEffect(() => {
+    let live = true;
+    api
+      .activeJobs()
+      .then((jobs) => {
+        const running = jobs.find((job) => job.kind === 'batch' && !job.finished);
+        if (live && running) batch.reattach(running);
+      })
+      .catch(() => {
+        /* offline; the button still works, and the server will reattach */
+      });
+    return () => {
+      live = false;
+    };
+    // Once, on mount: `batch.reattach` is stable and re-running this would
+    // re-join a run it is already following.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const upload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -405,6 +471,77 @@ export function GameLibraryPanel({
       </div>
 
       <div className="space-y-2 border-t border-line px-4 py-3">
+        {/* Full analysis over everything left. Above the import controls
+            because it is the thing you do with a library, not to it. */}
+        {batch.state.running ? (
+          <div className="space-y-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-[11px] font-medium text-fg">
+                {batch.state.queuedAhead != null
+                  ? `Waiting for a free worker — ${batch.state.queuedAhead} ahead`
+                  : batch.state.index != null && batch.state.total != null
+                    ? `Game ${batch.state.index + 1} of ${batch.state.total}`
+                    : 'Starting…'}
+              </span>
+              <button
+                onClick={() => void batch.cancel()}
+                title="Stop after the game in flight — everything already finished stays saved"
+                className="flex shrink-0 items-center gap-1 rounded border border-line bg-canvas px-1.5 py-0.5 text-[10px] text-fg-2 hover:text-fg"
+              >
+                <Square className="h-2.5 w-2.5" />
+                Stop
+              </button>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-canvas">
+              <div
+                className="h-full bg-accent-strong transition-[width] duration-300"
+                style={{ width: `${Math.round((batch.state.fraction ?? 0) * 100)}%` }}
+              />
+            </div>
+            {batch.state.current && (
+              <p className="truncate text-[10px] text-fg-muted">{batch.state.current}</p>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={() => void batch.start(batchScope())}
+            disabled={remaining === 0}
+            title="Run the Stockfish pass and the Maia Elo sweep over every game in this selection that hasn't had one"
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/50 bg-accent/10 px-3 py-2 text-xs font-medium text-fg hover:bg-accent/20 disabled:opacity-50"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-accent" />
+            {/* The count is left out until the preview lands, rather than
+                shown as a blank where a number goes. */}
+            {remaining === 0
+              ? 'Every game here is analysed'
+              : remaining == null
+                ? 'Full analysis on the remaining games'
+                : `Full analysis on ${remaining} remaining game${remaining === 1 ? '' : 's'}`}
+          </button>
+        )}
+        {(batch.state.note || batch.state.error) && !batch.state.running && (
+          <button
+            onClick={batch.dismiss}
+            title="Dismiss"
+            className={`block w-full text-left text-[11px] ${
+              batch.state.error ? 'text-danger-fg' : 'text-fg-muted'
+            }`}
+          >
+            {batch.state.error ?? batch.state.note}
+          </button>
+        )}
+        {batch.state.failures.length > 0 && (
+          // One bad game shouldn't stop a long run, but it shouldn't vanish
+          // either.
+          <ul className="max-h-20 space-y-0.5 overflow-y-auto text-[10px] text-danger-fg">
+            {batch.state.failures.map((failure) => (
+              <li key={failure.index} className="truncate">
+                Game {failure.index + 1} failed: {failure.message}
+              </li>
+            ))}
+          </ul>
+        )}
+
         <input
           ref={fileInput}
           type="file"
@@ -472,7 +609,7 @@ export function GameLibraryPanel({
           href="/legacy/"
           className="block text-center text-[11px] text-fg-subtle underline-offset-2 hover:text-fg-2 hover:underline"
         >
-          month-by-month import, batch runs, groups and the opening book →
+          month-by-month import, quick-mode batches, groups and the opening book →
         </a>
       </div>
     </aside>

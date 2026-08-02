@@ -343,6 +343,46 @@ def main():
     check("the picker offers the phase it found", offered & {"opening", "middlegame"},
           str(offered))
 
+    print("\nBlunder checks, including the ones built before there were any:")
+    # A second bad move in the same game, shaped like a blunder check: White
+    # was comfortably better and after it Black is (cp_after is scored for
+    # whoever is to move, so a large positive number there is a large negative
+    # one for the player whose puzzle this is).
+    with db_cursor() as conn:
+        conn.execute(
+            """INSERT INTO analysis_moves (run_game_id, ply, san, cp_before, cp_after,
+                                           wp_drop, classification)
+               VALUES (1, 9, 'exd5', 120, 400, 0.45, 'blunder')"""
+        )
+    built = client.post("/api/puzzles/rebuild").json()
+    check("the rescan finds it", built["added"] == 1, str(built))
+    check("and files it as a blunder check", built["by_kind"]["blunder_check"] == 1,
+          str(built["by_kind"]))
+
+    # What every library built before the tactic/blunder-check split looks
+    # like: the puzzle rows are there, the evaluations they are classified on
+    # are not. The rescan has to repair those, because it will never insert
+    # them again -- it skips positions it already holds.
+    with db_cursor() as conn:
+        conn.execute("UPDATE puzzles SET cp_before = NULL, cp_after = NULL, "
+                     "kind = 'tactic' WHERE user_id = 1")
+    stale = client.get("/api/puzzles/stats").json()
+    check("which starts with no blunder checks at all",
+          stale["by_kind"]["blunder_check"] == 0, str(stale["by_kind"]))
+
+    repaired = client.post("/api/puzzles/rebuild").json()
+    check("the rescan fills the missing evaluations in",
+          repaired["evals_filled"] == 2, str(repaired.get("evals_filled")))
+    check("adding no puzzles while it does", repaired["added"] == 0, str(repaired))
+    check("and the blunder check comes back",
+          repaired["by_kind"]["blunder_check"] == 1, str(repaired["by_kind"]))
+    check("without turning the tactic into one too",
+          repaired["by_kind"]["tactic"] == 1, str(repaired["by_kind"]))
+
+    only_checks = client.get("/api/puzzles/next?source=own&kinds=blunder_check").json()
+    check("and filtering to blunder checks now returns one",
+          only_checks["puzzle"]["ply"] == 9, str(only_checks["puzzle"]["ply"]))
+
     print("\nImport status:")
     status = client.get("/api/puzzles/lichess/status").json()
     check("reports the database as imported", status["available"] is True)
