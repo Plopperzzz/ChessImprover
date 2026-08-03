@@ -423,6 +423,17 @@ CREATE TABLE IF NOT EXISTS lichess_puzzle_import (
     filters_json TEXT NOT NULL DEFAULT '{}'
 );
 
+-- PGNs of the games Lichess puzzles came from, fetched one at a time the
+-- first blindfold training actually asks for one -- never bulk-downloaded,
+-- since that would mean fetching games for puzzles nobody trains blindfold
+-- on. Shared across every account on this instance: the PGN is the same
+-- for whoever asks, so a game already looked up is free the second time.
+CREATE TABLE IF NOT EXISTS lichess_game_cache (
+    game_id TEXT PRIMARY KEY,
+    pgn TEXT NOT NULL,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Your puzzle rating, overall and per theme. One row per (user, theme), with
 -- the empty string standing for "overall" -- the per-theme numbers answer
 -- "am I actually getting better at forks", which a single rating cannot.

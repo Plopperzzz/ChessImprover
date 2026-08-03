@@ -111,8 +111,11 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
   // Blindfold: the board a puzzle came from, played a configurable number of
   // plies before it. `blindfoldContext` is the frozen starting position plus
   // the real moves that lead from there to the puzzle -- fetched for
-  // whichever puzzle is on screen, and only ever available for your own
-  // games (a Lichess row carries no game to replay).
+  // whichever puzzle is on screen. Works for both sources: an own-game
+  // puzzle replays its stored PGN, a Lichess one fetches the game live off
+  // lichess.org (and caches it server-side), which is the one way this can
+  // fail -- no game_url on the row, or lichess.org not answering -- so
+  // `blindfoldError` is what that failure becomes on screen.
   const [blindfoldEnabled, setBlindfoldEnabled] = useState(
     () => localStorage.getItem(BLINDFOLD_KEY) === '1',
   );
@@ -124,6 +127,7 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
     fen: string;
     moves: string[];
   } | null>(null);
+  const [blindfoldError, setBlindfoldError] = useState<string | null>(null);
 
   const [flipped, setFlipped] = useState(false);
   const [liveActive, setLiveActive] = useState(false);
@@ -193,6 +197,7 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
     setHintUsed(false);
     setHintSquare(null);
     setBlindfoldContext(null);
+    setBlindfoldError(null);
     try {
       const data = await api.nextPuzzle({
         source,
@@ -252,20 +257,26 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
   // Fetched for whichever puzzle is on screen rather than folded into
   // `load()`, so tweaking the ply count or flipping blindfold on mid-puzzle
   // updates the frozen position without discarding what you've already
-  // played. Own-game puzzles only -- a Lichess row has no game to replay.
+  // played. Both sources: a Lichess puzzle's game is fetched live and can
+  // fail (see `blindfoldError`) in a way an own-game puzzle's stored PGN
+  // doesn't.
   useEffect(() => {
-    if (!blindfoldEnabled || !puzzle || puzzle.source !== 'own' || typeof puzzle.id !== 'number') {
+    if (!blindfoldEnabled || !puzzle) {
       setBlindfoldContext(null);
+      setBlindfoldError(null);
       return;
     }
     let cancelled = false;
+    setBlindfoldError(null);
     api
-      .puzzleBlindfoldContext(puzzle.id, blindfoldPly)
+      .puzzleBlindfoldContext(puzzle, blindfoldPly)
       .then((ctx) => {
         if (!cancelled) setBlindfoldContext(ctx);
       })
-      .catch(() => {
-        if (!cancelled) setBlindfoldContext(null);
+      .catch((e) => {
+        if (cancelled) return;
+        setBlindfoldContext(null);
+        setBlindfoldError(e instanceof Error ? e.message : String(e));
       });
     return () => {
       cancelled = true;
@@ -607,7 +618,7 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
   // position throughout (see `tryMove`), and `boardFen` is what's drawn.
   // Board's `logicFen` then reconnects clicks and drags to the real
   // position even though nothing on screen matches it.
-  const blindfoldReady = Boolean(blindfoldContext) && puzzle?.source === 'own';
+  const blindfoldReady = Boolean(blindfoldContext);
   const blindfoldFrozen = blindfoldReady && (phase === 'setup' || phase === 'solving');
   const boardFen = blindfoldFrozen ? blindfoldContext!.fen : fen;
   const boardLogicFen = blindfoldFrozen ? fen : undefined;
@@ -754,40 +765,47 @@ export function PuzzleScreen({ user, settings, prefs, onOpenSettings }: PuzzleSc
                 ))}
               </div>
 
-              {/* Blindfold: only your own games carry a real one to replay. */}
-              {source === 'own' && (
-                <div className="flex items-center gap-2 rounded-xl border border-line bg-surface px-2 py-1.5">
-                  <button
-                    onClick={() => setBlindfoldEnabled((v) => !v)}
-                    title="Play from memory: the board freezes on an earlier position and only your head tracks the rest"
-                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                      blindfoldEnabled
-                        ? 'bg-accent-strong text-on-accent'
-                        : 'text-fg-2 hover:bg-surface-2 hover:text-fg'
-                    }`}
-                  >
-                    <Ghost className="h-3.5 w-3.5" />
-                    Blindfold
-                  </button>
-                  {blindfoldEnabled && (
-                    <label className="flex shrink-0 items-center gap-1.5 pr-1 text-[11px] text-fg-muted">
-                      <input
-                        type="number"
-                        min={1}
-                        max={40}
-                        value={blindfoldPly}
-                        onChange={(e) => {
-                          const next = Math.round(Number(e.target.value));
-                          if (Number.isFinite(next)) {
-                            setBlindfoldPly(Math.max(1, Math.min(40, next)));
-                          }
-                        }}
-                        className="w-11 rounded border border-line bg-surface-2 px-1 py-0.5 text-center font-mono text-fg"
-                      />
-                      plies back
-                    </label>
-                  )}
-                </div>
+              {/* Blindfold: from your games, its own stored PGN; from
+                  Lichess, a live fetch of the game off lichess.org, so a
+                  puzzle with no game on record (or an unreachable Lichess)
+                  can fail here in a way an own-game puzzle can't -- see
+                  `blindfoldError` below. */}
+              <div className="flex items-center gap-2 rounded-xl border border-line bg-surface px-2 py-1.5">
+                <button
+                  onClick={() => setBlindfoldEnabled((v) => !v)}
+                  title="Play from memory: the board freezes on an earlier position and only your head tracks the rest"
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                    blindfoldEnabled
+                      ? 'bg-accent-strong text-on-accent'
+                      : 'text-fg-2 hover:bg-surface-2 hover:text-fg'
+                  }`}
+                >
+                  <Ghost className="h-3.5 w-3.5" />
+                  Blindfold
+                </button>
+                {blindfoldEnabled && (
+                  <label className="flex shrink-0 items-center gap-1.5 pr-1 text-[11px] text-fg-muted">
+                    <input
+                      type="number"
+                      min={1}
+                      max={40}
+                      value={blindfoldPly}
+                      onChange={(e) => {
+                        const next = Math.round(Number(e.target.value));
+                        if (Number.isFinite(next)) {
+                          setBlindfoldPly(Math.max(1, Math.min(40, next)));
+                        }
+                      }}
+                      className="w-11 rounded border border-line bg-surface-2 px-1 py-0.5 text-center font-mono text-fg"
+                    />
+                    plies back
+                  </label>
+                )}
+              </div>
+              {blindfoldEnabled && blindfoldError && (
+                <p className="px-1 text-[11px] text-fg-subtle">
+                  Blindfold isn't available for this puzzle — {blindfoldError}
+                </p>
               )}
             </div>
 

@@ -631,13 +631,20 @@ export const puzzleHint = (puzzle: Puzzle, moves: string[]) =>
     json({ moves }),
   );
 
-/** The position a number of plies before a puzzle from your own games, and
- *  the moves of the real game that lead from there to it -- what a
- *  blindfold session recites before handing the puzzle over. Own-game
- *  puzzles only: a Lichess row carries no game to replay. */
-export const puzzleBlindfoldContext = (puzzleId: number, ply: number) =>
+/** The position a number of plies before a puzzle, and the moves of the
+ *  real game that lead from there to it -- what a blindfold session recites
+ *  before handing the puzzle over.
+ *
+ *  For a Lichess puzzle this is a live fetch of that game from lichess.org
+ *  the first time anyone asks (cached server-side after), which can fail --
+ *  no game_url on the row, or lichess.org not answering -- in a way an
+ *  own-game puzzle's stored PGN never does. Callers see that as a rejected
+ *  promise, same as any other failed request. */
+export const puzzleBlindfoldContext = (puzzle: Puzzle, ply: number) =>
   request<{ fen: string; moves: string[] }>(
-    `/api/puzzles/${puzzleId}/blindfold${query({ ply })}`,
+    puzzle.source === 'lichess'
+      ? `/api/puzzles/lichess/${puzzle.id}/blindfold${query({ ply })}`
+      : `/api/puzzles/${puzzle.id}/blindfold${query({ ply })}`,
   );
 
 export const rebuildPuzzles = () =>

@@ -1411,6 +1411,63 @@ def hint_lichess(puzzle_id: str, body: LichessAttemptIn, user: dict = Depends(re
     return {"square": expected_all[len(played)][:2]}
 
 
+@router.get("/lichess/{puzzle_id}/blindfold")
+def blindfold_context_lichess(puzzle_id: str, ply: int = 10,
+                              user: dict = Depends(require_user)):
+    """The same as `blindfold_context`, for a Lichess puzzle.
+
+    There is no stored PGN to replay here -- a Lichess row carries a
+    `game_url`, not a game -- so the first ply this app finds out about
+    the actual game is a fetch (`lichess_puzzles.fetch_game_pgn`), made and
+    cached the first time anyone asks. Not every row carries a usable
+    `game_url` (some imported puzzles predate it, or point at a game
+    Lichess no longer serves), which is the difference between this
+    endpoint and the own-game one: those failures are a fact about the
+    puzzle, not a bug, so they're reported as 404s a solver can read rather
+    than raised as something has gone wrong.
+    """
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT fen, moves, game_url FROM lichess_puzzles WHERE puzzle_id = ?",
+            (puzzle_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "no such puzzle")
+        game_id = lichess_puzzles.parse_game_url(row["game_url"])
+        if not game_id:
+            raise HTTPException(404, "this puzzle has no game on record to replay")
+        try:
+            pgn = lichess_puzzles.fetch_game_pgn(conn, game_id)
+        except lichess_puzzles.GameFetchError as e:
+            raise HTTPException(502, str(e))
+
+    first_move_uci = row["moves"].split()[0]
+    located = lichess_puzzles.locate_in_game(pgn, row["fen"], first_move_uci)
+    if located is None:
+        raise HTTPException(
+            409, "couldn't find this puzzle's position in the game it's linked to"
+        )
+    positions, sans, setup_halfmoves = located
+    # `row["fen"]` is the position *before* the opponent's move -- Lichess's
+    # own convention, see `_lichess_public` -- and that move is always played
+    # in before a solver ever sees the board. Blindfold freezes on the
+    # position a solver actually starts from, one ply later, with the setup
+    # move itself folded into the recital rather than animated in on a board
+    # that isn't supposed to move at all.
+    target_halfmoves = setup_halfmoves + 1
+    if target_halfmoves >= len(positions):
+        raise HTTPException(
+            409, "the game on record ends before this puzzle's setup move"
+        )
+
+    ply = max(0, min(ply, MAX_BLINDFOLD_PLY))
+    start_halfmoves = max(0, target_halfmoves - ply)
+    return {
+        "fen": positions[start_halfmoves],
+        "moves": sans[start_halfmoves:target_halfmoves],
+    }
+
+
 @router.post("/lichess/{puzzle_id}/reveal")
 def reveal_lichess(puzzle_id: str, hint_used: bool = False,
                    user: dict = Depends(require_user)):

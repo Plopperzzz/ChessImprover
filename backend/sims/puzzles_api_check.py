@@ -432,6 +432,73 @@ def main():
     check("a puzzle that isn't yours 404s rather than 500ing",
           missing.status_code == 404, str(missing.status_code))
 
+    print("\nBlindfold: Lichess puzzles, without hitting the network:")
+    # A Lichess puzzle's game is fetched live off lichess.org -- exactly the
+    # kind of thing this file avoids (see the module docstring: no engine,
+    # and by the same logic no live network, so this runs anywhere the rest
+    # of the suite does). `lichess_game_cache` is what a real fetch would
+    # populate, so seeding it directly exercises everything downstream of
+    # that fetch -- locating the puzzle inside the game, the recital, the
+    # clamp -- without ever making one. Reuses the "Checker" PGN above: the
+    # puzzle position it stands in for is the same one, this time reached by
+    # a lookup instead of the stored ply own-game puzzles get for free.
+    with db_cursor() as conn:
+        conn.execute(
+            """INSERT INTO lichess_puzzles
+                 (puzzle_id, fen, moves, rating, rating_deviation, popularity,
+                  nb_plays, themes, game_url, opening_tags)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("00bfLc",
+             "r1bqkb1r/ppp2ppp/2n5/3np1N1/2B5/8/PPPP1PPP/RNBQK2R w KQkq - 0 6",
+             "g5f7 e8f7", 1000, 70, 50, 10, "endgame", "https://lichess.org/faketest#10",
+             ""),
+        )
+        conn.execute(
+            "INSERT INTO lichess_game_cache (game_id, pgn) VALUES ('faketest', ?)",
+            (pgn,),
+        )
+
+    lichess_blind = client.get("/api/puzzles/lichess/00bfLc/blindfold?ply=4").json()
+    check("locates the puzzle inside its own game",
+          lichess_blind["moves"] == ["d5", "exd5", "Nxd5", "Nxf7"],
+          str(lichess_blind))
+    check("and freezes on the position that many plies back",
+          lichess_blind["fen"]
+          == "r1bqkb1r/pppp1ppp/2n2n2/4p1N1/2B1P3/8/PPPP1PPP/RNBQK2R b KQkq - 5 4",
+          str(lichess_blind["fen"]))
+    check("the recital ends on the opponent's own setup move, not the FEN before it",
+          lichess_blind["moves"][-1] == "Nxf7", str(lichess_blind["moves"]))
+
+    lichess_clamped = client.get("/api/puzzles/lichess/00bfLc/blindfold?ply=999").json()
+    check("clamped the same way an own-game puzzle is",
+          lichess_clamped["fen"] == chess.Board().fen(), str(lichess_clamped["fen"]))
+
+    with db_cursor() as conn:
+        conn.execute(
+            """INSERT INTO lichess_puzzles
+                 (puzzle_id, fen, moves, rating, rating_deviation, popularity,
+                  nb_plays, themes, game_url, opening_tags)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("00bfNg", "8/8/8/8/8/8/8/8 w - - 0 1", "a1a2 a2a3", 1000, 70, 50, 10,
+             "endgame", None, ""),
+        )
+    no_game = client.get("/api/puzzles/lichess/00bfNg/blindfold?ply=4")
+    check("no game_url on the row is a plain 404, not a crash",
+          no_game.status_code == 404, f"HTTP {no_game.status_code}: {no_game.text[:120]}")
+
+    with db_cursor() as conn:
+        conn.execute(
+            """INSERT INTO lichess_puzzles
+                 (puzzle_id, fen, moves, rating, rating_deviation, popularity,
+                  nb_plays, themes, game_url, opening_tags)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("00bfNo", "8/8/8/8/8/8/8/8 w - - 0 1", "a1a2 a2a3", 1000, 70, 50, 10,
+             "endgame", "https://lichess.org/faketest#10", ""),
+        )
+    not_found = client.get("/api/puzzles/lichess/00bfNo/blindfold?ply=4")
+    check("a puzzle position absent from its own linked game is a 409, not a 500",
+          not_found.status_code == 409, f"HTTP {not_found.status_code}: {not_found.text[:120]}")
+
     print("\nBlunder checks, including the ones built before there were any:")
     # A second bad move in the same game, shaped like a blunder check: White
     # was comfortably better and after it Black is (cp_after is scored for
@@ -475,8 +542,9 @@ def main():
     print("\nImport status:")
     status = client.get("/api/puzzles/lichess/status").json()
     check("reports the database as imported", status["available"] is True)
-    # The 3 original rows plus the pair seeded for the hint checks above.
-    check("with a count", status["puzzles"] == 5, str(status["puzzles"]))
+    # The 3 original rows, the pair seeded for the hint checks, and the
+    # three seeded for the Lichess blindfold checks.
+    check("with a count", status["puzzles"] == 8, str(status["puzzles"]))
     check("and a rating span", status.get("min_rating") == 900, str(status.get("min_rating")))
 
 

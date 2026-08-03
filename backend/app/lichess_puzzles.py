@@ -49,13 +49,17 @@ most likely to be wrong.
 """
 
 import csv
+import io
 import json
 import os
 import random
+import re
 import threading
 import time
 from dataclasses import dataclass, field
 
+import chess
+import chess.pgn
 import httpx
 
 from .db import db_cursor, get_conn
@@ -870,3 +874,120 @@ def pick(conn, *, themes: list[str], min_rating: int, max_rating: int,
                   exclude_ids=exclude_ids, user_id=user_id, limit=_CANDIDATE_POOL)
     random.shuffle(rows)
     return rows[:limit]
+
+
+# ---------------------------------------------------------------------------
+# The game a puzzle came from
+# ---------------------------------------------------------------------------
+#
+# A Lichess puzzle row carries a `game_url` but not the game itself -- that
+# would multiply the several-hundred-megabyte database import by however many
+# moves the average game runs. Blindfold training wants the game, so it is
+# fetched lazily, one game at a time, the first time someone actually asks --
+# never as a bulk prefetch, since that would mean downloading games for
+# puzzles nobody ends up training blindfold on. Every fetch is cached in
+# `lichess_game_cache`, keyed by Lichess's own game id and shared across every
+# account on this instance: the PGN is the same no matter who asked, so the
+# second person to reach for a given puzzle's game gets it for free.
+
+GAME_EXPORT_URL = "https://lichess.org/game/export/{game_id}"
+
+# A single game is a few KB; this is generous headroom, not the several
+# hundred megabytes the puzzle database import has to plan for.
+GAME_FETCH_TIMEOUT = httpx.Timeout(15.0, connect=10.0, read=15.0)
+
+_GAME_URL_RE = re.compile(r"lichess\.org/([A-Za-z0-9]{8})(?:/(?:white|black))?(?:#(\d+))?")
+
+
+class GameFetchError(Exception):
+    """A Lichess game's PGN couldn't be fetched, parsed, or found."""
+
+
+def parse_game_url(game_url: str | None) -> str | None:
+    """The Lichess game id out of a puzzle's stored `GameUrl`, e.g.
+    `https://lichess.org/H2iCLRLW#62` -> `H2iCLRLW`. `None` for anything that
+    doesn't parse -- a handful of imported rows carry no game_url at all."""
+    if not game_url:
+        return None
+    match = _GAME_URL_RE.search(game_url)
+    return match.group(1) if match else None
+
+
+def fetch_game_pgn(conn, game_id: str) -> str:
+    """The PGN of a Lichess game, fetched once and cached from then on."""
+    row = conn.execute(
+        "SELECT pgn FROM lichess_game_cache WHERE game_id = ?", (game_id,)
+    ).fetchone()
+    if row:
+        return row["pgn"]
+
+    url = GAME_EXPORT_URL.format(game_id=game_id)
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/x-chess-pgn"}
+    try:
+        response = httpx.get(url, headers=headers, timeout=GAME_FETCH_TIMEOUT,
+                             follow_redirects=True)
+    except httpx.HTTPError as e:
+        raise GameFetchError(f"could not reach lichess.org: {e}")
+    if response.status_code == 404:
+        raise GameFetchError("that game is no longer on lichess.org")
+    if response.status_code >= 400:
+        raise GameFetchError(f"lichess.org returned HTTP {response.status_code}")
+    pgn = response.text
+    if not pgn.strip():
+        raise GameFetchError("lichess.org returned an empty game")
+
+    conn.execute(
+        "INSERT OR REPLACE INTO lichess_game_cache (game_id, pgn) VALUES (?, ?)",
+        (game_id, pgn),
+    )
+    return pgn
+
+
+def _fen_key(fen: str) -> str:
+    """Piece placement, turn, castling rights and the en passant square --
+    the part of a FEN that identifies a position, leaving out the two
+    counters that depend on how it was reached and so are the one part of a
+    freshly-replayed FEN that could disagree with a stored one over nothing
+    that matters."""
+    return " ".join(fen.split()[:4])
+
+
+def locate_in_game(pgn: str, puzzle_fen: str, first_move_uci: str):
+    """Where a puzzle's position sits inside the game it came from.
+
+    Replays the whole game and looks for a position matching `puzzle_fen`.
+    Returns `(positions, sans, target_halfmoves)`: every position of the game
+    as a FEN, the SAN of the move that leads from each to the next, and the
+    index into `positions` of the puzzle's own starting position -- from
+    which a caller can walk back however many plies a blindfold session
+    wants. `None` if the game doesn't contain the position at all, which
+    would mean the puzzle and the game it claims to be from have drifted
+    apart (a Lichess database inconsistency, not something this app did).
+
+    A position can recur (castling rights and repetition both do this in real
+    games), so a lone FEN match isn't trusted on its own: among repeats, the
+    one actually followed by the puzzle's own first move -- the opponent's
+    setup move, always present -- is preferred, since that is the one
+    property a wrong occurrence of the same position is unlikely to share.
+    """
+    game = chess.pgn.read_game(io.StringIO(pgn))
+    if game is None:
+        return None
+
+    target_key = _fen_key(puzzle_fen)
+    board = game.board()
+    positions = [board.fen()]
+    sans: list[str] = []
+    ucis: list[str] = []
+    for move in game.mainline_moves():
+        sans.append(board.san(move))
+        ucis.append(move.uci())
+        board.push(move)
+        positions.append(board.fen())
+
+    candidates = [i for i, fen in enumerate(positions) if _fen_key(fen) == target_key]
+    if not candidates:
+        return None
+    matching = [i for i in candidates if i < len(ucis) and ucis[i] == first_move_uci]
+    target = matching[0] if matching else candidates[0]
+    return positions, sans, target
